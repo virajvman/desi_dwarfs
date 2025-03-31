@@ -1,1 +1,0 @@
-Code for DESI Extragalactic Dwarfs paper

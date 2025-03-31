@@ -1,14 +1,3 @@
-'''
-Script that contains relevant functions for running the dwarf galaxy photometry pipeline!
-
-Basic outline:
-
-Contain functions that download the relevant data needed to run the scarlet or aperture photometry pipelines (the make catalogs funcs)
-
-The functions that do the actual photometry are kept in other .py files for organization
-
-'''
-
 import numpy as np
 import astropy.io.fits as fits
 import matplotlib as mpl
@@ -60,12 +49,9 @@ def argument_parser():
     result.add_argument('-run_w_source',dest='run_w_source', action='store_true')
     result.add_argument('-run_aper',dest='run_aper', action='store_true')
     result.add_argument('-run_scarlet',dest='run_scarlet', action='store_true')
-    return result
-
-
-
-
+    result.add_argument('-nchunks',dest='nchunks', type=int,default = 1)
     
+    return result
 
 def save_cutouts(ra,dec,img_path,session, size=350, timeout = 30):
     url = url_prefix + f'cutout.fits?ra={ra}&dec={dec}&size=%s&'%size
@@ -507,8 +493,6 @@ if __name__ == '__main__':
     # use a good colormap and don't interpolate the pixels
     mpl.rc('image', cmap='viridis', interpolation='none', origin='lower')
 
-
-
     # read in command line arguments
     args = argument_parser().parse_args()
 
@@ -526,7 +510,8 @@ if __name__ == '__main__':
     tgids_list = args.tgids_list
     file_ending = args.file_ending
     save_other_image_path = args.save_img
-    
+    nchunks = args.nchunks
+
     run_w_source = args.run_w_source
     
     run_aper = args.run_aper
@@ -569,8 +554,6 @@ if __name__ == '__main__':
         
     shreds_focus = shreds_all[(shreds_all["SAMPLE"] ==  sample_str)]
 
-    # shreds_focus = Table.read("/pscratch/sd/v/virajvm/download_south_temp.fits")
-
     ##### CODE FOR TESTING APERTURE PHOTOMETRY ON BAD RCHISQ OBJECTS
     # rchisq_bins = np.arange(0,9,1)
     
@@ -593,7 +576,7 @@ if __name__ == '__main__':
         
         print("Number of targetids to process =", len(shreds_focus))
 
-      #apply the max_ind cut if relevant
+    #apply the max_ind cut if relevant
     max_ind = np.minimum( max_ind, len(shreds_focus) )
     shreds_focus = shreds_focus[min_ind:max_ind]
 
@@ -601,7 +584,7 @@ if __name__ == '__main__':
         print_stage("Generating relevant files for doing aperture photometry")
         print("Using cleaned catalogs =",use_clean==True)
     
-        print("Number of objects whose photometry will be redone = ", len(shreds_focus))
+        print("Number of objects whose photometry will be redone = ", len(shreds_focus_i) )
     
         if use_clean == False:
             top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds"
@@ -610,15 +593,15 @@ if __name__ == '__main__':
             
         print(len(shreds_focus[shreds_focus["is_south"] == 1]))
         print(len(shreds_focus[shreds_focus["is_south"] == 0]))
-
+    
         for wcat_ind, wcat in enumerate(["north","south"]):
             check_path_existence(all_paths=[top_folder + "/%s"%wcat])
     
             unique_sweeps = np.unique( shreds_focus[shreds_focus["is_south"] == wcat_ind]["SWEEP"])
             print(len(unique_sweeps), "unique sweeps found in %s"%wcat)
-
+    
             #this is just to make sure the very end sweeps have their files made as well
-            unique_sweeps = unique_sweeps[::-1]
+            # unique_sweeps = unique_sweeps
     
             #counter for number of sweeps done
             sweeps_done=0
@@ -639,15 +622,15 @@ if __name__ == '__main__':
         
                 #get all the unique brick names for this source
                 brick_names_i = np.unique( shreds_focus_i["BRICKNAME"] )
-
+    
                 ## for a given sweep can we parallelize this??
                 print("Total number of bricks in this sweep = ", len(brick_names_i) )
                 print("Total number of galaxies in this sweep = ", len(shreds_focus_i) )
-
+    
                 ##prepare all inputs now!
-
+    
                 all_source_cats = {}
-
+    
                 #looping over all the bricks and saving the source cat files!
                 for brick_i in tqdm(brick_names_i):
                     #make a folder for each brick
@@ -661,10 +644,10 @@ if __name__ == '__main__':
                     source_cat = read_source_cat(wcat, brick_i)
                     
                     all_source_cats[brick_i] = source_cat
-
+    
                 #list of dictionaries
                 all_input_dicts = []
-
+    
                 ##looping over all the galaxies in this sweep file to get get the input dict file
                 for i in range(len(shreds_focus_i)):
                     temp = { "TARGETID": shreds_focus_i["TARGETID"][i], "SAMPLE": shreds_focus_i["SAMPLE"][i], "RA": shreds_focus_i["RA"][i], 
@@ -672,18 +655,17 @@ if __name__ == '__main__':
                             "wcat":wcat, "brick_i":shreds_focus_i["BRICKNAME"][i], "sweep_folder":sweep_folder, "top_folder":top_folder,
                             "source_cat" : all_source_cats[ shreds_focus_i["BRICKNAME"][i] ], "source_pzs_i": source_pzs_i, 
                            "session":session }
-
+    
                     all_input_dicts.append(temp)
-
+    
                 ## get the relevant files for the the 
                 with mp.Pool(processes=ncores) as pool:
                     results = list(tqdm(pool.imap(get_relevant_files_aper, all_input_dicts), total = len(all_input_dicts)  ))
-
+    
                 # if serial
                 # for i in trange(len(all_input_dicts)):
                 #     get_relevant_files_single(all_input_dicts[i])
-
-
+     
     ##################
     ##PART 3: Preparing inputs for the aperture and/or scarlet photometry functions
     ##################
@@ -744,6 +726,8 @@ if __name__ == '__main__':
         if os.path.exists(save_path_k + "/source_cat_f.fits"):
             source_cat_f = Table.read(save_path_k + "/source_cat_f.fits")
         else:
+            print("Source catalog is being downloaded as did not exist!")
+            
             #in case, we have arrived at this point and stil some files are not made, we make them!
             source_pzs_i = Table.read( "/global/cfs/cdirs/cosmo/data/legacysurvey/dr9/%s/sweep/9.1-photo-z/"%wcat_k + sweep_k)
             source_cat_i = read_source_cat(wcat, brick_i)
@@ -756,6 +740,7 @@ if __name__ == '__main__':
             wcs = WCS(fits.getheader( img_path_k ))
         else:
             #in case image is not downloaded, we download it!
+            print("Image is being downloaded as did not exist!")
             save_cutouts(ra_k,dec_k,img_path_k,session,size=350)
             img_data = fits.open(img_path_k)
             data_arr = img_data[0].data
@@ -776,247 +761,291 @@ if __name__ == '__main__':
         # else:
         #     return
 
+    
     print("Number of cores used is =",ncores)
-    
+
+    #to avoid memory issues, we will split up the dataset into nchunks 
     all_ks = np.arange(len(shreds_focus))
-
     print(len(all_ks))
-    #run with multi-pool
-    if run_parr:
+    
+    all_ks_chunks = np.array_split(all_ks, nchunks)
+    
+    #if nchunks = 1, then it just returns the entire original list as 1 list
+    #LOOPING OVER ALL THE CHUNKS!!
+    for chunk_i in range(nchunks):
+        print_stage("Started chunk %d/%d"%(chunk_i, nchunks) )
+    
+        all_ks_i =  all_ks_chunks[chunk_i]
+        print_stage("Number of objects in this chunk = %d"%len(all_ks_i))
+
+        #getting the table associated with this chunk!
+        shreds_focus_i = shreds_focus[all_ks_i]
+
+        #run with multi-pool
+        # if run_parr:
         with mp.Pool(processes = ncores ) as pool:
-            all_inputs = list(tqdm(pool.imap(produce_input_dicts, all_ks), total = len(all_ks)  ))
-    else:
-        all_inputs = []
-        for i in trange(len(all_ks)):
-            all_inputs.append( produce_input_dicts(all_ks[i]) )
-
-    all_inputs = np.array(all_inputs)
-    # all_inputs = all_inputs[all_inputs != None]
-    print(len(all_inputs))
-
-    ##This is the length of the list that contains info on all the objects on which aperture photometry will be run!
-
-    ##################
-    ##PART 4a: Run aperture photometry
-    ##First step before scarlet photometry to weed out massive galaxies
-    ##################
-    
-    if run_aper == True:
-
-        shreds_focus["MAG_G_APER"] = np.ones(len(shreds_focus)) * -99
-        shreds_focus["MAG_R_APER"] = np.ones(len(shreds_focus)) * -99
-        shreds_focus["MAG_Z_APER"] = np.ones(len(shreds_focus)) * -99
-        shreds_focus["NEAREST_STAR_DIST"] = np.ones(len(shreds_focus)) * -99
-
-        if run_parr:
-            with mp.Pool(processes= ncores ) as pool:
-                results = list(tqdm(pool.imap(run_aperture_pipe, all_inputs), total = len(all_inputs)  ))
-        else:
-            results = []
-            for i in trange(len(all_inputs)):
-                results.append( run_aperture_pipe(all_inputs[i]) )
-
-        
-        ### saving the results of the photometry pipeline
-        results = np.array(results)
-    
-        print_stage("Done running all the aperture photometry!!")
-    
-        final_index = results[:,0].astype(int)
-        final_star_dists = results[:,1].astype(float)
-        final_new_mags = np.vstack(results[:,2])
-        final_org_mags = np.vstack(results[:,3])
-
-        final_save_paths = results[:,4].astype(str)
-        
-        shreds_focus_f = shreds_focus[final_index]
-    
-        #check that the org mags make sense
-        print("Maximum Abs difference between org mags = ",np.max( np.abs(final_org_mags[:,0] - shreds_focus_f["MAG_G"]) ))
-        
-        shreds_focus_f["NEAREST_STAR_DIST"] = final_star_dists
-        shreds_focus_f["MAG_G_APER"] = final_new_mags[:,0]
-        shreds_focus_f["MAG_R_APER"] = final_new_mags[:,1]
-        shreds_focus_f["MAG_Z_APER"] = final_new_mags[:,2]
-        shreds_focus_f["SAVE_PATH"] = final_save_paths 
-
-        print("Compute aperture-photometry based stellar masses now!")
-            
-        #compute the aperture photometry based stellar masses!
-        rmag_aper = shreds_focus_f["MAG_R_APER"].data
-        gr_aper = shreds_focus_f["MAG_G_APER"].data - shreds_focus_f["MAG_R_APER"].data
-
-        #are any of the aperture magnitudes nans?
-        nan_mask = (np.isnan(shreds_focus_f["MAG_G_APER"]) | np.isnan(shreds_focus_f["MAG_R_APER"]) )
-        #if any of the bands are nan, we automatically include it in scarlet method to try to do a better job at estimating photometry
-        
-        from desi_lowz_funcs import get_stellar_mass
-
-        all_mstar_aper = np.ones(len(shreds_focus_f))*np.nan
-
-        mstar_aper_nonan = get_stellar_mass( gr_aper[~nan_mask],rmag_aper[~nan_mask], shreds_focus["Z"][~nan_mask]  )
-
-        all_mstar_aper[~nan_mask] = mstar_aper_nonan
-        
-        shreds_focus_f["LOGM_SAGA_APERTURE"] = all_mstar_aper 
-    
-        #then save this file!
-        if tgids_list is None and (run_aper | run_scarlet):
-            print_stage("Saving summary files!")
-            if use_clean == False:
-                save_table( shreds_focus_f,"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_shreds_catalog_w_new_mags%s.fits"%(sample_str,file_ending) )
-            else:
-                save_table( shreds_focus_f,"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_clean_catalog_w_new_mags%s.fits"%(sample_str, file_ending) )
-
-
-    ##################
-    ##PART 4b: Run scarlet photometry for sources that remain as candidate dwarfs after aperture photometry
-    ##################
-
-    # check how scarlet does for more massive galaxies?
-    if run_scarlet == True:
-
-        ##load the relevant file from aperture photometry
-        ##re-estimate the stellar mass and make a cut on that!
-        #also be aware of the -99s, if background cannot be estimated, that likely means it is not a dwarf galaxy!!        
-        # if use_clean == False:
-        #     shreds_focus = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_shreds_catalog_w_new_mags%s.fits"%(sample_str,file_ending))
+            all_inputs = list(tqdm(pool.imap(produce_input_dicts, all_ks_i), total = len(all_ks_i)  ))
         # else:
-        #     shreds_focus = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_clean_catalog_subset_w_new_mags%s.fits"%(sample_str, file_ending) )
-
-        #     shreds_focus_f_p1 = shreds_focus[~nan_mask][mstar_aper_nonan <= 9.5)]
-        # shreds_focus_f_p2 = shreds_focus[nan_mask]
-
-        # shreds_focus_f = vstack([shreds_focus_f_p1, shreds_focus_f_p2])
-
-            
-        # #compute the new stellar mass using the update stellar mass!
+        #     all_inputs = []
+        #     for i in trange(len(all_ks_i)):
+        #         all_inputs.append( produce_input_dicts(all_ks[i]) )
+    
+        all_inputs = np.array(all_inputs)
+        # all_inputs = all_inputs[all_inputs != None]
+        print(len(all_inputs))
+    
+        ##This is the length of the list that contains info on all the objects on which aperture photometry will be run!
+    
+        ##################
+        ##PART 4a: Run aperture photometry
+        ##First step before scarlet photometry to weed out massive galaxies
+        ##################
         
-        shreds_focus["MAG_G_SCARLET"] = np.ones(len(shreds_focus)) * -99
-        shreds_focus["MAG_R_SCARLET"] = np.ones(len(shreds_focus)) * -99
-        shreds_focus["MAG_Z_SCARLET"] = np.ones(len(shreds_focus)) * -99
-        shreds_focus["NEAREST_STAR_DIST"] = np.ones(len(shreds_focus)) * -99
-
-
-        ##generate the relevant files for scarlet photometry
-        if make_cats== True:
-            print_stage("Generating relevant files for doing scarlet photometry")
-            print("Using cleaned catalogs =",use_clean==True)
+        if run_aper == True:
     
-            print("Number of objects whose scarlet files will be obtained = ", len(shreds_focus))
+            shreds_focus_i["MAG_G_APER"] = np.ones(len(shreds_focus_i)) * -99
+            shreds_focus_i["MAG_R_APER"] = np.ones(len(shreds_focus_i)) * -99
+            shreds_focus_i["MAG_Z_APER"] = np.ones(len(shreds_focus_i)) * -99
+            shreds_focus_i["NEAREST_STAR_DIST"] = np.ones(len(shreds_focus_i)) * -99
     
-            if use_clean == False:
-                top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds"
+            if run_parr:
+                with mp.Pool(processes= ncores ) as pool:
+                    results = list(tqdm(pool.imap(run_aperture_pipe, all_inputs), total = len(all_inputs)  ))
             else:
-                top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_good"
-                
-            print(len(shreds_focus[shreds_focus["is_south"] == 1]))
-            print(len(shreds_focus[shreds_focus["is_south"] == 0]))
-
-
-            ##this can be sped up as we are not reading files or anyting!
-            for wcat_ind, wcat in enumerate(["north","south"]):
-                check_path_existence(all_paths=[top_folder + "/%s"%wcat])
+                results = []
+                for i in trange(len(all_inputs)):
+                    results.append( run_aperture_pipe(all_inputs[i]) )
+    
+            ### saving the results of the photometry pipeline
+            results = np.array(results)
         
-                unique_sweeps = np.unique( shreds_focus[shreds_focus["is_south"] == wcat_ind]["SWEEP"])
-                print(len(unique_sweeps), "unique sweeps found in %s"%wcat)
+            print_stage("Done running aperture photometry!!")
         
-                #counter for number of sweeps done
-                sweeps_done=0
-                
-                for sweep_i in unique_sweeps:
+            final_star_dists = results[:,0].astype(float)
+            final_new_mags = np.vstack(results[:,1])
+            final_org_mags = np.vstack(results[:,2])
+    
+            final_save_paths = results[:,3].astype(str)
                     
-                    print("Sweeps done = %d/%d"%(sweeps_done, len(unique_sweeps)))
-                    sweeps_done += 1
-                    #make a sweep folder if it does not exist
-                    sweep_folder = sweep_i.replace("-pz.fits","")
-                                
-                    #get all the galaxies that fall in this sweep
-                    shreds_focus_i = shreds_focus[(shreds_focus["SWEEP"] == sweep_i) & (shreds_focus["is_south"] == wcat_ind)]
+            #check that the org mags make sense
+            print("Maximum Abs difference between org mags = ",np.max( np.abs(final_org_mags[:,0] - shreds_focus_i["MAG_G"]) ))
             
-                    #get all the unique brick names for this source
-                    brick_names_i = np.unique( shreds_focus_i["BRICKNAME"] )
+            shreds_focus_i["NEAREST_STAR_DIST"] = final_star_dists
+            shreds_focus_i["MAG_G_APER"] = final_new_mags[:,0]
+            shreds_focus_i["MAG_R_APER"] = final_new_mags[:,1]
+            shreds_focus_i["MAG_Z_APER"] = final_new_mags[:,2]
+            shreds_focus_i["SAVE_PATH"] = final_save_paths 
     
-                    ## for a given sweep can we parallelize this??
-                    print("Total number of bricks in this sweep = ", len(brick_names_i) )
-                    print("Total number of galaxies in this sweep = ", len(shreds_focus_i) )
-    
-                    ##prepare all inputs now!
-        
-                    #looping over all the bricks and saving the source cat files!
-                    for brick_i in tqdm(brick_names_i):
-                        #make a folder for each brick
-                        check_path_existence(all_paths=[top_folder + "/%s/"%wcat + sweep_folder  + "/" + brick_i])
-        
-                        #inside this brick folder, we will have folders for each galaxy then
-        
-                        shreds_focus_ij = shreds_focus_i[ shreds_focus_i["BRICKNAME"] == brick_i]
-        
-                        #read the source catalog for this brick
-                        if "p" in brick_i:
-                            brick_folder = brick_i[:brick_i.find("p")-1]
-                        else:
-                            brick_folder = brick_i[:brick_i.find("m")-1]
-        
-    
-                    #list of dictionaries
-                    all_input_dicts = []
-    
-                    ##looping over all the galaxies in this sweep file to get get the input dict file
-                    for i in range(len(shreds_focus_i)):
-                        temp = { "TARGETID": shreds_focus_i["TARGETID"][i], "SAMPLE": shreds_focus_i["SAMPLE"][i], "RA": shreds_focus_i["RA"][i], 
-                                "DEC": shreds_focus_i["DEC"][i], "Z": shreds_focus_i["Z"][i],
-                                "wcat":wcat, "brick_i":shreds_focus_i["BRICKNAME"][i], "sweep_folder":sweep_folder, "top_folder":top_folder,
-                               "session":session }
-    
-                        all_input_dicts.append(temp)
-    
-                    ## get the relevant files for the the 
-                    with mp.Pool(processes=ncores) as pool:
-                        results = list(tqdm(pool.imap(get_relevant_files_scarlet, all_input_dicts), total = len(all_input_dicts)  ))
+            print("Compute aperture-photometry based stellar masses now!")
                 
-        if run_parr:
-            with mp.Pool(processes= ncores ) as pool:
-                results = list(tqdm(pool.imap(run_scarlet_pipe, all_inputs), total = len(all_inputs)  ))
+            #compute the aperture photometry based stellar masses!
+            rmag_aper = shreds_focus_i["MAG_R_APER"].data
+            gr_aper = shreds_focus_i["MAG_G_APER"].data - shreds_focus_i["MAG_R_APER"].data
+    
+            #are any of the aperture magnitudes nans?
+            nan_mask = (np.isnan(shreds_focus_i["MAG_G_APER"]) | np.isnan(shreds_focus_i["MAG_R_APER"]) )
+            #if any of the bands are nan, we automatically include it in scarlet method to try to do a better job at estimating photometry
+            
+            from desi_lowz_funcs import get_stellar_mass
+    
+            all_mstar_aper = np.ones(len(shreds_focus_i))*np.nan
+    
+            mstar_aper_nonan = get_stellar_mass( gr_aper[~nan_mask],rmag_aper[~nan_mask], shreds_focus_i["Z"][~nan_mask]  )
+    
+            all_mstar_aper[~nan_mask] = mstar_aper_nonan
+            
+            shreds_focus_i["LOGM_SAGA_APERTURE"] = all_mstar_aper 
+        
+            #then save this file!
+            if tgids_list is None and (run_aper | run_scarlet):
+                if use_clean == False:
+                    file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_shreds_catalog_w_new_mags_chunk_%d.fits"%(sample_str,chunk_i)
+                else:
+                    file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_clean_catalog_w_new_mags_chunk_%d.fits"%(sample_str, chunk_i) 
+
+                save_table( shreds_focus_i, file_save)   
+                print_stage("Saved summary files at %s!"%file_save)
+                
+        ##################
+        ##PART 4b: Run scarlet photometry for sources that remain as candidate dwarfs after aperture photometry
+        ##################
+    
+        # check how scarlet does for more massive galaxies?
+        if run_scarlet == True:
+    
+            ##load the relevant file from aperture photometry
+            ##re-estimate the stellar mass and make a cut on that!
+            #also be aware of the -99s, if background cannot be estimated, that likely means it is not a dwarf galaxy!!        
+            # if use_clean == False:
+            #     shreds_focus = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_shreds_catalog_w_new_mags%s.fits"%(sample_str,file_ending))
+            # else:
+            #     shreds_focus = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_clean_catalog_subset_w_new_mags%s.fits"%(sample_str, file_ending) )
+    
+            #     shreds_focus_f_p1 = shreds_focus[~nan_mask][mstar_aper_nonan <= 9.5)]
+            # shreds_focus_f_p2 = shreds_focus[nan_mask]
+    
+            # shreds_focus_f = vstack([shreds_focus_f_p1, shreds_focus_f_p2])
+    
+                
+            # #compute the new stellar mass using the update stellar mass!
+            
+            shreds_focus["MAG_G_SCARLET"] = np.ones(len(shreds_focus)) * -99
+            shreds_focus["MAG_R_SCARLET"] = np.ones(len(shreds_focus)) * -99
+            shreds_focus["MAG_Z_SCARLET"] = np.ones(len(shreds_focus)) * -99
+            shreds_focus["NEAREST_STAR_DIST"] = np.ones(len(shreds_focus)) * -99
+    
+    
+            ##generate the relevant files for scarlet photometry
+            if make_cats== True:
+                print_stage("Generating relevant files for doing scarlet photometry")
+                print("Using cleaned catalogs =",use_clean==True)
+        
+                print("Number of objects whose scarlet files will be obtained = ", len(shreds_focus))
+        
+                if use_clean == False:
+                    top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds"
+                else:
+                    top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_good"
+                    
+                print(len(shreds_focus[shreds_focus["is_south"] == 1]))
+                print(len(shreds_focus[shreds_focus["is_south"] == 0]))
+    
+    
+                ##this can be sped up as we are not reading files or anyting!
+                for wcat_ind, wcat in enumerate(["north","south"]):
+                    check_path_existence(all_paths=[top_folder + "/%s"%wcat])
+            
+                    unique_sweeps = np.unique( shreds_focus[shreds_focus["is_south"] == wcat_ind]["SWEEP"])
+                    print(len(unique_sweeps), "unique sweeps found in %s"%wcat)
+            
+                    #counter for number of sweeps done
+                    sweeps_done=0
+                    
+                    for sweep_i in unique_sweeps:
+                        
+                        print("Sweeps done = %d/%d"%(sweeps_done, len(unique_sweeps)))
+                        sweeps_done += 1
+                        #make a sweep folder if it does not exist
+                        sweep_folder = sweep_i.replace("-pz.fits","")
+                                    
+                        #get all the galaxies that fall in this sweep
+                        shreds_focus_i = shreds_focus[(shreds_focus["SWEEP"] == sweep_i) & (shreds_focus["is_south"] == wcat_ind)]
+                
+                        #get all the unique brick names for this source
+                        brick_names_i = np.unique( shreds_focus_i["BRICKNAME"] )
+        
+                        ## for a given sweep can we parallelize this??
+                        print("Total number of bricks in this sweep = ", len(brick_names_i) )
+                        print("Total number of galaxies in this sweep = ", len(shreds_focus_i) )
+        
+                        ##prepare all inputs now!
+            
+                        #looping over all the bricks and saving the source cat files!
+                        for brick_i in tqdm(brick_names_i):
+                            #make a folder for each brick
+                            check_path_existence(all_paths=[top_folder + "/%s/"%wcat + sweep_folder  + "/" + brick_i])
+            
+                            #inside this brick folder, we will have folders for each galaxy then
+            
+                            shreds_focus_ij = shreds_focus_i[ shreds_focus_i["BRICKNAME"] == brick_i]
+            
+                            #read the source catalog for this brick
+                            if "p" in brick_i:
+                                brick_folder = brick_i[:brick_i.find("p")-1]
+                            else:
+                                brick_folder = brick_i[:brick_i.find("m")-1]
+            
+        
+                        #list of dictionaries
+                        all_input_dicts = []
+        
+                        ##looping over all the galaxies in this sweep file to get get the input dict file
+                        for i in range(len(shreds_focus_i)):
+                            temp = { "TARGETID": shreds_focus_i["TARGETID"][i], "SAMPLE": shreds_focus_i["SAMPLE"][i], "RA": shreds_focus_i["RA"][i], 
+                                    "DEC": shreds_focus_i["DEC"][i], "Z": shreds_focus_i["Z"][i],
+                                    "wcat":wcat, "brick_i":shreds_focus_i["BRICKNAME"][i], "sweep_folder":sweep_folder, "top_folder":top_folder,
+                                   "session":session }
+        
+                            all_input_dicts.append(temp)
+        
+                        ## get the relevant files for the the 
+                        with mp.Pool(processes=ncores) as pool:
+                            results = list(tqdm(pool.imap(get_relevant_files_scarlet, all_input_dicts), total = len(all_input_dicts)  ))
+                    
+            if run_parr:
+                with mp.Pool(processes= ncores ) as pool:
+                    results = list(tqdm(pool.imap(run_scarlet_pipe, all_inputs), total = len(all_inputs)  ))
+            else:
+                results = []
+                for i in trange(len(all_inputs)):
+                    results.append( run_scarlet_pipe(all_inputs[i]) )
+            ### saving the results of the photometry pipeline
+            results = np.array(results)
+    
+            print(results)
+        
+            print_stage("Done running all the scarlet photometry!!")
+        
+            final_index = results[:,0].astype(int)
+            final_star_dists = results[:,1].astype(float)
+            final_new_mags = np.vstack(results[:,2])
+            final_org_mags = np.vstack(results[:,3])
+    
+            final_save_paths = results[:,4].astype(str)
+            
+            shreds_focus_f = shreds_focus[final_index]
+        
+            #check that the org mags make sense
+            print("Maximum Abs difference between org mags = ",np.max( np.abs(final_org_mags[:,0] - shreds_focus_f["MAG_G"]) ))
+            
+            shreds_focus_f["NEAREST_STAR_DIST"] = final_star_dists
+            shreds_focus_f["MAG_G_SCARLET"] = final_new_mags[:,0]
+            shreds_focus_f["MAG_R_SCARLET"] = final_new_mags[:,1]
+            shreds_focus_f["MAG_Z_SCARLET"] = final_new_mags[:,2]
+            shreds_focus_f["SAVE_PATH"] = final_save_paths 
+    
+       
+        #then save this file!
+        # if tgids_list is None and (run_aper | run_scarlet):
+        #     print_stage("Saving summary files!")
+        #     if use_clean == False:
+        #         save_table( shreds_focus_f,"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_shreds_mags/iron_%s_shreds_catalog_w_new_mags%s.fits"%(sample_str,file_ending) )
+        #     else:
+        #         save_table( shreds_focus_f,"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_clean_mags/iron_%s_clean_catalog_subset_w_new_mags%s.fits"%(sample_str, file_ending) )
+
+
+    ##################
+    ##PART 5: Once all the chunks are done, combine them all!
+    ##################
+    if tgids_list is None and (run_aper | run_scarlet):
+        print_stage("Consolidating all the saved chunks!")
+        
+        #files were saved and so we will consolidate them!
+        if use_clean == False:
+            file_template = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_shreds_catalog_w_new_mags"%(sample_str)
         else:
-            results = []
-            for i in trange(len(all_inputs)):
-                results.append( run_scarlet_pipe(all_inputs[i]) )
-        ### saving the results of the photometry pipeline
-        results = np.array(results)
+            file_template = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_clean_catalog_w_new_mags"%(sample_str)
+            
+        if nchunks == 1:
+            #we just need to rename the file!
+            os.rename(file_template + "_chunk_1.fits", file_template + ".fits")
+        else:
+            #we need to consolidate files!  
+            shreds_focus_combine = []
+            
+            for ni in trange(nchunks):
+                shreds_focus_part = Table.read(file_template + "_chunk_%d.fits"%ni  )
+                shreds_focus_combine.append(shreds_focus_part)
 
-        print(results)
+            shreds_focus_combine = vstack(shreds_focus_combine)
+
+            print_stage("Total number of objects in consolidated file = %d"%len(shreds_focus_combine))
+            
+            save_table( shreds_focus_combine, file_template + ".fits") 
+            
+            print_stage("Consolidated chunk saved at %s"%(file_template + ".fits") )
+            
     
-        print_stage("Done running all the scarlet photometry!!")
-    
-        final_index = results[:,0].astype(int)
-        final_star_dists = results[:,1].astype(float)
-        final_new_mags = np.vstack(results[:,2])
-        final_org_mags = np.vstack(results[:,3])
-
-        final_save_paths = results[:,4].astype(str)
-        
-        shreds_focus_f = shreds_focus[final_index]
-    
-        #check that the org mags make sense
-        print("Maximum Abs difference between org mags = ",np.max( np.abs(final_org_mags[:,0] - shreds_focus_f["MAG_G"]) ))
-        
-        shreds_focus_f["NEAREST_STAR_DIST"] = final_star_dists
-        shreds_focus_f["MAG_G_SCARLET"] = final_new_mags[:,0]
-        shreds_focus_f["MAG_R_SCARLET"] = final_new_mags[:,1]
-        shreds_focus_f["MAG_Z_SCARLET"] = final_new_mags[:,2]
-        shreds_focus_f["SAVE_PATH"] = final_save_paths 
-
-   
-    #then save this file!
-    # if tgids_list is None and (run_aper | run_scarlet):
-    #     print_stage("Saving summary files!")
-    #     if use_clean == False:
-    #         save_table( shreds_focus_f,"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_shreds_mags/iron_%s_shreds_catalog_w_new_mags%s.fits"%(sample_str,file_ending) )
-    #     else:
-    #         save_table( shreds_focus_f,"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_clean_mags/iron_%s_clean_catalog_subset_w_new_mags%s.fits"%(sample_str, file_ending) )
-
-
     ##################
     ##PART 5: Using the aperture photometry footprint, find the desi sources that lie around on it and similar redshift as well??
     ##################

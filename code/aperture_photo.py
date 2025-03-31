@@ -112,7 +112,6 @@ def run_aperture_pipe(input_dict):
     wcs  = input_dict["wcs"]
     data_arr  = input_dict["image_data"]
     source_cat_f = input_dict["source_cat"]
-    object_index = input_dict["index"]
     org_mag_g = input_dict["org_mag_g"]
     overwrite = input_dict["overwrite"]
 
@@ -161,14 +160,14 @@ def run_aperture_pipe(input_dict):
         separations = ref_coord.separation(catalog_coords).arcsec
         closest_star_dist = np.min(separations)
     else:
-        closest_star_dist = -99
+        closest_star_dist = np.nan
     
     if overwrite == False:
         try:
             new_mags = np.load(save_path + "/new_aperture_mags.npy")
             org_mags = np.load(save_path + "/org_mags.npy")
 
-            return object_index, closest_star_dist, new_mags, org_mags, save_path
+            return closest_star_dist, new_mags, org_mags, save_path
         except:
             do_i_run = True
     if overwrite == True:
@@ -946,7 +945,7 @@ def run_aperture_pipe(input_dict):
         np.save(save_path + "/new_aperture_mags.npy", new_mags)
         np.save(save_path + "/org_mags.npy", org_mags)
     
-        return object_index, closest_star_dist, new_mags, org_mags, save_path
+        return closest_star_dist, new_mags, org_mags, save_path
 
         # except:
     
@@ -954,7 +953,7 @@ def run_aperture_pipe(input_dict):
         #     print("TARGETID=", source_tgid)
         #     print("SAVE PATH=",save_path)
         #     print("data shape=",np.shape(data_arr[0]),np.shape(data_arr[1]),np.shape(data_arr[2])  )
-        #     return object_index, -99, [-99,-99,-99], [-99,-99,-99]
+        #     return  -99, [-99,-99,-99], [-99,-99,-99]
 
 
 
