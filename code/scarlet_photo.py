@@ -22,20 +22,22 @@ from astropy import units as u
 from astropy.coordinates import SkyCoord
 import random
 import argparse
+import requests
 from astropy.io import fits
 from astropy.wcs import WCS
 from astropy.table import Table, vstack, join
 import multiprocessing as mp
 from tqdm import tqdm
 url_prefix = 'https://www.legacysurvey.org/viewer/'
-import requests
 from io import BytesIO
 import matplotlib.patches as patches
 from photutils.segmentation import make_2dgaussian_kernel
 from astropy.convolution import convolve
 from reproject import reproject_interp
+from desi_lowz_funcs import save_subimage, fetch_psf
 
-def mask_star(invar, center, radius):
+
+def mask_star(invar_c, center, radius):
     """
     Masks pixels within a given radius from a center coordinate by setting them to np.inf.
     
@@ -47,6 +49,9 @@ def mask_star(invar, center, radius):
     Returns:
     - Modified array with masked region
     """
+
+    invar = np.copy(invar_c)
+
     H, W = invar.shape[1:]  # Get height and width
     x0, y0 = center  # Center coordinates
 
@@ -152,8 +157,6 @@ def combine_sbimgs(sbimgs_hdus, data_wcs_2d):
     data_shape = (350, 350)
     
     sbimgs_len = len(sbimgs_hdus) - 1
-    
-    invar_combined_imgs = []
 
     #number of things to combine
     num_comb = int(sbimgs_len/6)
@@ -211,7 +214,6 @@ def run_scarlet_pipe(input_dict):
 
     6) When I am fitting scarlet wavelet, is it possible to only focus on the dwarf part??
 
-
     7) I have updated the color selection to be just bluer than LSB component and that is good for real dwarfs where that is indeed the case. However, that is not the case for massive galaxies. That is where the color-color contour makes sense ... 
 
     Issues appear to be avoided if stars are removed hehehe. Can mask out those pixels ... 
@@ -222,12 +224,11 @@ def run_scarlet_pipe(input_dict):
     '''
     
     save_path = input_dict["save_path"]
-    save_sample_path  = input_dict["save_sample_path"]
-    img_path  = input_dict["img_path"]
     source_tgid  = input_dict["tgid"]
     source_ra  = input_dict["ra"] 
     source_dec  = input_dict["dec"]
     source_redshift  = input_dict["redshift"]
+    session  = input_dict["session"]
     wcs  = input_dict["wcs"]
     #data_arr is the C x N x N matrix with image data
     data_arr  = input_dict["image_data"]
@@ -246,6 +247,21 @@ def run_scarlet_pipe(input_dict):
         print(save_path)    
     
     ##load the psf now
+
+    if os.path.exists(save_path +"/psf_data_z.npy"):
+        pass
+    else:
+        print("Psfs did not exixt before and are being downloaded!")
+        psf_dict = fetch_psf(source_ra,source_dec, session)
+        if psf_dict is not None:
+            #as psf can be of different sizes and so saving each band separately!
+            np.save(save_path  + "/psf_data_g.npy",psf_dict["g"])
+            np.save(save_path  + "/psf_data_r.npy",psf_dict["r"])
+            np.save(save_path  + "/psf_data_z.npy",psf_dict["z"])
+        else:
+            print("Psfs could not be downloaded :(")
+            return object_index, -99, [-99,-99,-99], [-99,-99,-99]
+
     psf_g = np.load(save_path +"/psf_data_g.npy")
     psf_r = np.load(save_path +"/psf_data_r.npy")
     psf_z = np.load(save_path +"/psf_data_z.npy")
@@ -253,7 +269,8 @@ def run_scarlet_pipe(input_dict):
     old_psfs = { "g": psf_g, "r": psf_r, "z": psf_z }
     new_psfs = { "g": psf_g, "r": psf_r, "z": psf_z }
 
-    #unclear if this is causing any issues yet ... 
+    ##HOW TO HANDLE THE DIFFERENT PSF SIZE IN Z BAND IN DR9-NORTH
+    
     for bi in "grz":
         if np.shape(old_psfs[bi]) != (63,63):
             if verbose:
@@ -262,7 +279,6 @@ def run_scarlet_pipe(input_dict):
             new_psfs[bi] = embed_psf(old_psfs[bi])
             
     psf = np.array( [ new_psfs["g"], new_psfs["r"], new_psfs["z"] ] )
-
 
     sbimg_path = save_path + "/grz_subimage.fits"
 
@@ -281,16 +297,24 @@ def run_scarlet_pipe(input_dict):
             raise ValueError("sub-image invariance map and data array not of the size!")
             
     else:
-        print("SUB-IMAGES DO NOT EXIST")
-        return object_index, -99, [-99,-99,-99], [-99,-99,-99]
+        print("Sub-images did not exist before and are being downloaded!")
+        sbimg_path = save_path + "/grz_subimage.fits"
+
+        save_subimage(source_ra, source_dec, sbimg_path, session, size = 350,timeout = 30)
+        try:
+            #hopefully the file was downloaded
+            sbimg = fits.open(sbimg_path)
+        except:
+            print("Sub-image was not downloaded successfully :( ")
+            return object_index, -99, [-99,-99,-99], [-99,-99,-99]
         # save_subimage(source_ra, source_dec, sbimg_path, session, size = 350, timeout = 30)
     
     if psf is None:
-        print("PSF DOES NOT EXIST")
-        ## download the psf!
+        #try download the psf again
+
         return object_index, -99, [-99,-99,-99], [-99,-99,-99]
     else:
-    
+        
         #fontsize for all the xlabels in titles in plots
         fontsize = 15
         
@@ -312,11 +336,11 @@ def run_scarlet_pipe(input_dict):
         
         brms = np.median(bkg.background_rms)
         
-        threshold = 2 * brms
+        threshold = 1.5 * brms
         
         ##do image segmentation per band image
         #for faint ELGs, this could be reduced?
-        npixels_min = 20
+        npixels_min = 10
         from photutils.segmentation import detect_sources
 
         #convolving the data
@@ -418,9 +442,19 @@ def run_scarlet_pipe(input_dict):
     
         ##identifying the stars in the footprint
         ##these will be the stars that will be modeled as a psf source!
-        is_star = (source_cat_f["ref_cat"] == "G2") & ( np.abs(source_cat_f["pmra"] * np.sqrt(source_cat_f["pmra_ivar"])) >= 2 ) & ( np.abs(source_cat_f["pmdec"] * np.sqrt(source_cat_f["pmdec_ivar"])) >= 2 )
+        #should I also include a magnitude limit as we want to specifically model the bright ones?
 
-        ## what about sources that are in Gaia but are not our main source of interest?
+
+        gaia_max_mag = np.min(  np.array([source_cat_f["gaia_phot_bp_mean_mag"].data, source_cat_f["gaia_phot_rp_mean_mag"].data, source_cat_f["gaia_phot_g_mean_mag"].data]) ,axis=0) 
+
+        is_star = (source_cat_f["ref_cat"] == "G2") &  ( gaia_max_mag < 17 )  &  ( ( np.abs(source_cat_f["pmra"] * np.sqrt(source_cat_f["pmra_ivar"])) >= 2 ) | ( np.abs(source_cat_f["pmdec"] * np.sqrt(source_cat_f["pmdec_ivar"])) >= 2 ) )
+
+        # print("Number of sources in Gaia DR2 in scene:", len(source_cat_f[(source_cat_f["ref_cat"] == "G2")]  ) )
+        # print( source_cat_f[(source_cat_f["ref_cat"] == "G2")]["pmra"].data *  np.sqrt(source_cat_f[(source_cat_f["ref_cat"] == "G2")]["pmra_ivar"].data))
+        # print( source_cat_f[(source_cat_f["ref_cat"] == "G2")]["pmdec"].data * np.sqrt(source_cat_f[(source_cat_f["ref_cat"] == "G2")]["pmdec_ivar"].data ) )
+
+
+        # what about sources that are in Gaia but are not our main source of interest?
 
         #what is the distance to the closest star from us?
         all_stars = source_cat_f[is_star]
@@ -448,43 +482,50 @@ def run_scarlet_pipe(input_dict):
         ##IDENTIFYING THE SOURCE PEAKS IN THE IMAGE
 
         if verbose:
-            print("Identifying source peaks in the image")
-        # Create a detection image by summing the images in all bands
-        # (a more rigorous approach would be to create a chi^2 coadd).
-        detect_image = np.sum(data_arr, axis=0)
-        # Define a rough standard deviation for the image.
-        # This does not have to be exact, as it is fit by the
-        # get_multiresolution_support algorithm below.
-        sigma = 0.1
-        # Find the wavelet coefficients
-        coeffs = scarlet.wavelet.starlet_transform(detect_image, scales=3)
-        # Determine the significant coefficients
-        # (as defined in Starck et. al 2011)
-        M = scarlet.wavelet.get_multiresolution_support(detect_image, coeffs, sigma, K=3, epsilon=1e-1, max_iter=20)
-        # Use the multi-resolution support to select only
-        # the relevant pixels for detection
-        detect = M * coeffs
-        # We are only detecting positive peaks, so there
-        # is no need to include the negative coefficients
-        detect[detect<0] = 0
-        
-        # Calculate isolated footprints and their maxima
-        # in the 2nd wavelet scale.
-        
-        #what is a reasonable min_separation to choose here??
-        footprints = get_footprints(detect[1], min_separation=7, min_area=10, thresh=0)
-        
-        # Display all of the footprints
-        footprint_img = np.zeros(detect.shape[1:])
-        peaks = []
-        for fp in footprints:
-            bbox = scarlet.detect.bounds_to_bbox(fp.bounds)
-            footprint_img[bbox.slices] = fp.footprint
-            peaks += list(fp.peaks)
-        
-        # Now display the peaks on the original image
+            print("Identifying source peaks in the image using wavelets")
+
         ax[0].imshow(img_rgb)
-        ax[0].contour(footprint_img, [0.5,], colors='w', linewidths=0.5)
+
+        try:
+            # Create a detection image by summing the images in all bands
+            # (a more rigorous approach would be to create a chi^2 coadd).
+            detect_image = np.sum(data_arr, axis=0)
+            # Define a rough standard deviation for the image.
+            # This does not have to be exact, as it is fit by the
+            # get_multiresolution_support algorithm below.
+            sigma = 0.1
+            # Find the wavelet coefficients
+            coeffs = scarlet.wavelet.starlet_transform(detect_image, scales=3)
+            # Determine the significant coefficients
+            # (as defined in Starck et. al 2011)
+            M = scarlet.wavelet.get_multiresolution_support(detect_image, coeffs, sigma, K=3, epsilon=1e-1, max_iter=20)
+            # Use the multi-resolution support to select only
+            # the relevant pixels for detection
+            detect = M * coeffs
+            # We are only detecting positive peaks, so there
+            # is no need to include the negative coefficients
+            detect[detect<0] = 0
+            
+            # Calculate isolated footprints and their maxima
+            # in the 2nd wavelet scale.
+            
+            #what is a reasonable min_separation to choose here??
+            footprints = get_footprints(detect[1], min_separation=7, min_area=10, thresh=0)
+            
+            # Display all of the footprints
+            footprint_img = np.zeros(detect.shape[1:])
+            peaks = []
+            for fp in footprints:
+                bbox = scarlet.detect.bounds_to_bbox(fp.bounds)
+                footprint_img[bbox.slices] = fp.footprint
+                peaks += list(fp.peaks)
+            
+            # Now display the peaks on the original image
+            ax[0].contour(footprint_img, [0.5,], colors='w', linewidths=0.5)
+        except:
+            print("Extracting sources using wavelets failed, so using DR9 source locations")
+            run_own_detect = False
+        
         if run_own_detect:
             for k, peak in enumerate(peaks):
                 ax[0].text(peak.x, peak.y, str(k), color="w", ha='center', va='center', weight="bold", size=8)
@@ -520,7 +561,7 @@ def run_scarlet_pipe(input_dict):
 
 
         ##note that in centers the first axis is already y and second axis is already x
-        centers_arr = np.array(centers )
+        centers_arr = np.array(centers)
 
         if verbose:
             print(np.max(centers_arr,axis=0))
@@ -591,8 +632,6 @@ def run_scarlet_pipe(input_dict):
         #########################################
         #########################################
         #RUN THE SCARLET OPTIMIZER TO FIT SOURCES
-        #DISPLAY FITITNG RESULTS
-
         #Note that is a star is saturated, there is no hope of fitting it with a psf. Easiest solution is just to mask it ... 
         #########################################
         #########################################
@@ -624,17 +663,20 @@ def run_scarlet_pipe(input_dict):
         if np.sum(is_star) > 0:
             print("Starting star masking!")
             for si in range(np.sum(is_star)):
+                #get the magnitude of the star to see if it might be saturated or not! 
+                #in any case, if it is bright star, we will mask it
+                #does the invar matrix already take care of this?
+                #what is an appropriate masking radius to choose here?
                 radius = int(4/0.262)
-                #is the order correct here??
+                #in general, need to be very careful when copying and modifying arrays
                 invar_weights_starmask = mask_star(invar_weights, ( star_f_xpix[si], star_f_ypix[si]) , radius )
                 ## try to set weights/data to nan
         else:
             invar_weights_starmask = invar_weights
 
-
         ##plotting the r-band inverse variance mask after doing the star masking 
         fig_invar1,ax_invar1 = make_subplots(ncol =1, nrow = 1, return_fig = True)
-        ax_invar1[0].imshow(invar_weights[1])
+        ax_invar1[0].imshow(invar_weights_starmask[1])
         ax_invar1[0].set_xticks([])
         ax_invar1[0].set_yticks([])
         fig_invar1.savefig(save_path + "/invar_rband_poststar.png",bbox_inches="tight")
@@ -698,7 +740,6 @@ def run_scarlet_pipe(input_dict):
             
         ##like the point source, why does this not need an observation frame in its definition???
 
-
         # Starck et al. 2011, erin's paper on streams scales (hsc imaging paper)
         #restrict myself to certain wavelet scales? look at scales parameter in the tutorial 
         scar_comps_nostars.append(scarlet.source.StarletSource(model_frame))
@@ -742,7 +783,8 @@ def run_scarlet_pipe(input_dict):
         plt.close(fig_sources)
     
         #-------
-        #Step 3: Update scarlet model unmasking stars
+        #Step 3: Update scarlet model unmasking stars. 
+        #In this process, we will keep the Gaia position of the source fixed, and also keep the color of the LSB component fixed!
         #-------
 
         if np.sum(is_star) > 0:
@@ -759,41 +801,44 @@ def run_scarlet_pipe(input_dict):
             ## I should just consider binary masking stars that are saturated
 
             ##example info on this: Starting with DR9, objects that appear in the Gaia catalogs are always retained in the Tractor catalogs, even if they would normally be cut by the model-selection criteria used to detect sources. This is because Gaia sources are often so bright that they saturate in Legacy Surveys imaging. Since such "retained" Gaia sources have no model fits, their flux_g, flux_r and flux_z values are estimated in the catalogs, using polynomial fits to Gaia-to-DECam color transformations for stars. Transformations to DECam are used even in areas of the Legacy Surveys footprint that are only covered by BASS and MzLS. The flux_ivar_[grz] values for these "retained" Gaia sources are set to zero.
-
-
             ##how to fix spectrum of the wavelet component??
-
             ## better to fit stars together and then fit LSB at last, need to think carefully about
-
             ##if star is saturated, check decals documentation for saturation limit
-            
             ## if saturated, star will have to be extended source ...
             
+
             ##define all components fresh, everyone component should have the same observation
-            # scar_comps_nostars
+            ##we ensure that the position remains fixed!
 
-            # scar_comps_nostars_new = []
+            scar_comps_nostars_new = np.copy(scar_comps_nostars)
 
-            # for comp in scar_comps_nostars:
-                ## if comp is non parametric morpho:
-                ## new_comps.append( define source, set spectrum = comp, morpho = comp )
+            ##only loop over the sources that are not starlet
+            for comp in scar_comps_nostars_new[:-1]:
+                #for all non-LSB,non-star components, fix color/spectrum and center
+                comp.parameters[0].fixed=True
+                comp.parameters[2].fixed=True
                 ## if LSB, just set the wavelet documentation
-
                 ##inputs to a models are defined as a class called parameter
                 # https://pmelchior.github.io/scarlet/1-concepts.html#
                 ## look at the parameter fixed
     
-            if np.sum(is_star) > 0:
-                star_comps = []  
-                for star_ind_i in center_star_inds:
-                    #replacing extended source with point source
-                    #are we using the appropriate index
-                    # scar_comps[star_ind_i] = scarlet.PointSource(model_frame, centers[star_ind_i], observation_wstar)
-                    star_comps.append( scarlet.PointSource(model_frame, centers[star_ind_i], observation_wstar) )
+            ##fix the spectrum/color of LSB component
+            scar_comps_nostars_new[-1].parameters[0].fixed = True
+            #should we also fix the coeffs?
+            # scar_comps_nostars_new[-1].parameters[1].fixed = True
+
+            #I have confirmed via print statements that the fixing parameters does change
+
+
+            star_comps = []  
+            for star_ind_i in center_star_inds:
+                star_comp_i = scarlet.PointSource(model_frame, centers[star_ind_i], observation_wstar)
+                ##we will be fixing the position of the star component
+                # star_comp_i.parameters[1].fixed = True
+                star_comps.append( star_comp_i )
                     
-    
             #we will add stars location to places in the list such that the original list order is maintained!
-            scar_comps_wlsb_wstars = add_comps_back(scar_comps_nostars, star_comps, center_star_inds)
+            scar_comps_wlsb_wstars = add_comps_back(scar_comps_nostars_new, star_comps, center_star_inds)
     
             scarlet.initialization.set_spectra_to_match(scar_comps_wlsb_wstars, observation_wstar)
     
@@ -1009,6 +1054,8 @@ def run_scarlet_pipe(input_dict):
     
         #################################################
         ##plotting the LSB component in each band and its masked bits
+
+        ## TODO: MASK THE STAR LOCATIONS IN THIS!
         #################################################
     
         #separate out the LSB scar_comps. 
@@ -1033,10 +1080,7 @@ def run_scarlet_pipe(input_dict):
         #this is the observed frame 
         lsb_model_ = observation_wstar.render(lsb_model)
 
-        print(np.min(lsb_model))
-        print(np.max(lsb_model))
-        
-        
+      
         # if np.min(lsb_model) > 0:
         if True:
             
@@ -1088,42 +1132,41 @@ def run_scarlet_pipe(input_dict):
         #ISOLATED DWARF GALAXY COMPONENTS
         #########################################
 
-        gmm_file_zgrid = np.arange(0.001, 0.425,0.025)
-        
-        ##below part is not needed everytime! Can just directly load the dictionary of conf levels
-        file_index = np.where( source_redshift > gmm_file_zgrid )[0][-1]
-        #load the relevant gmm file
-        gmm = joblib.load("/pscratch/sd/v/virajvm/redo_photometry_plots/gmm_color_models/gmm_model_idx_%d.pkl"%file_index)
-    
-        # Create a grid for evaluation
-        xmin, xmax = -1, 2
-        ymin, ymax = -1, 1.5
-        X, Y = np.meshgrid(np.linspace(xmin, xmax, 200), np.linspace(ymin, ymax, 200))
-        positions = np.vstack([X.ravel(), Y.ravel()])
-        # Evaluate the density on the grid
-        Z_gmm = np.exp(gmm.score_samples(positions.T)).reshape(X.shape)
-        Znorm = np.sum(Z_gmm)
-        
-        #we normalize the gaussian mixture sum. However, to get the confidence levels in terms of the absolute probability returned by gmm, we will multiply by Znorm again
-        Z_gmm = Z_gmm/Znorm       
-        # plot contours if contour levels are specified in clevs 
-        lvls = []
-        # clevs = [0.16,0.50,0.841,0.977,0.998,0.99994]
-        clevs = [0.38,0.68,0.86,0.954,0.987] #,0.997]
-        for cld in clevs:  
-            sig = opt.brentq( conf_interval, 0., 1., args=(Z_gmm,cld) )   
-            lvls.append(sig)
+        if False:
+            gmm_file_zgrid = np.arange(0.001, 0.425,0.025)
             
-        conf_levels = { "38":lvls[0]*Znorm,"68":lvls[1]*Znorm,"86":lvls[2]*Znorm,"95.4":lvls[3]*Znorm,"98.7":lvls[4]*Znorm} #,"99.7":lvls[5]*Znorm}
-    
-    
-        ## we ignore the fluxs and magnitudes of all the other sources. We just consider the sources that lie on this main segmen
-    
-    
+            ##below part is not needed everytime! Can just directly load the dictionary of conf levels
+            file_index = np.where( source_redshift > gmm_file_zgrid )[0][-1]
+            #load the relevant gmm file
+            gmm = joblib.load("/pscratch/sd/v/virajvm/redo_photometry_plots/gmm_color_models/gmm_model_idx_%d.pkl"%file_index)
+        
+            # Create a grid for evaluation
+            xmin, xmax = -1, 2
+            ymin, ymax = -1, 1.5
+            X, Y = np.meshgrid(np.linspace(xmin, xmax, 200), np.linspace(ymin, ymax, 200))
+            positions = np.vstack([X.ravel(), Y.ravel()])
+            # Evaluate the density on the grid
+            Z_gmm = np.exp(gmm.score_samples(positions.T)).reshape(X.shape)
+            Znorm = np.sum(Z_gmm)
+            
+            #we normalize the gaussian mixture sum. However, to get the confidence levels in terms of the absolute probability returned by gmm, we will multiply by Znorm again
+            Z_gmm = Z_gmm/Znorm       
+            # plot contours if contour levels are specified in clevs 
+            lvls = []
+            # clevs = [0.16,0.50,0.841,0.977,0.998,0.99994]
+            clevs = [0.38,0.68,0.86,0.954,0.987] #,0.997]
+            for cld in clevs:  
+                sig = opt.brentq( conf_interval, 0., 1., args=(Z_gmm,cld) )   
+                lvls.append(sig)
+                
+            conf_levels = { "38":lvls[0]*Znorm,"68":lvls[1]*Znorm,"86":lvls[2]*Znorm,"95.4":lvls[3]*Znorm,"98.7":lvls[4]*Znorm} #,"99.7":lvls[5]*Znorm}
+        
+            ## we ignore the fluxs and magnitudes of all the other sources. We just consider the sources that lie on this main segmen
+        
         #get the scarlet components that lie on the main segment (excluding the total LSB component)
         scar_comps_inseg = scar_comps_nolsb[ all_seg_nums == 2]
         scar_comp_inseg_isstar_bool =  scar_comp_nolsb_isstar_bool[all_seg_nums == 2]
-        
+            
         #we only compute the colors for components in the main segment 
         
         scar_comps_inseg_mags = []
@@ -1150,7 +1193,7 @@ def run_scarlet_pipe(input_dict):
         all_rzs = scar_comps_inseg_mags[:,1] - scar_comps_inseg_mags[:,2]
         
         ##plot the g-r vs. r-z color contours from the redshift bin of this object        
-        ax[3].contour(X, Y, Z_gmm, levels=sorted(lvls), cmap="viridis_r",alpha = 1,zorder = 1)
+        # ax[3].contour(X, Y, Z_gmm, levels=sorted(lvls), cmap="viridis_r",alpha = 1,zorder = 1)
         
         
         ##I want to be able to see all the points even if they are outside the plotting grids. 
@@ -1176,7 +1219,8 @@ def run_scarlet_pipe(input_dict):
             ax[3].text(gr * 1.02, rz * 1.02, k, color="r", weight="bold")
         
         #using the LSB colors as the reference color!
-        #do I need the 0.1 leniency factor?
+        #do I need the 0.1 leniency factor? -> seems to work well
+        #what happens if the LSB is way too far off like it is very blue??
         if lsb_aper_mag[0] != np.nan:
             col_lenient = 0.1 
             gr_cut = lsb_aper_mag[0] - lsb_aper_mag[1] + col_lenient
@@ -1201,7 +1245,7 @@ def run_scarlet_pipe(input_dict):
         #components that lie along this redshift contour are considered to be part of the galaxy!
         
         col_positions = np.vstack([ all_grs , all_rzs ])
-        Z_likely_comps = np.exp(gmm.score_samples(col_positions.T))
+        # Z_likely_comps = np.exp(gmm.score_samples(col_positions.T))
         
 
         #is in the blue box or is along the contour!
@@ -1256,7 +1300,9 @@ def run_scarlet_pipe(input_dict):
         source_cat_obs = source_cat_f[np.argmin(separations)]
         
         if np.min(separations) != 0:
-            raise ValueError("Distance between source and closest object in the photometry catalog in area =",np.min(separations))
+            print("Minimum separation = ", np.min(separations))
+            # raise ValueError("Distance between source and closest object in the photometry catalog in area =",np.min(separations))
+
         #this magnitude is not milky way corrected
         source_mag_g = source_cat_obs["mag_g"] 
         source_mag_r = source_cat_obs["mag_r"] 
@@ -1330,7 +1376,6 @@ def run_scarlet_pipe(input_dict):
                 axi.set_yticks([])
                 
 
-
         fig_tot.savefig(save_path + "/grz_scarlet_tgid_%d_ra_%.3f_dec_%.3f.png"%(source_tgid, source_ra, source_dec),bbox_inches="tight")
         # save this figure elsewhere as well!
         # also save the figure in another plot!
@@ -1351,5 +1396,57 @@ def run_scarlet_pipe(input_dict):
 
     
 
+if __name__ == '__main__':
 
-    
+    #provide all the relevant input files!!
+    data = Table.read('/Users/virajmanwadkar/Desktop/Stanford/Research/DESI/dwarf_photometry_pipeline/download_south_egs/download_south_temp.fits')
+
+    image_folder = "/Users/virajmanwadkar/Desktop/Stanford/Research/DESI/dwarf_photometry_pipeline/download_south_egs/cutouts"
+    folder_path  = "/Users/virajmanwadkar/Desktop/Stanford/Research/DESI/dwarf_photometry_pipeline/download_south_egs/folders"
+
+    # creating a single session!
+    session = requests.Session()
+
+    # index = np.where(data["TARGETID"] ==  39627909152903632)[0]
+    # index = 24
+    for index in range(25,len(data)):
+        print(index)
+        tgid_i = data["TARGETID"][index]
+        print(tgid_i)
+        ra_i = data["RA"][index]
+        dec_i = data["DEC"][index]
+        zred_i = data["Z"][index]
+        org_mag_i = data["MAG_G"][index]
+        folder_i = folder_path + "/" + "BGS_BRIGHT_tgid_%d"%tgid_i
+
+        import glob
+        cutout_path = glob.glob( image_folder + "/image_tgid_%d*.fits"%tgid_i)[0]
+        hdus = fits.open(cutout_path)
+        image_data = hdus[0].data
+        wcs = WCS(hdus[0])
+
+        source_cat = Table.read(folder_i + "/source_cat_f.fits")
+
+        input_dict = {}
+
+        input_dict["save_path"] = folder_i
+        input_dict["tgid"] = tgid_i
+        input_dict["ra"]  = ra_i
+        input_dict["dec"] = dec_i
+        input_dict["redshift"] = zred_i
+        input_dict["wcs"] = wcs
+        #data_arr is the C x N x N matrix with image data
+        input_dict["image_data"] = image_data
+        input_dict["source_cat"] = source_cat
+        input_dict["index"] = 0
+        input_dict["org_mag_g"] = org_mag_i
+        input_dict["overwrite"] = True
+        #do we run our own peak finder, or use LS DR9 sources as peaks?
+        input_dict["run_own_detect"] = True
+        input_dict["session"] = session
+        input_dict["box_size"] = 350
+        input_dict["save_other_image_path"]= "/Users/virajmanwadkar/Desktop/Stanford/Research/DESI/dwarf_photometry_pipeline/download_south_egs/scarlet_imgs/"
+
+        #provide this input dict to the scarlet function!
+        run_scarlet_pipe(input_dict)
+

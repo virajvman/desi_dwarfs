@@ -1,6 +1,6 @@
 ## this contains useful functions for DESI LOWZ analysis 
 import numpy as np
-from tqdm import trange
+from tqdm import trange, tqdm
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
@@ -13,7 +13,7 @@ import fitsio
 from astropy.table import Table, vstack, hstack
 from easyquery import Query, QueryMaker
 import random
-
+import multiprocessing as mp
 
     
 def sdss_rgb(imgs, bands, scales=None,m = 0.02):
@@ -99,9 +99,9 @@ def calc_normalized_dist(obj_ra, obj_dec, cen_ra, cen_dec, cen_r, cen_ba=None, c
     dx = np.rad2deg(np.arcsin(np.sin(np.deg2rad(obj_ra - cen_ra)))) * cos_dec
     dy = obj_dec - cen_dec
 
-    if cen_ba is None:
-        with np.errstate(divide="ignore"):
-            return np.hypot(dx, dy) / a
+    # if cen_ba is None:
+    #     with np.errstate(divide="ignore"):
+    #         return np.hypot(dx, dy) / a
 
     b = a * cen_ba
     theta = np.deg2rad(90 - cen_phi)
@@ -556,7 +556,137 @@ def filter_out_siena(ra_list,dec_list,Nmax = 500,print_distance=False,which_rad 
     
     return good_mask, indices_overlap
 
+def calc_normalized_dist_broadcast(ra_list, dec_list, redshift_list, s20_ra, s20_dec, s20_zred, s20_d26, s20_ba, s20_phi,verbose):
+    '''
+    Function that computes the distance normalized to D26 units in a vectorized manner. This function can be passed to a multiprocessor as well
+    '''
+    c_light = 299792 #km/s
+
+    #expanding the ra,dec arrays for broad-casting
+    ra_i = ra_list[:,np.newaxis]
+    dec_i = dec_list[:,np.newaxis]
+    redshift_i = redshift_list[:, np.newaxis]
+
+    redshift_mask = (np.abs(redshift_i - s20_zred) * c_light < 1000 )  # Shape: (N, M)
+
+    if verbose:
+        print(np.shape(redshift_mask))
+
+    all_norm_dist = calc_normalized_dist(ra_i, dec_i, s20_ra, s20_dec, s20_d26, 
+                        cen_ba=s20_ba, cen_phi=s20_phi, multiplier=1)
+
+    ##for each ra,dec in ra_i,dec_i lists, we have computed the distances to all the SGA galaxies. 
+    ##for each, we need to filter them by their redshifts. 
+
+    # Mask out distances for galaxies that are outside the redshift range
+    all_norm_dist[~redshift_mask] = np.inf 
+
+    nearest_inds = np.argmin(all_norm_dist,axis = 1)
+    nearest_norm_dist = np.min( all_norm_dist, axis = 1 )
+    #can I just use the nearest_inds thing?
+    if verbose:
+        print(np.shape(nearest_inds), np.shape(nearest_norm_dist))
+
+    # If all values in a row were masked 
+    # that is, if there are no sga galaxies in the relevant redshift range
+    no_match_mask = np.all(~redshift_mask, axis=1)
+
+    if verbose:
+        print(np.shape(no_match_mask))
+
+    nearest_inds[no_match_mask] = np.nan
+    #where there does not exist a valid match, we assign np.nan value
+    nearest_norm_dist[no_match_mask] = np.nan
+
+    return nearest_inds, nearest_norm_dist
+
+
+def get_sga_norm_dists(ra_list,dec_list, redshift_list, Nmax = 500,run_parr = False,ncores = 128,siena_path=None,verbose=True):
+    '''
+    This function takes in an array of ra,dec and redshift values and see which ones are potentially shreds of a larger SGA galaxy.
+    It uses the the calc_normalized_dist function to compute the distance of source from SGA in units of its elliptical aperture
+
+    This function shall return a list of matched SGA id and associated angular norm dist (if relevant) for each object in list
+
+    ra_list: list of all the RAs in the catalog
+    dec_list: list pf all the DECs in the catalog
+    redshift_list: list of all the redshifts in the catalog
+    Nmax : the number of chunks to split the ra_lists into for parallelizing
+
+    '''
+
+    #read the SIENA Galaxy Atlas
+    siena20 = Table.read(siena_path,hdu = "ELLIPSE")
     
+    ## the D26 column is in units of arcmins and is the major axis diameter measured at the 𝜇=26 mag arcsec−2 r-band isophote
+    ## below is what SAGA does, Yao recommended me to do this 
+    ## np.minimum(sga_this["SMA_MOMENT"] * 1.3333, sga_this["D26"] * 30.0)
+
+    s20_d26 = np.array(siena20["D26"])*30 #converting to semi-major axis in arc seconds
+    s20_ra = np.array(siena20["RA_MOMENT"])
+    s20_dec = np.array(siena20["DEC_MOMENT"])
+    s20_zred = np.array(siena20["Z_LEDA"])
+
+    s20_sgaid = np.array(siena20["SGA_ID"])
+
+    # s20_sma = np.array(siena20["SMA_MOMENT"])*1.33
+    s20_ba = np.array(siena20["BA"])
+    s20_phi = np.array(siena20["PA"]) # the position angle
+    
+    '''
+    Goal is to identify nearest SGA galaxy with same redshift 
+    '''
+    ##To avoid memroy issues I will batch this into 500 galaxies and compute it 
+    # Number of splits (equal lengths)
+    num_splits = int(np.ceil(len(ra_list)/Nmax))
+
+    # Split the array
+    ra_chunk_lists = np.array_split(ra_list, num_splits)
+    dec_chunk_lists = np.array_split(dec_list, num_splits)
+    redshift_chunk_lists = np.array_split(redshift_list, num_splits)
+
+    if verbose:
+        print(np.shape(ra_chunk_lists))
+
+    if run_parr:
+        all_input_tuples = []
+        ##looping over all the chunks. Every chunk will run in parallel.
+        for i in trange(len(ra_chunk_lists)):
+            all_input_tuples.append(  ( ra_chunk_lists[i], dec_chunk_lists[i], redshift_chunk_lists[i], s20_ra, s20_dec, s20_zred, s20_d26, s20_ba, s20_phi, verbose )  )
+
+
+        with mp.Pool(processes=ncores) as pool:
+                results = list(tqdm(pool.starmap(calc_normalized_dist_broadcast, all_input_tuples), total = len(all_input_tuples)  ))
+
+        results = np.array(results)
+        results = np.concatenate(results,axis=1)
+        ##I might need to concatenate these arrays
+
+        all_nearest_inds = results[0]
+        all_nearest_dists = results[1]
+
+    else:
+        all_nearest_inds = []
+        all_nearest_dists = []    
+        ##for each object in the catalog, I need to compute the normalized distance to the nearest SGA galaxy
+
+        for i in trange(len(ra_chunk_lists)):
+
+            temp_i, temp_d = calc_normalized_dist_broadcast(ra_chunk_lists[i], dec_chunk_lists[i], redshift_chunk_lists[i], s20_ra, s20_dec, s20_zred, s20_d26, s20_ba, s20_phi, verbose)
+
+            all_nearest_inds.append(temp_i)
+            all_nearest_dists.append(temp_d)
+
+        all_nearest_inds = np.concatenate(all_nearest_inds)
+        all_nearest_dists = np.concatenate(all_nearest_dists)
+
+
+    matched_sga_ids = np.ones( len(ra_list) ) * np.nan
+
+    matched_sga_ids[ all_nearest_inds != np.nan ] = s20_sgaid[ all_nearest_inds[all_nearest_inds!=np.nan ] ]
+
+    return matched_sga_ids, all_nearest_dists
+
     
     
 
@@ -890,3 +1020,156 @@ def get_radec_mw(ra, dec, org):
     ra          =- ra    # reverse the scale: East to the left
     
     return np.radians(ra),np.radians(dec)
+    
+
+def add_sweeps_column(data,save_path=None):
+    all_sweeps = []
+    all_ras = data["RA"]
+    all_decs = data["DEC"]
+    for i in trange(len(data)):
+        all_sweeps.append( get_sweep_filename(  all_ras[i], all_decs[i]) )
+
+    is_souths = is_target_in_south(all_ras,all_decs)  
+
+    # data.remove_column("which_cat")
+    data["SWEEP"] = all_sweeps
+    data["is_south"] = is_souths.astype(int)
+    #this is something that says north or south
+    #save this now 
+    if save_path is not None:
+        save_table(data, save_path)
+
+    return data
+
+def get_galex_source(source_ra, source_dec, rgb_stuff, wcs, save_path):
+    
+    '''
+    This function queries the GALEX catalog to find the nearby source
+    '''
+
+    query = """select g.ra, g.dec, g.mag_fuv, g.mag_nuv, g.FLUX95_RADIUS_NUV, g.FLUX95_RADIUS_FUV, g.semiminor, g.semimajor, g.posang
+    from fGetNearbyObjEq(%s, %s,0.2) nb
+    inner join gcat as g on nb.casjobsid = g.casjobsid
+    where g.mag_nuv > 0 and g.mag_nuv > 0
+    """%(source_ra,source_dec)
+    
+    # link where all the column names are: https://archive.stsci.edu/prepds/gcat/gcat_dataproducts.html
+    # user is your MAST Casjobs username
+    # pwd is your Casjobs password
+    # These can also come from the CASJOBS_USERID and CASJOBS_PW environment variables,
+    # in which case you do not need the username or password parameters.
+    # Create a Casjobs account at <https://mastweb.stsci.edu/ps1casjobs/CreateAccount.aspx>
+    #   if you do not already have one.
+    
+    user = "virajmanwadkar"
+    pwd = "dwarfs"
+    
+    jobs = mastcasjobs.MastCasJobs(username=user, password=pwd, context="GALEX_Catalogs")
+    results = jobs.quick(query, task_name="python cone search")
+
+    save_table(results, save_path + "/galex_source_match.fits")
+
+
+    tempx,tempy,_ = wcs.all_world2pix(source_ra, source_dec,0,1)
+
+    fig,ax = plt.subplots(1,1,figsize = (7,7))
+    ax.imshow(rgb_stuff,origin="lower")
+
+
+    #results contains all the nearby GALEX sources
+    if len(results) == 0:
+        ##what happens if no GALEX sources are found???
+        #make the aperture center the location of our fiber 
+        aper_xcen, aper_ycen,_ = wcs.all_world2pix(source_ra, source_dec,0,1)
+        aper_loc = np.array([int(aper_xcen), int(aper_ycen)])
+        #the aperture radius is set by the size of the main segment    
+    else:
+        ## let us visualize this query 
+        all_locs = wcs.all_world2pix(results["ra"].data, results["dec"].data,0,1)
+        
+
+        for i in range(len(all_locs[0])):
+            # Define circle parameters
+            galex_center = (all_locs[0][i], all_locs[1][i])  # (x, y) center of the circle
+            semi_major = float(results["semimajor"][i])    # Semi-major axis length
+            semi_minor = float(results["semiminor"][i])    # Semi-minor axis length
+            angle = 90 + float(results["posang"][i])         # Position angle in degrees (counterclockwise from the x-axis)
+        
+            ellipse = patches.Ellipse(galex_center, 2*semi_major, 2*semi_minor, angle=angle, 
+                                       edgecolor='hotpink', facecolor='none', linewidth=2,linestyle ="--")
+            ax.add_patch(ellipse)
+        
+        ## for the aperture itself, choose the closet GALEX source 
+        ##if there are more than 1 sources in the field, find closest one
+        if len(results) > 1:
+            #find difference between input position and all GALEX sources
+            ref_coord = SkyCoord(ra=source_ra * u.deg, dec=source_dec * u.deg)
+            catalog_coords = SkyCoord(ra=results["ra"] * u.deg, dec=results["dec"] * u.deg)
+        
+            # Compute separations
+            separations = ref_coord.separation(catalog_coords).arcsec
+            aper_loc = [  all_locs[0][np.argmin(separations)]  , all_locs[1][np.argmin(separations)]  ]
+            # aper_rad = scale*float(results["FLUX95_RADIUS_NUV"][np.argmin(separations)])
+        else:
+            aper_loc = all_locs    
+
+        ##saving the GRZ image plus galex source overlayed
+    plt.savefig(save_path + "/galex_source_overlay_rgb.png")
+    plt.close()
+
+    # save the location of the aperture in the file
+    np.save( save_path + "/aperture_cen_coord.npy", aper_loc )
+        
+    return
+
+
+def fetch_psf(ra, dec, session,timeout=30):
+    """
+    Returns PSFs in dictionary with keys 'g', 'r', and 'z'.
+
+    Sometimes the the psf can have a=north in it and stuff.... 
+    use try-except clause in addition to for-loop to try to figure this out
+    """
+    url_prefix = 'https://www.legacysurvey.org/viewer/'
+    all_layers = ["ls-dr9", "ls-dr9-north"]
+
+    for i in range(2):
+        try:
+            # url = url_prefix + f'coadd-psf/?ra={ra}&dec={dec}&layer=ls-dr9&bands=grz'
+            url = url_prefix + f'coadd-psf/?ra={ra}&dec={dec}&layer={all_layers[i]}&bands=grz'
+            
+            # session = requests.Session()
+            print(url)
+            resp = session.get(url,timeout=timeout)
+            resp.raise_for_status()  # Raise error for bad status codes
+            # resp.raise_for_status()  # Raise error for bad responses
+            hdulist = fits.open(BytesIO(resp.content))
+            psf = {'grz'[i]: hdulist[i].data for i in range(3)}
+
+            return psf
+        except:
+            print("URL failed, trying another if not already ... ")
+            
+    return None
+
+
+def save_subimage(ra, dec, sbimg_path, session, size = 350, timeout = 30):
+    """
+    Returns coadds in dictionary with keys 'g', 'r', and 'z'.
+    """
+    url_prefix = 'https://www.legacysurvey.org/viewer/'
+    url = url_prefix + f'cutout.fits?ra={ra}&dec={dec}&'
+    
+    url += 'layer=ls-dr9&size=%d&pixscale=0.262&subimage'%size
+    print(url)
+    try:
+        resp = session.get(url, timeout=timeout)
+        resp.raise_for_status()  # Raise error for bad status codes
+        # Save the FITS file
+        with open(sbimg_path, "wb") as f:
+            f.write(resp.content)
+    except:
+        print("getting sub image data failed!")
+        
+    return
+    

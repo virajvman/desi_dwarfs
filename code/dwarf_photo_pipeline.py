@@ -10,28 +10,15 @@ The functions that do the actual photometry are kept in other .py files for orga
 '''
 
 import numpy as np
-import scarlet
 import astropy.io.fits as fits
-import sep
-import pickle
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm
 import astropy.units as u
-from scarlet.detect_pybind11 import get_footprints
-from mpl_toolkits.axes_grid1 import make_axes_locatable
-# Define normalization
-from astropy.visualization import (MinMaxInterval, AsinhStretch, ImageNormalize)
-from photutils.background import Background2D, MedianBackground
-from scarlet.display import AsinhMapping
-from photutils.aperture import aperture_photometry
 import os
 import sys
-import joblib
 import scipy.optimize as opt
 from astropy import units as u
 from astropy.coordinates import SkyCoord
-import random
 import argparse
 from astropy.io import fits
 from astropy.wcs import WCS
@@ -44,47 +31,10 @@ from io import BytesIO
 import matplotlib.patches as patches
 from scarlet_photo import run_scarlet_pipe
 from aperture_photo import run_aperture_pipe
-from easyquery import Query, QueryMaker
 # from get_sga_distances import get_sga_info
-
-def save_subimage(ra, dec, sbimg_path, session, size = 350, timeout = 30):
-    """
-    Returns coadds in dictionary with keys 'g', 'r', and 'z'.
-    """
-    url = url_prefix + f'cutout.fits?ra={ra}&dec={dec}&'
-    
-    url += 'layer=ls-dr9&size=%d&pixscale=0.262&subimage'%size
-    print(url)
-    try:
-        resp = session.get(url, timeout=timeout)
-        resp.raise_for_status()  # Raise error for bad status codes
-        # Save the FITS file
-        with open(sbimg_path, "wb") as f:
-            f.write(resp.content)
-    except:
-        print("getting sub image data failed!")
-        
-    return
-    
-def add_sweeps_column(data,save_path):
-    all_sweeps = []
-    all_ras = data["RA"]
-    all_decs = data["DEC"]
-    for i in trange(len(data)):
-        all_sweeps.append( get_sweep_filename(  all_ras[i], all_decs[i]) )
-
-    is_souths = is_target_in_south(all_ras,all_decs)  
-
-    # data.remove_column("which_cat")
-    data["SWEEP"] = all_sweeps
-    data["is_south"] = is_souths.astype(int)
-    #this is something that says north or south
-    #save this now 
-    save_table(data, save_path)
-    return data
+from desi_lowz_funcs import save_subimage, fetch_psf
 
 
-    
 def parse_tgids(value):
     if not value:
         return None
@@ -114,34 +64,7 @@ def argument_parser():
 
 
 
-def fetch_psf(ra, dec, session,timeout=30):
-    """
-    Returns PSFs in dictionary with keys 'g', 'r', and 'z'.
 
-    Sometimes the the psf can have a=north in it and stuff.... 
-    use try-except clause in addition to for-loop to try to figure this out
-    """
-
-    all_layers = ["ls-dr9", "ls-dr9-north"]
-
-    for i in range(2):
-        try:
-            # url = url_prefix + f'coadd-psf/?ra={ra}&dec={dec}&layer=ls-dr9&bands=grz'
-            url = url_prefix + f'coadd-psf/?ra={ra}&dec={dec}&layer={all_layers[i]}&bands=grz'
-            
-            # session = requests.Session()
-            print(url)
-            resp = session.get(url,timeout=timeout)
-            resp.raise_for_status()  # Raise error for bad status codes
-            # resp.raise_for_status()  # Raise error for bad responses
-            hdulist = fits.open(BytesIO(resp.content))
-            psf = {'grz'[i]: hdulist[i].data for i in range(3)}
-
-            return psf
-        except:
-            print("URL failed, trying another if not already ... ")
-            
-    return None
     
 
 def save_cutouts(ra,dec,img_path,session, size=350, timeout = 30):
@@ -448,7 +371,15 @@ def make_clean_shreds_catalogs():
     print("Total number of objects whose photometry needs to be redone = ", len(shreds_all))
 
     ## we add the SGA information to the objects now!
-    # shreds_all = get_sga_info(shreds_all)
+    from desi_lowz_funcs import get_sga_norm_dists
+
+    shreds_ra, shreds_dec, shreds_z = shreds_all["RA"].data, shreds_all["DEC"].data, shreds_all["Z"].data
+
+    matched_sgaids, matched_norm_dists = get_sga_norm_dists(shreds_ra,shreds_dec, shreds_z, 
+                                                            Nmax = 100,run_parr = False,ncores = 128,siena_path="/global/cfs/cdirs/cosmo/data/sga/2020/SGA-2020.fits",verbose=True)
+
+    shreds_all["SGA_ID_MATCH"] = matched_sgaids
+    shreds_all["SGA_D26_NORM_DIST"] = matched_norm_dists
 
     save_table(shreds_all,"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v2.fits")
     
@@ -531,89 +462,12 @@ def make_clean_shreds_catalogs():
     return 
 
    
-def get_galex_source(source_ra, source_dec, rgb_stuff, wcs, save_path):
-    
-    '''
-    This function queries the GALEX catalog to find the nearby source
-    '''
-
-    query = """select g.ra, g.dec, g.mag_fuv, g.mag_nuv, g.FLUX95_RADIUS_NUV, g.FLUX95_RADIUS_FUV, g.semiminor, g.semimajor, g.posang
-    from fGetNearbyObjEq(%s, %s,0.2) nb
-    inner join gcat as g on nb.casjobsid = g.casjobsid
-    where g.mag_nuv > 0 and g.mag_nuv > 0
-    """%(source_ra,source_dec)
-    
-    # link where all the column names are: https://archive.stsci.edu/prepds/gcat/gcat_dataproducts.html
-    # user is your MAST Casjobs username
-    # pwd is your Casjobs password
-    # These can also come from the CASJOBS_USERID and CASJOBS_PW environment variables,
-    # in which case you do not need the username or password parameters.
-    # Create a Casjobs account at <https://mastweb.stsci.edu/ps1casjobs/CreateAccount.aspx>
-    #   if you do not already have one.
-    
-    user = "virajmanwadkar"
-    pwd = "dwarfs"
-    
-    jobs = mastcasjobs.MastCasJobs(username=user, password=pwd, context="GALEX_Catalogs")
-    results = jobs.quick(query, task_name="python cone search")
-
-    save_table(results, save_path + "/galex_source_match.fits")
-
-
-    tempx,tempy,_ = wcs.all_world2pix(source_ra, source_dec,0,1)
-
-    fig,ax = plt.subplots(1,1,figsize = (7,7))
-    ax.imshow(rgb_stuff,origin="lower")
-
-
-    #results contains all the nearby GALEX sources
-    if len(results) == 0:
-        ##what happens if no GALEX sources are found???
-        #make the aperture center the location of our fiber 
-        aper_xcen, aper_ycen,_ = wcs.all_world2pix(source_ra, source_dec,0,1)
-        aper_loc = np.array([int(aper_xcen), int(aper_ycen)])
-        #the aperture radius is set by the size of the main segment    
-    else:
-        ## let us visualize this query 
-        all_locs = wcs.all_world2pix(results["ra"].data, results["dec"].data,0,1)
-        
-
-        for i in range(len(all_locs[0])):
-            # Define circle parameters
-            galex_center = (all_locs[0][i], all_locs[1][i])  # (x, y) center of the circle
-            semi_major = float(results["semimajor"][i])    # Semi-major axis length
-            semi_minor = float(results["semiminor"][i])    # Semi-minor axis length
-            angle = 90 + float(results["posang"][i])         # Position angle in degrees (counterclockwise from the x-axis)
-        
-            ellipse = patches.Ellipse(galex_center, 2*semi_major, 2*semi_minor, angle=angle, 
-                                       edgecolor='hotpink', facecolor='none', linewidth=2,linestyle ="--")
-            ax.add_patch(ellipse)
-        
-        ## for the aperture itself, choose the closet GALEX source 
-        ##if there are more than 1 sources in the field, find closest one
-        if len(results) > 1:
-            #find difference between input position and all GALEX sources
-            ref_coord = SkyCoord(ra=source_ra * u.deg, dec=source_dec * u.deg)
-            catalog_coords = SkyCoord(ra=results["ra"] * u.deg, dec=results["dec"] * u.deg)
-        
-            # Compute separations
-            separations = ref_coord.separation(catalog_coords).arcsec
-            aper_loc = [  all_locs[0][np.argmin(separations)]  , all_locs[1][np.argmin(separations)]  ]
-            # aper_rad = scale*float(results["FLUX95_RADIUS_NUV"][np.argmin(separations)])
-        else:
-            aper_loc = all_locs    
-
-        ##saving the GRZ image plus galex source overlayed
-    plt.savefig(save_path + "/galex_source_overlay_rgb.png")
-    plt.close()
-
-    # save the location of the aperture in the file
-    np.save( save_path + "/aperture_cen_coord.npy", aper_loc )
-        
-    return
 
 
 def read_source_cat(wcat, brick_i):
+    '''
+    Given north/south and brick name, read the corresponding source catalog!
+    '''
     #read the source catalog for this brick
     if "p" in brick_i:
         brick_folder = brick_i[:brick_i.find("p")-1]
@@ -700,7 +554,7 @@ if __name__ == '__main__':
     #make sure the get_sga_distances.py script has been run!!
 
     ##################
-    ##PART 2: Generate nested folder structure with relevant files
+    ##PART 2: Generate nested folder structure with relevant files for doing photometry
     ##################
 
     # creating a single session!
@@ -715,11 +569,8 @@ if __name__ == '__main__':
         
     shreds_focus = shreds_all[(shreds_all["SAMPLE"] ==  sample_str)]
 
-    
     # shreds_focus = Table.read("/pscratch/sd/v/virajvm/download_south_temp.fits")
 
-
-    ## NEED TO DO THIS FOR CLEAN AND UNCLEAN SEPARATELY!!
     ##### CODE FOR TESTING APERTURE PHOTOMETRY ON BAD RCHISQ OBJECTS
     # rchisq_bins = np.arange(0,9,1)
     
@@ -766,6 +617,7 @@ if __name__ == '__main__':
             unique_sweeps = np.unique( shreds_focus[shreds_focus["is_south"] == wcat_ind]["SWEEP"])
             print(len(unique_sweeps), "unique sweeps found in %s"%wcat)
 
+            #this is just to make sure the very end sweeps have their files made as well
             unique_sweeps = unique_sweeps[::-1]
     
             #counter for number of sweeps done
@@ -833,10 +685,10 @@ if __name__ == '__main__':
 
 
     ##################
-    ##PART 3: Prepare files for aperture photometry!
+    ##PART 3: Preparing inputs for the aperture and/or scarlet photometry functions
     ##################
 
-    print_stage("Starting prep for running photometry pipeline")
+    print_stage("Constructing input files for the photometry functions!")
 
     all_wcats = ["north","south"]
 
@@ -888,25 +740,22 @@ if __name__ == '__main__':
             save_path_k = top_folder + "/%s/"%wcat_k + sweep_folder + "/" + brick_k + "/%s_tgid_%d"%(sample_str, tgid_k)
                 
             img_path_k = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_good_cutouts/image_tgid_%d_ra_%f_dec_%f.fits"%(tgid_k,ra_k,dec_k) 
-
-        ## remove objects that are potential SGA shreds before?
-
         
         if os.path.exists(save_path_k + "/source_cat_f.fits"):
             source_cat_f = Table.read(save_path_k + "/source_cat_f.fits")
         else:
-            #we need to make the source_cat
+            #in case, we have arrived at this point and stil some files are not made, we make them!
             source_pzs_i = Table.read( "/global/cfs/cdirs/cosmo/data/legacysurvey/dr9/%s/sweep/9.1-photo-z/"%wcat_k + sweep_k)
-            source_cat = read_source_cat(wcat, brick_i)
+            source_cat_i = read_source_cat(wcat, brick_i)
             
-            get_nearby_source_catalog(ra_k, dec_k, wcat_k, brick_k, save_path_k, source_cat, source_pzs)
+            get_nearby_source_catalog(ra_k, dec_k, wcat_k, brick_k, save_path_k, source_cat_i, source_pzs_i)
 
         if os.path.exists(img_path_k):
             img_data = fits.open(img_path_k)
             data_arr = img_data[0].data
             wcs = WCS(fits.getheader( img_path_k ))
         else:
-            #maybe that means the image is not downloaded!
+            #in case image is not downloaded, we download it!
             save_cutouts(ra_k,dec_k,img_path_k,session,size=350)
             img_data = fits.open(img_path_k)
             data_arr = img_data[0].data
@@ -919,7 +768,8 @@ if __name__ == '__main__':
             # shutil.copy(img_path_k, save_path_k + "/")
 
         temp_dict = {"tgid":tgid_k, "ra":ra_k, "dec":dec_k, "redshift":redshift_k, "save_path":save_path_k, "img_path":img_path_k, "save_sample_path" : save_sample_path, "wcs": wcs , "image_data": data_arr, 
-                     "source_cat": source_cat_f, "index":k , "org_mag_g": shreds_focus["MAG_G"][k], "overwrite": overwrite_bool, "save_other_image_path":save_other_image_path, "run_own_detect":run_own_detect, "box_size" : box_size }
+                     "source_cat": source_cat_f, "index":k , "org_mag_g": shreds_focus["MAG_G"][k], "overwrite": overwrite_bool, "save_other_image_path":save_other_image_path, "run_own_detect":run_own_detect, "box_size" : box_size, 
+                     "session":session }
 
         return temp_dict
         
@@ -941,14 +791,14 @@ if __name__ == '__main__':
             all_inputs.append( produce_input_dicts(all_ks[i]) )
 
     all_inputs = np.array(all_inputs)
-    all_inputs = all_inputs[all_inputs != None]
+    # all_inputs = all_inputs[all_inputs != None]
     print(len(all_inputs))
 
     ##This is the length of the list that contains info on all the objects on which aperture photometry will be run!
 
     ##################
     ##PART 4a: Run aperture photometry
-    ##First step before scarlet photometry is run to weed out massive galaxies
+    ##First step before scarlet photometry to weed out massive galaxies
     ##################
     
     if run_aper == True:
@@ -990,11 +840,9 @@ if __name__ == '__main__':
         shreds_focus_f["MAG_Z_APER"] = final_new_mags[:,2]
         shreds_focus_f["SAVE_PATH"] = final_save_paths 
 
-
-        if verbose:
-            print("Compute aperture-photometry based stellar masses now!")
+        print("Compute aperture-photometry based stellar masses now!")
             
-        #and then save this!!
+        #compute the aperture photometry based stellar masses!
         rmag_aper = shreds_focus_f["MAG_R_APER"].data
         gr_aper = shreds_focus_f["MAG_G_APER"].data - shreds_focus_f["MAG_R_APER"].data
 
@@ -1004,13 +852,13 @@ if __name__ == '__main__':
         
         from desi_lowz_funcs import get_stellar_mass
 
-        all_mstar_aper = np.ones(len(shreds_focus_f))*-99
+        all_mstar_aper = np.ones(len(shreds_focus_f))*np.nan
 
         mstar_aper_nonan = get_stellar_mass( gr_aper[~nan_mask],rmag_aper[~nan_mask], shreds_focus["Z"][~nan_mask]  )
 
         all_mstar_aper[~nan_mask] = mstar_aper_nonan
         
-        shredS_focus_f["LOGM_SAGA_APERTURE"] = all_mstar_aper 
+        shreds_focus_f["LOGM_SAGA_APERTURE"] = all_mstar_aper 
     
         #then save this file!
         if tgids_list is None and (run_aper | run_scarlet):
@@ -1169,4 +1017,6 @@ if __name__ == '__main__':
     #         save_table( shreds_focus_f,"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_clean_mags/iron_%s_clean_catalog_subset_w_new_mags%s.fits"%(sample_str, file_ending) )
 
 
-
+    ##################
+    ##PART 5: Using the aperture photometry footprint, find the desi sources that lie around on it and similar redshift as well??
+    ##################

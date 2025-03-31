@@ -24,30 +24,8 @@ from tqdm import tqdm
 from easyquery import Query, QueryMaker
 reduce_compare = QueryMaker.reduce_compare
 
+from desi_lowz_funcs import add_sweeps_column
 
-from astropy.wcs import WCS
-from reproject import reproject_interp
-
-
-
-
-def add_sweeps_column(data):
-    all_sweeps = []
-    all_ras = data["RA"]
-    all_decs = data["DEC"]
-    for i in trange(len(data)):
-        all_sweeps.append( get_sweep_filename(  all_ras[i], all_decs[i]) )
-
-    is_souths = is_target_in_south(all_ras,all_decs)  
-
-    # data.remove_column("which_cat")
-    data["SWEEP"] = all_sweeps
-    data["is_south"] = is_souths.astype(int)
-    #this is something that says north or south
-    #save this now 
-    # save_table(data, save_path)
-    return data
-    
 
 def get_fibmag(vac_data_bgs):
     vac_fib_fluxr = vac_data_bgs["FIBERFLUX_R"]
@@ -490,7 +468,6 @@ if __name__ == '__main__':
     
     
         ## for the final catalog, add info on the sweep file!
-        from desi_lowz_funcs import get_sweep_filename
         vac_data_cat_f = add_sweeps_column(vac_data_cat_f)
         
         # print(len(vac_data_cat_f))

@@ -110,6 +110,13 @@ if __name__ == '__main__':
         
         print(len(all_inputs))
     
+        ### to avoid stress on the memory, we can split this up into some chunks 
+        all_results = []
+
+        nchunks = 10
+        
+
+
         #now let us produce the 
         with mp.Pool(processes=mp.cpu_count()) as pool2:
             results = list(tqdm(pool2.imap(is_sga_shred, all_inputs), total = len(all_inputs)  ))
