@@ -594,7 +594,7 @@ def calc_normalized_dist_broadcast(ra_list, dec_list, redshift_list, s20_ra, s20
     if verbose:
         print(np.shape(no_match_mask))
 
-    nearest_inds[no_match_mask] = np.nan
+    nearest_inds[no_match_mask] = -99
     #where there does not exist a valid match, we assign np.nan value
     nearest_norm_dist[no_match_mask] = np.nan
 
@@ -681,9 +681,9 @@ def get_sga_norm_dists(ra_list,dec_list, redshift_list, Nmax = 500,run_parr = Fa
         all_nearest_dists = np.concatenate(all_nearest_dists)
 
 
-    matched_sga_ids = np.ones( len(ra_list) ) * np.nan
+    matched_sga_ids = np.ones( len(ra_list) ) * -99
 
-    matched_sga_ids[ all_nearest_inds != np.nan ] = s20_sgaid[ all_nearest_inds[all_nearest_inds!=np.nan ] ]
+    matched_sga_ids[ all_nearest_inds != -99 ] = s20_sgaid[ all_nearest_inds[all_nearest_inds!=-99 ] ]
 
     return matched_sga_ids, all_nearest_dists
 
@@ -1151,6 +1151,22 @@ def fetch_psf(ra, dec, session,timeout=30):
             print("URL failed, trying another if not already ... ")
             
     return None
+
+
+def save_jpg(ra,dec,img_path,session, size=350):
+    url_prefix = 'https://www.legacysurvey.org/viewer/'
+    
+    url = url_prefix + f'cutout.jpg?ra={ra}&dec={dec}&size=%s&'%size
+
+    url += 'layer=ls-dr9&pixscale=0.262&bands=grz'
+        
+    resp = session.get(url)
+    # Save the file
+    with open(img_path, "wb") as f:
+        f.write(resp.content)        
+
+    return
+    
 
 
 def save_subimage(ra, dec, sbimg_path, session, size = 350, timeout = 30):

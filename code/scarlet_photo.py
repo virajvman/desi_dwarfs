@@ -35,7 +35,7 @@ from photutils.segmentation import make_2dgaussian_kernel
 from astropy.convolution import convolve
 from reproject import reproject_interp
 from desi_lowz_funcs import save_subimage, fetch_psf
-
+from desi_lowz_funcs import print_stage, check_path_existence, get_remove_flag, _n_or_more_lt, is_target_in_south, match_c_to_catalog, calc_normalized_dist, get_sweep_filename, get_random_markers, save_table, make_subplots, sdss_rgb
 
 def mask_star(invar_c, center, radius):
     """
@@ -64,10 +64,6 @@ def mask_star(invar_c, center, radius):
     
     return invar
 
-
-rootdir = '/global/u1/v/virajvm/'
-sys.path.append(os.path.join(rootdir, 'DESI2_LOWZ'))
-from desi_lowz_funcs import print_stage, check_path_existence, get_remove_flag, _n_or_more_lt, is_target_in_south, match_c_to_catalog, calc_normalized_dist, get_sweep_filename, get_random_markers, save_table, make_subplots, sdss_rgb
 
 def conf_interval(x, pdf, conf_level):
     return np.sum(pdf[pdf > x])-conf_level
@@ -233,13 +229,17 @@ def run_scarlet_pipe(input_dict):
     #data_arr is the C x N x N matrix with image data
     data_arr  = input_dict["image_data"]
     source_cat_f = input_dict["source_cat"]
-    object_index = input_dict["index"]
     org_mag_g = input_dict["org_mag_g"]
     overwrite = input_dict["overwrite"]
     #do we run our own peak finder, or use LS DR9 sources as peaks?
     run_own_detect = input_dict["run_own_detect"]
     box_size = input_dict["box_size"]
     save_other_image_path = input_dict["save_other_image_path"]
+
+    ## load the newly computed aperture mags for plotting
+    aper_mag_g = input_dict["MAG_G_APERTURE"]
+    aper_mag_r = input_dict["MAG_R_APERTURE"]
+    aper_mag_z = input_dict["MAG_Z_APERTURE"]
 
     verbose=True
 
@@ -260,7 +260,7 @@ def run_scarlet_pipe(input_dict):
             np.save(save_path  + "/psf_data_z.npy",psf_dict["z"])
         else:
             print("Psfs could not be downloaded :(")
-            return object_index, -99, [-99,-99,-99], [-99,-99,-99]
+            return -99, [-99,-99,-99], [-99,-99,-99]
 
     psf_g = np.load(save_path +"/psf_data_g.npy")
     psf_r = np.load(save_path +"/psf_data_r.npy")
@@ -269,7 +269,7 @@ def run_scarlet_pipe(input_dict):
     old_psfs = { "g": psf_g, "r": psf_r, "z": psf_z }
     new_psfs = { "g": psf_g, "r": psf_r, "z": psf_z }
 
-    ##HOW TO HANDLE THE DIFFERENT PSF SIZE IN Z BAND IN DR9-NORTH
+    ##HOW TO HANDLE THE DIFFERENT PSF SIZE IN Z BAND IN DR9-NORTH???
     
     for bi in "grz":
         if np.shape(old_psfs[bi]) != (63,63):
@@ -304,15 +304,21 @@ def run_scarlet_pipe(input_dict):
         try:
             #hopefully the file was downloaded
             sbimg = fits.open(sbimg_path)
+            invar_weights = combine_sbimgs(sbimg, data_wcs_2d)
+
+            if np.shape(invar_weights) != np.shape(data_arr):
+                print(np.shape(invar_weights),  np.shape(data_arr) )
+                print(save_path)
+                raise ValueError("sub-image invariance maps and data arrays not of same size!")
+            
         except:
-            print("Sub-image was not downloaded successfully :( ")
-            return object_index, -99, [-99,-99,-99], [-99,-99,-99]
-        # save_subimage(source_ra, source_dec, sbimg_path, session, size = 350, timeout = 30)
-    
+            print("Sub-images were not downloaded successfully :( ")
+            return [np.nan,np.nan,np.nan], [np.nan,np.nan,np.nan]
+                
     if psf is None:
         #try download the psf again
 
-        return object_index, -99, [-99,-99,-99], [-99,-99,-99]
+        return [np.nan,np.nan,np.nan], [np.nan,np.nan, np.nan]
     else:
         
         #fontsize for all the xlabels in titles in plots
@@ -1130,6 +1136,7 @@ def run_scarlet_pipe(input_dict):
         
         #########################################
         #ISOLATED DWARF GALAXY COMPONENTS
+        #TODO: How to deal with colors that are like not the 
         #########################################
 
         if False:
@@ -1351,18 +1358,26 @@ def run_scarlet_pipe(input_dict):
         
         
         ax[4].set_title("summary",fontsize = fontsize)
-    
-        ax[4].text(0.05,0.95,"Org-mag g = %.2f"%source_mag_g,size =12,transform=ax[4].transAxes, verticalalignment='top')
-        ax[4].text(0.05,0.85,"New-mag g = %.2f"%new_mag_g,size = 12,transform=ax[4].transAxes, verticalalignment='top')
-        ax[4].text(0.05,0.75,"fracflux_g = %.2f"%(source_cat_obs["fracflux_g"]),size = 12,transform=ax[4].transAxes, verticalalignment='top')
+
+        spacing = 0.08
+        ax[4].text(0.05,0.95,"Org-mag g = %.2f"%source_mag_g,size =11,transform=ax[4].transAxes, verticalalignment='top')
+        ax[4].text(0.05,0.95 - spacing*1,"Aper-mag g = %.2f"%aper_mag_g,size = 11,transform=ax[4].transAxes, verticalalignment='top')
+        ax[4].text(0.05,0.95 - spacing*2,"Scarlet-mag g = %.2f"%new_mag_g,size = 11,transform=ax[4].transAxes, verticalalignment='top')
         
-        ax[4].text(0.05,0.65,"Org-mag r = %.2f"%source_mag_r,size =12,transform=ax[4].transAxes, verticalalignment='top')
-        ax[4].text(0.05,0.55,"New-mag r = %.2f"%new_mag_r,size = 12,transform=ax[4].transAxes, verticalalignment='top')
-        ax[4].text(0.05,0.45,"fracflux_r= %.2f"%(source_cat_obs["fracflux_r"]),size = 12,transform=ax[4].transAxes, verticalalignment='top')
+        ax[4].text(0.05,0.95 - spacing*3,"fracflux_g, rchisq_g = %.2f"%(source_cat_obs["fracflux_g"], source_cat_obs["rchisq_g"]),size = 11,transform=ax[4].transAxes, verticalalignment='top')
+        
+        ax[4].text(0.05,0.95 - spacing*4,"Org-mag r = %.2f"%source_mag_r,size =11,transform=ax[4].transAxes, verticalalignment='top')
+        ax[4].text(0.05,0.95 - spacing*5,"Aper-mag r = %.2f"%aper_mag_r,size = 11,transform=ax[4].transAxes, verticalalignment='top')
+        ax[4].text(0.05,0.95 - spacing*6,"Scarlet-mag r = %.2f"%new_mag_r,size = 11,transform=ax[4].transAxes, verticalalignment='top')
+        
+        ax[4].text(0.05,0.95 - spacing*7,"fracflux_r, rchisq_r = %.2f, %.2f"%(source_cat_obs["fracflux_r"], source_cat_obs["rchisq_r"]),size = 11,transform=ax[4].transAxes, verticalalignment='top')
+        
     
-        ax[4].text(0.05,0.35,"Org-mag z = %.2f"%source_mag_z,size =12,transform=ax[4].transAxes, verticalalignment='top')
-        ax[4].text(0.05,0.25,"New-mag z = %.2f"%new_mag_z,size = 12,transform=ax[4].transAxes, verticalalignment='top')
-        ax[4].text(0.05,0.15,"fracflux_z = %.2f"%(source_cat_obs["fracflux_z"]),size = 12,transform=ax[4].transAxes, verticalalignment='top')
+        ax[4].text(0.05,0.95 - spacing*8,"Org-mag z = %.2f"%source_mag_z,size =11,transform=ax[4].transAxes, verticalalignment='top')
+        ax[4].text(0.05,0.95 - spacing*9,"Aper-mag z = %.2f"%aper_mag_z,size = 11,transform=ax[4].transAxes, verticalalignment='top')
+        ax[4].text(0.05,0.95 - spacing*10,"Scarlet-mag z = %.2f"%new_mag_z,size = 11,transform=ax[4].transAxes, verticalalignment='top')
+        
+        ax[4].text(0.05,0.95 - spacing*11,"fracflux_z, rchisq_z = %.2f, %.2f"%(source_cat_obs["fracflux_z"], source_cat_obs["rchisq_z"]),size = 11,transform=ax[4].transAxes, verticalalignment='top')
     
         ax[4].set_xlim([0,1])
         ax[4].set_ylim([0,1])
@@ -1392,61 +1407,64 @@ def run_scarlet_pipe(input_dict):
         new_mags = [ new_mag_g_mwc, new_mag_r_mwc,new_mag_z_mwc ]
         org_mags =   [ source_mag_g_mwc,source_mag_r_mwc,source_mag_z_mwc  ]
         
-        return object_index, closest_star_dist, new_mags, org_mags, save_path
+        return new_mags, org_mags
 
     
 
 if __name__ == '__main__':
 
     #provide all the relevant input files!!
-    data = Table.read('/Users/virajmanwadkar/Desktop/Stanford/Research/DESI/dwarf_photometry_pipeline/download_south_egs/download_south_temp.fits')
+    # data = Table.read('/Users/virajmanwadkar/Desktop/Stanford/Research/DESI/dwarf_photometry_pipeline/download_south_egs/download_south_temp.fits')
 
-    image_folder = "/Users/virajmanwadkar/Desktop/Stanford/Research/DESI/dwarf_photometry_pipeline/download_south_egs/cutouts"
-    folder_path  = "/Users/virajmanwadkar/Desktop/Stanford/Research/DESI/dwarf_photometry_pipeline/download_south_egs/folders"
+    # image_folder = "/Users/virajmanwadkar/Desktop/Stanford/Research/DESI/dwarf_photometry_pipeline/download_south_egs/cutouts"
+    # folder_path  = "/Users/virajmanwadkar/Desktop/Stanford/Research/DESI/dwarf_photometry_pipeline/download_south_egs/folders"
 
+    data = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_BGS_BRIGHT_shreds_catalog_w_new_mags.fits")
+    
     # creating a single session!
     session = requests.Session()
 
-    # index = np.where(data["TARGETID"] ==  39627909152903632)[0]
-    # index = 24
-    for index in range(25,len(data)):
-        print(index)
-        tgid_i = data["TARGETID"][index]
-        print(tgid_i)
-        ra_i = data["RA"][index]
-        dec_i = data["DEC"][index]
-        zred_i = data["Z"][index]
-        org_mag_i = data["MAG_G"][index]
-        folder_i = folder_path + "/" + "BGS_BRIGHT_tgid_%d"%tgid_i
+    index = np.where(data["TARGETID"] ==  39627877599152108)[0][0]
+    
+    print(index)
+    
+    tgid_i = data["TARGETID"].data[index]
+    print(tgid_i)
+    ra_i = data["RA"].data[index]
+    dec_i = data["DEC"].data[index]
+    zred_i = data["Z"].data[index]
+    org_mag_i = data["MAG_G"].data[index]
+    folder_i = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds/south/sweep-130p000-140p005/1368p037/BGS_BRIGHT_tgid_39627877599152108"
 
-        import glob
-        cutout_path = glob.glob( image_folder + "/image_tgid_%d*.fits"%tgid_i)[0]
-        hdus = fits.open(cutout_path)
-        image_data = hdus[0].data
-        wcs = WCS(hdus[0])
+    import glob
+    
+    cutout_path = glob.glob("/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds_cutouts/image_tgid_%d_*"%tgid_i)[0]
+    hdus = fits.open(cutout_path)
+    image_data = hdus[0].data
+    wcs = WCS(hdus[0])
 
-        source_cat = Table.read(folder_i + "/source_cat_f.fits")
+    source_cat = Table.read(folder_i + "/source_cat_f.fits")
 
-        input_dict = {}
+    input_dict = {}
 
-        input_dict["save_path"] = folder_i
-        input_dict["tgid"] = tgid_i
-        input_dict["ra"]  = ra_i
-        input_dict["dec"] = dec_i
-        input_dict["redshift"] = zred_i
-        input_dict["wcs"] = wcs
-        #data_arr is the C x N x N matrix with image data
-        input_dict["image_data"] = image_data
-        input_dict["source_cat"] = source_cat
-        input_dict["index"] = 0
-        input_dict["org_mag_g"] = org_mag_i
-        input_dict["overwrite"] = True
-        #do we run our own peak finder, or use LS DR9 sources as peaks?
-        input_dict["run_own_detect"] = True
-        input_dict["session"] = session
-        input_dict["box_size"] = 350
-        input_dict["save_other_image_path"]= "/Users/virajmanwadkar/Desktop/Stanford/Research/DESI/dwarf_photometry_pipeline/download_south_egs/scarlet_imgs/"
+    input_dict["save_path"] = folder_i
+    input_dict["tgid"] = tgid_i
+    input_dict["ra"]  = ra_i
+    input_dict["dec"] = dec_i
+    input_dict["redshift"] = zred_i
+    input_dict["wcs"] = wcs
+    #data_arr is the C x N x N matrix with image data
+    input_dict["image_data"] = image_data
+    input_dict["source_cat"] = source_cat
+    input_dict["index"] = 0
+    input_dict["org_mag_g"] = org_mag_i
+    input_dict["overwrite"] = True
+    #do we run our own peak finder, or use LS DR9 sources as peaks?
+    input_dict["run_own_detect"] = True
+    input_dict["session"] = session
+    input_dict["box_size"] = 350
+    input_dict["save_other_image_path"]= ""
 
-        #provide this input dict to the scarlet function!
-        run_scarlet_pipe(input_dict)
+    #provide this input dict to the scarlet function!
+    run_scarlet_pipe(input_dict)
 

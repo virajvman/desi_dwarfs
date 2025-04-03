@@ -114,6 +114,7 @@ def run_aperture_pipe(input_dict):
     source_cat_f = input_dict["source_cat"]
     org_mag_g = input_dict["org_mag_g"]
     overwrite = input_dict["overwrite"]
+    use_photoz = input_dict["use_photoz"]
 
     ##filter the source cat for objects with nan values
     ##we do not do this for the scarlet pipeline, and hence we do it separately over here
@@ -778,7 +779,13 @@ def run_aperture_pipe(input_dict):
                         #what do if the zphot is -99?
 
                         #if it has a reliable photo-zs
-                        in_zphot_range = (zphot_low <= source_redshift) & (source_redshift <= zphot_high)
+
+                        if use_photoz:
+                            #if we are using photo-zs to separated objects, then 
+                            in_zphot_range = (zphot_low <= source_redshift) & (source_redshift <= zphot_high)
+                        else:
+                            #if we are not using photo-zs to separated objects
+                            in_zphot_range = True
 
 
                         if (in_zphot_range & (Z_likely_sources_max[w] >= conf_levels["98.7"])) | ( (zphot_low == -99) & (zphot_high == -99) & (Z_likely_sources_max[w] >= conf_levels["98.7"]) ) : 
@@ -799,16 +806,14 @@ def run_aperture_pipe(input_dict):
                             ax[2].scatter( [source_cat_nostars_inseg["xpix"][w]] , [source_cat_nostars_inseg["ypix"][w] ],  color = "k", marker = source_cat_nostars_inseg["marker"][w],s= 20,  zorder = 1)
                             
                             # Annotate the point
-                            ax[2].text( source_cat_nostars_inseg["xpix"][w] , source_cat_nostars_inseg["ypix"][w] + 5,  "[%.2f,%.2f]"%(zphot_low, zphot_high),fontsize = 8, ha = "center")
-
+                            if use_photoz:
+                                ax[2].text( source_cat_nostars_inseg["xpix"][w] , source_cat_nostars_inseg["ypix"][w] + 5,  "[%.2f,%.2f]"%(zphot_low, zphot_high),fontsize = 8, ha = "center")
 
 
             ## What if a star is deblended into main segment?
             source_cat_stars_inseg = source_cat_inseg_signi[is_star_inseg_signi]
 
-
             if len(source_cat_stars_inseg) > 0:
-
 
                 for j in range(len(source_cat_stars_inseg)):
                     #there exists a star in our main segment
