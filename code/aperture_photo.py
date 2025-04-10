@@ -50,7 +50,13 @@ from desi_lowz_funcs import print_stage, check_path_existence, get_remove_flag, 
 def conf_interval(x, pdf, conf_level):
     return np.sum(pdf[pdf > x])-conf_level
 
+
+def mask_radius_for_mag(mag):
+    # Returns a masking radius in degrees for a star of the given magnitude.
+    # Used for Tycho-2 and Gaia stars.
     
+    # This is in degrees, and is from Rongpu in the thread [decam-chatter 12099].
+    return 1630./3600. * 1.396**(-mag)
 
 
 def fetch_noise(ra, dec,size = 300):
@@ -68,6 +74,16 @@ def fetch_noise(ra, dec,size = 300):
     # noise_image = {'g'}
     # return noise_image
 
+def mask_circle(array, x0, y0, r):
+    '''
+    This will be used to mask the circular bright star region!
+    '''
+    ny, nx = array.shape
+    y, x = np.ogrid[:ny, :nx]
+    mask = (x - x0)**2 + (y - y0)**2 <= r**2
+    array[mask] = 0
+    return array
+    
 # use this random state for reproducibility
 # rng = np.random.RandomState(14)
 
@@ -89,6 +105,11 @@ def run_aperture_pipe(input_dict):
 
     1) When star is part of a different de-blended segment, do not mask the whole segment by default. Include that, but maybe just mask a certain aperture around the star?
 
+    STAR LOGIC:
+
+    1) If a star is not in the same island as DESI source, we do not do anything.
+    2) If the star is on the main island, we mask the area within 0.5 of the star radius! If the main source is within 0.5 of the
+
     KNOWN ISSUES:
     1) I am not dealing with situations where an external source is split half way between aper rad. This happens if it accidentally connects
     with this external source making the whole main segment larger than aper rad and then if the external source has flux subtracted then whoops
@@ -100,10 +121,6 @@ def run_aperture_pipe(input_dict):
     '''
 
     save_path = input_dict["save_path"]
-    save_sample_path  = input_dict["save_sample_path"]
-
-    save_other_image_path  = input_dict["save_other_image_path"]
-    
     img_path  = input_dict["img_path"]
     source_tgid  = input_dict["tgid"]
     source_ra  = input_dict["ra"] 
@@ -115,6 +132,16 @@ def run_aperture_pipe(input_dict):
     org_mag_g = input_dict["org_mag_g"]
     overwrite = input_dict["overwrite"]
     use_photoz = input_dict["use_photoz"]
+
+    bstar_tuple = input_dict["bright_star_info"]
+
+    sga_tuple = input_dict["sga_info"]
+
+    sga_dist, sga_ndist = sga_tuple[0], sga_tuple[1]
+    
+    #this is the bright star info that was used to compute the STARDIST, STARFDIST etc.
+    #the radius is given in arcsecs and will be plotted as a circle for reference
+    bstar_ra, bstar_dec, bstar_radius, bstar_fdist = bstar_tuple[0], bstar_tuple[1], bstar_tuple[2], bstar_tuple[3]
 
     ##filter the source cat for objects with nan values
     ##we do not do this for the scarlet pipeline, and hence we do it separately over here
@@ -145,7 +172,10 @@ def run_aperture_pipe(input_dict):
     # Compute separations
     source_seps = ref_coord.separation(sources_coords).arcsec
     # ( np.abs(source_cat_f["pmra"] * np.sqrt(source_cat_f["pmra_ivar"])) >= 2 ) & ( np.abs(source_cat_f["pmdec"] * np.sqrt(source_cat_f["pmdec_ivar"])) >= 2 )
-    # is_star = (source_cat_f["ref_cat"] == "G2") &  (source_seps != 0) 
+
+    ##what is the best way to do this?? I guess I should also make sure that object I am pointing at is not in Gaia itself
+    ##pm cuts do not seem very relevant. Maybe if it is in Gaia 
+    
     is_star = (source_cat_f["ref_cat"] == "G2") &  ( np.abs(source_cat_f["pmra"] * np.sqrt(source_cat_f["pmra_ivar"])) >= 2 ) & ( np.abs(source_cat_f["pmdec"] * np.sqrt(source_cat_f["pmdec_ivar"])) >= 2 ) 
     
     #we do not really care about it being really a star or not. If it is in the gaia catalog and it is not a source we targeted, it is not associated with our source!
@@ -160,15 +190,26 @@ def run_aperture_pipe(input_dict):
         # Compute separations
         separations = ref_coord.separation(catalog_coords).arcsec
         closest_star_dist = np.min(separations)
+        #this will be useful to determine if there is a saturated star in the field or not
+        #we get the maximum magnitude in any of the 3 gaia bands
+        closest_star_tab = all_stars[np.argmin(separations)]
+        
+        closest_star_mag = np.nanmin( [ float(closest_star_tab["gaia_phot_bp_mean_mag"]), float(closest_star_tab["gaia_phot_rp_mean_mag"]),float(closest_star_tab["gaia_phot_g_mean_mag"]) ] )
+        
     else:
-        closest_star_dist = np.nan
-    
+        closest_star_dist = np.inf
+        closest_star_mag = np.inf
+        
+    save_summary_png = save_path + "/grz_bands_segments.png"
+
     if overwrite == False:
         try:
             new_mags = np.load(save_path + "/new_aperture_mags.npy")
             org_mags = np.load(save_path + "/org_mags.npy")
 
-            return closest_star_dist, new_mags, org_mags, save_path
+            ## NEED TO CORRECTLY LOAD THE BRIGHT STAR PIXEL FRAC??
+            
+            return closest_star_dist, closest_star_mag, new_mags, org_mags, save_path, save_summary_png, np.nan
         except:
             do_i_run = True
     if overwrite == True:
@@ -338,29 +379,32 @@ def run_aperture_pipe(input_dict):
         segment_map_v2[(segment_map.data != island_num) & (segment_map.data > 0)] = 1
         #rest all remains 0
 
-        ##construct the elliptical aperture now!
+        #define the aperture that will be used for plotting the bright star
+        #these should be in the pixel coordinates
+        #converting star center ra,dec into pixels
+        if bstar_ra != 99:
+            bstar_radius_pix = bstar_radius/ 0.262 #converting the radius in arcseconds to pixels
+            bstar_xpix,bstar_ypix,_ = wcs.all_world2pix(bstar_ra, bstar_dec, 0,1)
+            aperture_for_bstar_1 = CircularAperture( (float(bstar_xpix), float(bstar_ypix)) , r =  bstar_radius_pix)
+            aperture_for_bstar_34 = CircularAperture( (float(bstar_xpix), float(bstar_ypix)) , r =  0.75*bstar_radius_pix)
+            aperture_for_bstar_12 = CircularAperture( (float(bstar_xpix), float(bstar_ypix)) , r =  0.5*bstar_radius_pix)
+
+
+        # ##if stars exist, I want to draw an aperture around them!!
+        # if len(all_stars) > 0:
+        #     aperture_star_i = CircularAperture( (float(bstar_xpix), float(bstar_ypix)) , r =  bstar_radius_pix)
+        #     mask_radius_for_mag(mag)
         
-        # all_xcords, all_ycords = np.meshgrid( np.arange(np.shape(segment_map_v2)[0]), np.arange(np.shape(segment_map_v2)[1]) )
-        # all_dists = np.sqrt ( ( all_xcords - aper_loc[0])**2 + ( all_ycords - aper_loc[1])**2 )
-        # farthest_pixel = np.max(all_dists[ segment_map_v2 == 2])
-        # #use this farthest pixel in the main segment to approximate the aperture radius
-        # aper_rad = farthest_pixel * 1.25
-        # #making sure the aperture is not bigger than the cutout
-        # aper_rad = np.minimum( aper_rad, 175*np.sqrt(2))
-        # #making sure the aperture is at least as large as the previous band. Sometimes these dwarfs are too faint in z-band
-        # if len(all_aper_rads) > 0:
-        #     aper_rad = np.maximum( aper_rad, np.max(all_aper_rads) )
-        # else:
-        #     all_aper_rads.append(aper_rad)
-
-        #with the aperture radius finalized, define the circular aperture
-        # aperture_for_phot = CircularAperture( (float(aper_loc[0]), float(aper_loc[1])) , r =  aper_rad)
-
         def get_elliptical_aperture(segment_data, id_num,sigma = 3):
+            '''
+            WHEN DOING THIS, I CAN MASK THE PIXELS THAT ARE WITHIN 1 OF STAR RADIUS AND SO THAT PART IS DOWNWEIGHTED-WHEN CONSTRUCTING APERTURE?
+            '''
             segment_data_v2 = np.copy(segment_data)
             ##we set everything else to zero except for our id num of reference
             segment_data_v2[segment_data != id_num] = 0
             segment_data_v2[segment_data == id_num] = 1
+
+            #we can set everything in the star mask to be zero as well
             
             #use this trick to get properties of the main segment 
             cat = data_properties(segment_data_v2, mask=None)
@@ -433,9 +477,15 @@ def run_aperture_pipe(input_dict):
             axi.set_xticks([])
             axi.set_yticks([])
             ##plotting the aperture for photometry.plotting is done below in the for-loop
+            aperture_for_phot.plot(ax = axi, color = "r", lw = 2.5, ls = "-")
 
-            aperture_for_phot.plot(ax = axi, color = "r", lw = 2, ls = "dotted")
-            
+            if bstar_ra != 99:
+                
+                aperture_for_bstar_1.plot(ax = axi, color = "r", lw = 1.5, ls = "dotted")
+                aperture_for_bstar_34.plot(ax = axi, color = "r", lw = 1.5, ls = "dotted")
+                aperture_for_bstar_12.plot(ax = axi, color = "r", lw = 1.5, ls = "dotted")
+                
+                
             # center = (aperture_for_phot.positions[0],aperture_for_phot.positions[1])  # (x, y) center of the circle
             # radius = aperture_for_phot.r     # Radius of the circle
 
@@ -491,6 +541,9 @@ def run_aperture_pipe(input_dict):
         all_segs_grs_err = []
         all_segs_rzs_err = []
 
+        ## construct the total star mask which will allow us to get the segment colors that are not affected by star colors.
+        
+
         # we should mask some pixels to prevent negative values here ... 
         for biii in ["g","r","z"]:
             data[biii][ np.isnan(data[biii]) ] = 0
@@ -498,9 +551,12 @@ def run_aperture_pipe(input_dict):
             data[biii][ data[biii] < -5*noise_dict[biii] ] = 0
 
         for din in new_deblend_ids:
-            gband_flux_i = np.sum(data["g"][segm_deblend_v3 == din])
-            rband_flux_i = np.sum(data["r"][segm_deblend_v3 == din])
-            zband_flux_i = np.sum(data["z"][segm_deblend_v3 == din])
+
+            ## when computing this, need to mask the stars that appear in these segments so that they do not influence the color of segment!
+            
+            gband_flux_i = np.sum(data["g"][segm_deblend_v3 == din ])
+            rband_flux_i = np.sum(data["r"][segm_deblend_v3 == din ])
+            zband_flux_i = np.sum(data["z"][segm_deblend_v3 == din ])
 
             #as all the error is assumed to be the same so we add them in quadrature
             #TODO: use the actual pixel inv-var map to do this
@@ -637,8 +693,8 @@ def run_aperture_pipe(input_dict):
         col_lenient = 0.1
         
         ##plot the bluer boundary lines
-        ax[1].hlines(y = all_segs_rzs[new_deblend_island_num - 1] + col_lenient,xmin = -0.5, xmax= all_segs_grs[new_deblend_island_num - 1] + col_lenient,color = "k",lw = 1, ls = "dotted")
-        ax[1].vlines(x = all_segs_grs[new_deblend_island_num - 1] + col_lenient,ymin = -0.5, ymax= all_segs_rzs[new_deblend_island_num - 1] + col_lenient,color = "k",lw = 1, ls = "dotted")
+        ax[1].hlines(y = all_segs_rzs[new_deblend_island_num - 1] + col_lenient,xmin = -0.5, xmax= all_segs_grs[new_deblend_island_num - 1] + col_lenient,color = "k",lw = 1, ls = "-")
+        ax[1].vlines(x = all_segs_grs[new_deblend_island_num - 1] + col_lenient,ymin = -0.5, ymax= all_segs_rzs[new_deblend_island_num - 1] + col_lenient,color = "k",lw = 1, ls = "-")
 
         #generating empty mask array that has same shape as data
         #note that when passing the aperture masking array to the function, 1 = mask, 0 = no mask
@@ -751,12 +807,9 @@ def run_aperture_pipe(input_dict):
                 is_in_blue_box = ( source_cat_nostars_inseg["g-r"].data - gr_err_nostars_inseg  < ref_deblend_gr + col_lenient ) & (source_cat_nostars_inseg["r-z"].data - rz_err_nostars_inseg < ref_deblend_rz + col_lenient)
 
                 
-                # if len(source_cat_nostars_inseg) > 0:
                 for w in range(len(source_cat_nostars_inseg) ):
              
                     if is_in_blue_box[w]:
-                        # print("include")
-                        #yay include!
                         pass
                     else:
                         #if the source is redder, we will investigate its photo-zs
@@ -767,26 +820,32 @@ def run_aperture_pipe(input_dict):
                         sra = source_cat_nostars_inseg["ra"][w]	
                         sdec = source_cat_nostars_inseg["dec"][w]	
                         
-                        
+                        ## important note : https://www.legacysurvey.org/dr9/files/#photo-z-sweeps-9-1-photo-z-sweep-brickmin-brickmax-pz-fits
+                        ## Although we provide photo-zs for all objects that meet the NOBS cut, 
+                        ## the brightest objects have the most reliable photo-zs. 
+                        ## As a rule of thumb, objects brighter than 𝑧-band magnitude of 21 are mostly reliable, 
+
                         zphot_low = source_cat_nostars_inseg["Z_PHOT_L95"][w]
                         if zphot_low <= 0.1:
                             #the idea here is that at low-redshift, photo-zs are not accurate
                             zphot_low = 0
                         zphot_high = source_cat_nostars_inseg["Z_PHOT_U95"][w]	
-                        zphot_std = source_cat_nostars_inseg["Z_PHOT_STD"][w]	
-                        zphot_mean = source_cat_nostars_inseg["Z_PHOT_MEAN"][w]	
+                        
+                        # zphot_std = source_cat_nostars_inseg["Z_PHOT_STD"][w]	
+                        # zphot_mean = source_cat_nostars_inseg["Z_PHOT_MEAN"][w]	
 
-                        #what do if the zphot is -99?
+                        #if object is fainter than z band 21, we just make its zphot range very large so that it is like it its photoz is not being used
+                        if source_cat_nostars_inseg["mag_z"][w] >= 21:
+                            zphot_low = 0
+                            zphot_high = 100
 
-                        #if it has a reliable photo-zs
-
+                        
                         if use_photoz:
                             #if we are using photo-zs to separated objects, then 
                             in_zphot_range = (zphot_low <= source_redshift) & (source_redshift <= zphot_high)
                         else:
                             #if we are not using photo-zs to separated objects
                             in_zphot_range = True
-
 
                         if (in_zphot_range & (Z_likely_sources_max[w] >= conf_levels["98.7"])) | ( (zphot_low == -99) & (zphot_high == -99) & (Z_likely_sources_max[w] >= conf_levels["98.7"]) ) : 
                             # if the redshift is in 95% photoz interval + good colors
@@ -810,55 +869,123 @@ def run_aperture_pipe(input_dict):
                                 ax[2].text( source_cat_nostars_inseg["xpix"][w] , source_cat_nostars_inseg["ypix"][w] + 5,  "[%.2f,%.2f]"%(zphot_low, zphot_high),fontsize = 8, ha = "center")
 
 
-            ## What if a star is deblended into main segment?
+            #########
+            ## DEALING WITH STARS :) 
+            #########
+            
             source_cat_stars_inseg = source_cat_inseg_signi[is_star_inseg_signi]
+            ##compute the max mag of this star
+            source_cat_stars_inseg["max_mag"] = np.min( (  np.array(source_cat_stars_inseg["gaia_phot_bp_mean_mag"]), np.array(source_cat_stars_inseg["gaia_phot_rp_mean_mag"]),np.array(source_cat_stars_inseg["gaia_phot_g_mean_mag"])    )       ,axis = 0)
 
+        
+            ### What fraction of the total main island pixels are occupied by the stellar deblended segment??
+            ### we will use this in the post process to decide whether to push the object forward to scarlet photometry or not
+            ### we will define a significant bright star as one where the max mag < 17
+
+            ##masking the brightest star identified via the gaia matching
+            #we will mask it a circle centered around the star 
+            #sometimes these bright stars do not have to be part of the main segment and hence this is being done outside the belor for-loop
+            if bstar_ra != 99:
+                # aperture_mask[ segm_deblend_v3 == source_cat_stars_inseg["new_deblend_id"][j] ] = 0  
+                #returning an updating aperture mask where the pixels within 0.5 of star radius are masked!
+                aperture_mask = mask_circle(aperture_mask, bstar_xpix,bstar_ypix, 0.5 * bstar_radius_pix)
+                #this ensures that we are just masking the stellar region and not the whole deblended segment!
+            else:
+                #if no bright star exists, then we do not do this!
+                pass
+
+
+            #what fraction of pixels in main segment are occupied by stars. useful to know as we are masking stars
+            total_bright_star_pix_count = 0
+            
+            #source_cat_stars_inseg are the stars that are in the main segment. 
+            #If star is in the main island, then we mask the 0.5 star radius
             if len(source_cat_stars_inseg) > 0:
+                ##we loop through every star that is in the main segment, this will also include the bright star from above so we want to make sure we are not double subtracting
+                ##if the flux_ivar_grz of a star is 0, then that means it is a retained source and its broad band magnitude is taken from polynomial fits to color transformation
+                ##turns out, starting with DR9, objects appearing in Gaia catalogs are now always RETAINED in the tractor catalogs
+                ##it would be interesting to check by how much the magnitude differs if I dont mask it and just subtract versus I just mask it. Probably easiest to just mask it.
 
+
+    
+                #separation between our bstar and
+                if bstar_ra != 99:
+                    all_star_seps = SkyCoord(bstar_ra, bstar_dec, unit='deg').separation(SkyCoord( source_cat_stars_inseg["ra"].data , source_cat_stars_inseg["dec"].data, unit='deg')).arcsec
+            
+                
                 for j in range(len(source_cat_stars_inseg)):
                     #there exists a star in our main segment
 
-                    #is this star part of our main deblend segment
-                    if source_cat_stars_inseg["new_deblend_id"][j]  == new_deblend_island_num:
+                    #generating a temporary 1s array of same shape
+                    temp_data = np.ones_like(tot_data)
 
-                        #star is part of the same deblend segment as our source
-                        #as no other way to mask it, we subtract it from total apeture flux
-                        aperture_mask[ segm_deblend_v3 == source_cat_stars_inseg["new_deblend_id"][j] ] = 1                        
-                        #convert the star magnitude to flux to subtract from final counting
-
-                        ## we do not subtract the source flux, but rather the psf flux?
-                        
-                        tot_subtract_sources_g +=  10**( (22.5  -  float(source_cat_stars_inseg["mag_g"][j]) )/2.5 ) 
-                        tot_subtract_sources_r +=  10**( (22.5  -  float(source_cat_stars_inseg["mag_r"][j]) )/2.5 ) 
-                        tot_subtract_sources_z +=  10**( (22.5  -  float(source_cat_stars_inseg["mag_z"][j]) )/2.5 ) 
-                        
-                        #plot this source for reference on the mask plot!!
-                        ax[2].scatter( [source_cat_stars_inseg["xpix"]] , [source_cat_stars_inseg["ypix"]],  color = "r", marker = "*",s= 40,  zorder = 1)
-                        
+                    
+                    ##THIS MASKING RADIUS from this function APPEARS TO BE A BIT LARGER THAN THE ONE FROM THE GAIA CATALOG
+                    if bstar_ra != 99 and all_star_seps[j] < 1:
+                        #this is the same star as before and so we do not mask again! 
+                        #how many pixels are contained in that star
+                        temp_data = mask_circle(temp_data, bstar_xpix, bstar_ypix, 0.5*bstar_radius_pix)  
+                        tot_pix_i = np.sum(temp_data[temp_data == 0])
+                    
                     else:
+                        #compute its radius and mask it! It is returned in degrees and so convert to arcseconds
+                        star_radius_i_as =  mask_radius_for_mag( float(source_cat_stars_inseg["max_mag"][j])) * 3600
+                        star_radius_i_pix = 0.5*star_radius_i_as/0.262
 
-                        # print("STAR is part of different deblend seg")
-                        # print(np.unique(segm_deblend_v3  ))
-                        # print( source_cat_stars_inseg["new_deblend_id"][j])
-                        #TODO: make sure all pixels around some radius around the stars is masked because star can be split into 2 sometimes
-                        #TODO: objid 1684 idx 21 has this weird case even if there is a star in mains egment, it is not being masked and substracted from source
-                        #TODO: what do if star segment is kinda large ... even more than star. that is why below q is imp
-                        #can we have a condition on the reliability of the photometry of star to know when to subtract??
-            
-                        #star is part of a different deblend segment in main island and so we will just mask that deblend segment
+                        #mask it now!
+                        aperture_mask = mask_circle(aperture_mask, source_cat_stars_inseg["xpix"][j], source_cat_stars_inseg["ypix"][j], star_radius_i_pix)                 
+                        #how many pixels are contained in that star
+                        temp_data = mask_circle(temp_data, source_cat_stars_inseg["xpix"][j], source_cat_stars_inseg["ypix"][j], star_radius_i_pix)  
+                        tot_pix_i = np.sum(temp_data[temp_data == 0])
 
-                        #there is an interesting failure case to consider here
-                        #if there is a source that happens to be part of star segment that is classified as external
-                        #then that source deblend is not masked and so the star is not masked again.
-                        #need to fix this issue.
-                        #if a deblend segment has a star, even if it has other sources, the star supersedes everything
+                    
+                    #tab for keeping count of total pixels in stars
+                    total_bright_star_pix_count += tot_pix_i
+                    
+                    # ##this is for plotting purposes
+                    # if source_cat_stars_inseg["max_mag"][j] <= 17:
+                    #     #we will count how many pixels its deblend segment has!
+                        
+                    #     bright_star_pix_count = np.sum( segm_deblend_v3 == source_cat_stars_inseg["new_deblend_id"][j] )
 
-                        ## if reliable size is known, could just carve that region out around star as well
-                        aperture_mask[ segm_deblend_v3 == source_cat_stars_inseg["new_deblend_id"][j] ] = 0
+                    #     # bright_star_pix_flux_count = np.sum(  tot_data * (segm_deblend_v3 == source_cat_stars_inseg["new_deblend_id"][j])  )
+                        
+                    #     total_bright_star_pix_count += bright_star_pix_count
+                        # total_bright_star_pix_flux_count += bright_star_pix_flux_count
 
-                        #it is always safer to mask the star as the stars are sometimes very bright and pixels are not well measured etc.
-            
 
+                    #is this star part of our main deblend segment
+                    # if source_cat_stars_inseg["new_deblend_id"][j]  == new_deblend_island_num:
+
+                
+                    #     #star is part of the same deblend segment as our source
+                    #     #as no other way to mask it, we subtract it from total apeture flux
+                    #     aperture_mask[ segm_deblend_v3 == source_cat_stars_inseg["new_deblend_id"][j] ] = 1                        
+                    #     #convert the star magnitude to flux to subtract from final counting
+
+                    #     ## we do not subtract the source flux, but rather the psf flux?
+                        
+                    #     tot_subtract_sources_g +=  10**( (22.5  -  float(source_cat_stars_inseg["mag_g"][j]) )/2.5 ) 
+                    #     tot_subtract_sources_r +=  10**( (22.5  -  float(source_cat_stars_inseg["mag_r"][j]) )/2.5 ) 
+                    #     tot_subtract_sources_z +=  10**( (22.5  -  float(source_cat_stars_inseg["mag_z"][j]) )/2.5 ) 
+                        
+                    #     #plot this source for reference on the mask plot!!
+                    #     ax[2].scatter( [source_cat_stars_inseg["xpix"]] , [source_cat_stars_inseg["ypix"]],  color = "r", marker = "*",s= 40,  zorder = 1)
+                        
+                    # else:    
+                    #     ## if reliable size is known, could just carve that region out around star as well
+                    #     aperture_mask[ segm_deblend_v3 == source_cat_stars_inseg["new_deblend_id"][j] ] = 0
+
+
+
+        ##how many pixels in total are in the main island??
+        ## another idea is to turn this into a flux weighted average? Sort of like fracflux but just for stars?
+        total_pix_in_main_island = np.sum(segment_map_v2 == 2)
+        # total_flux_in_main_island = np.sum(  tot_data * (segment_map_v2 == 2)  )
+        
+        frac_of_pix_in_bright_star = total_bright_star_pix_count/total_pix_in_main_island
+        # fracflux_of_bright_star = total_bright_star_pix_flux_count/total_flux_in_main_island
+        
         #we will mask all the nans in the data
         aperture_mask[ np.isnan(tot_data) ] = 0
 
@@ -882,10 +1009,18 @@ def run_aperture_pipe(input_dict):
 
         
         ##plotting the aperture again
-        aperture_for_phot.plot(ax = ax[2], color = "r", lw = 1, ls = "-")
-        aperture_for_phot.plot(ax = ax[0], color = "r", lw = 1, ls = "-")
+        aperture_for_phot.plot(ax = ax[2], color = "r", lw = 2.5, ls = "-")
+        aperture_for_phot.plot(ax = ax[0], color = "r", lw = 2.5, ls = "-")
         
+        if bstar_ra != 99:
+            aperture_for_bstar_1.plot(ax = ax[2], color = "r", lw = 1.5, ls = "dotted")
+            aperture_for_bstar_34.plot(ax = ax[2], color = "r", lw = 1.5, ls = "dotted")
+            aperture_for_bstar_12.plot(ax = ax[2], color = "r", lw = 1.5, ls = "dotted")
 
+            aperture_for_bstar_1.plot(ax = ax[1], color = "r", lw = 1.5, ls = "dotted")
+            aperture_for_bstar_34.plot(ax = ax[1], color = "r", lw = 1.5, ls = "dotted")
+            aperture_for_bstar_12.plot(ax = ax[1], color = "r", lw = 1.5, ls = "dotted")
+            
         # center = (aperture_for_phot.positions[0],aperture_for_phot.positions[1])  # (x, y) center of the circle
         # radius = aperture_for_phot.r     # Radius of the circle
         # circle = patches.Circle(center, radius, color='r', fill=False, linewidth=1,ls ="-")
@@ -917,40 +1052,43 @@ def run_aperture_pipe(input_dict):
         ax[3].set_ylim([0,1])
         ax[3].set_xticks([])
         ax[3].set_yticks([])
-        ax[3].text(0.05,0.95,"Org-mag g = %.2f"%source_mag_g,size =12,transform=ax[3].transAxes, verticalalignment='top')
-        ax[3].text(0.05,0.85,"New-mag g = %.2f"%new_mag_g,size = 12,transform=ax[3].transAxes, verticalalignment='top')
-        ax[3].text(0.05,0.75,"fracflux_g = %.2f"%(source_cat_obs["fracflux_g"]),size = 12,transform=ax[3].transAxes, verticalalignment='top')
+
+        spacing = 0.08
+        start = 0.99
+        fsize = 11
+        ax[3].text(0.05,start,"Org-mag g = %.2f"%source_mag_g,size =fsize,transform=ax[3].transAxes, verticalalignment='top')
+        ax[3].text(0.05,start - spacing*1,"New-mag g = %.2f"%new_mag_g,size = fsize,transform=ax[3].transAxes, verticalalignment='top')
+        ax[3].text(0.05,start - spacing*2,"fracflux_g = %.2f"%(source_cat_obs["fracflux_g"]),size = 12,transform=ax[3].transAxes, verticalalignment='top')
         
-        ax[3].text(0.05,0.65,"Org-mag r = %.2f"%source_mag_r,size =12,transform=ax[3].transAxes, verticalalignment='top')
-        ax[3].text(0.05,0.55,"New-mag r = %.2f"%new_mag_r,size = 12,transform=ax[3].transAxes, verticalalignment='top')
-        ax[3].text(0.05,0.45,"fracflux_r= %.2f"%(source_cat_obs["fracflux_r"]),size = 12,transform=ax[3].transAxes, verticalalignment='top')
+        ax[3].text(0.05,start - spacing*3,"Org-mag r = %.2f"%source_mag_r,size =fsize,transform=ax[3].transAxes, verticalalignment='top')
+        ax[3].text(0.05,start - spacing*4,"New-mag r = %.2f"%new_mag_r,size = fsize,transform=ax[3].transAxes, verticalalignment='top')
+        ax[3].text(0.05,start - spacing*5,"fracflux_r= %.2f"%(source_cat_obs["fracflux_r"]),size = fsize,transform=ax[3].transAxes, verticalalignment='top')
 
-        ax[3].text(0.05,0.35,"Org-mag z = %.2f"%source_mag_z,size =12,transform=ax[3].transAxes, verticalalignment='top')
-        ax[3].text(0.05,0.25,"New-mag z = %.2f"%new_mag_z,size = 12,transform=ax[3].transAxes, verticalalignment='top')
-        ax[3].text(0.05,0.15,"fracflux_z = %.2f"%(source_cat_obs["fracflux_z"]),size = 12,transform=ax[3].transAxes, verticalalignment='top')
+        ax[3].text(0.05,start - spacing*6,"Org-mag z = %.2f"%source_mag_z,size =fsize,transform=ax[3].transAxes, verticalalignment='top')
+        ax[3].text(0.05,start - spacing*7,"New-mag z = %.2f"%new_mag_z,size = fsize,transform=ax[3].transAxes, verticalalignment='top')
+        ax[3].text(0.05,start - spacing*8,"fracflux_z = %.2f"%(source_cat_obs["fracflux_z"]),size = fsize,transform=ax[3].transAxes, verticalalignment='top')
 
+        ax[3].text(0.05,start - spacing*9,"Bright star PF = %.2f"%(frac_of_pix_in_bright_star),size = fsize,transform=ax[3].transAxes, verticalalignment='top')
+        ax[3].text(0.05,start - spacing*10,"Bright star fdist = %.2f"%(bstar_fdist),size = fsize,transform=ax[3].transAxes, verticalalignment='top')
+        ax[3].text(0.05,start - spacing*11,"SGA Dist, NDist = %.2f, %.2f"%(sga_dist, sga_ndist),size = fsize,transform=ax[3].transAxes, verticalalignment='top')
+        
         
         new_mag_g = new_mag_g + 2.5 * np.log10(source_cat_obs["mw_transmission_g"])
         new_mag_r = new_mag_r + 2.5 * np.log10(source_cat_obs["mw_transmission_r"])
         new_mag_z = new_mag_z + 2.5 * np.log10(source_cat_obs["mw_transmission_z"])
         
         new_mags = [new_mag_g, new_mag_r, new_mag_z]
-        
-    
-        plt.savefig(save_path + "/grz_bands_segments.png",bbox_inches="tight")
-        plt.savefig(save_sample_path + "grz_segs_tgid_%d_ra_%.3f_dec_%.3f.png"%(source_tgid, source_ra, source_dec),bbox_inches="tight")
 
-        #also save the figure in another plot!
-        if save_other_image_path != "":
-            plt.savefig(save_other_image_path + "grz_segs_tgid_%d_ra_%.3f_dec_%.3f.png"%(source_tgid, source_ra, source_dec),bbox_inches="tight")
-        
+        plt.savefig( save_summary_png ,bbox_inches="tight")
+
         plt.close()
     
         ##save these as a file for future reference
         np.save(save_path + "/new_aperture_mags.npy", new_mags)
         np.save(save_path + "/org_mags.npy", org_mags)
-    
-        return closest_star_dist, new_mags, org_mags, save_path
+        
+        return closest_star_dist, closest_star_mag, new_mags, org_mags, save_path, save_summary_png, frac_of_pix_in_bright_star
+
 
         # except:
     

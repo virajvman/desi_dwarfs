@@ -24,7 +24,7 @@ from tqdm import tqdm
 from easyquery import Query, QueryMaker
 reduce_compare = QueryMaker.reduce_compare
 
-from desi_lowz_funcs import add_sweeps_column
+from desi_lowz_funcs import add_sweeps_column, match_c_to_catalog
 
 
 def get_fibmag(vac_data_bgs):
@@ -65,7 +65,8 @@ def read_tractorphot(zcat, verbose=False):
     tot_len = len(zcat)
     tot_sofar = 0
     
-    # pixels = radec2pix(tractorphot_nside, zcat['TARGET_RA'], zcat['TARGET_DEC'])
+    pixels = radec2pix(tractorphot_nside, zcat['TARGET_RA'], zcat['TARGET_DEC'])
+
     pixels = radec2pix(tractorphot_nside, zcat['RA'], zcat['DEC'])
     
     phot = []
@@ -223,44 +224,111 @@ def get_final_catalogs(vac_data_lowz, zpix_lowz, plot=False):
     return vac_data_lowz_table, zpix_lowz
     
 
-
-def is_sga_shred(input_data):
+def bright_star_filter(cat):
     '''
-    This function returns bool indicating if it is an SGA shred or not
+    This function adds information on nearby bright stars that can be used for filtering downstream. Function taken from John Moustakas with some modifications
     '''
-    ## find the closet SGA galaxy in the sky
-    ## first find all similar galaxies in redshift
-
-    multiplier=2.0
-
-    index = input_data["index"]
-    source_ra = input_data["ra"]
-    source_dec = input_data["dec"]
-    source_redshift = input_data["redshift"]
-    siena20_f = input_data["siena_cat"]
-
-    # siena20_f = siena20[ (np.abs(source_redshift - siena20["Z_LEDA"]) * c_light < 1000 ) ]
     
-    #the columns we need are RA/DEC_MOMENT , D26, BA, PA, Z_LEDA and nothing else!
-        
-    if len(siena20_f) > 0:
-        #find nearby ones in sky
-        c = SkyCoord(ra= source_ra * u.degree, dec= source_dec *u.degree )
-        catalog = SkyCoord(ra=siena20_f["RA_MOMENT"].data*u.degree, dec=siena20_f["DEC_MOMENT"].data*u.degree )
-        d2d = c.separation(catalog)
-        siena20_closet = siena20_f[ np.argmin(d2d.arcsec) ]
+    # add the Gaia mask bits
+    print(f'Adding Gaia bright-star masking bits.')
 
-        #I need to determine if it is within twice the radius of this galaxy ... 
-        norm_dist = calc_normalized_dist(source_ra, source_dec, siena20_closet["RA_MOMENT"], siena20_closet["DEC_MOMENT"],siena20_closet["D26"]*60*0.5, 
-                             cen_ba=siena20_closet["BA"], cen_phi=siena20_closet["PA"], multiplier=multiplier)
-        
-        # if norm_dist <= 1:
-        return index,norm_dist
-        # else:
-        #     return False
-    else:
-        return index,-99
+    cat['STARFDIST'] = np.zeros(len(cat), 'f4') + 99.
+    cat['STARDIST_DEG'] = np.zeros(len(cat), 'f4') + 99.
+    cat['STARMAG'] = np.zeros(len(cat), 'f4') + 99.
+    cat['STAR_RADIUS_ARCSEC'] = np.zeros(len(cat), 'f2') + 99.
+    cat['STAR_RA'] = np.zeros(len(cat), 'f4') + 99.
+    cat['STAR_DEC'] = np.zeros(len(cat), 'f4') + 99.
+    
+    # gaiafile = os.path.join(sga_dir(), 'gaia', 'gaia-mask-dr3-galb9.fits')
+    gaiafile = "/global/cfs/cdirs/desicollab/users/ioannis/SGA/2025/gaia/gaia-mask-dr3-galb9.fits"
+    
+    gaia = Table(fitsio.read(gaiafile, columns=['ra', 'dec', 'radius', 'mask_mag', 'isbright', 'ismedium']))
+    print(f'Read {len(gaia):,d} Gaia stars from {gaiafile}')
+    I = gaia['radius'] > 0.
+    print(f'Trimmed to {np.sum(I):,d}/{len(gaia):,d} stars with radius>0')
+    gaia = gaia[I]
 
+    dmag = 1.
+    bright = np.min(np.floor(gaia['mask_mag']))
+    faint = np.max(np.ceil(gaia['mask_mag']))
+    magbins = np.arange(bright, faint, dmag)
+
+    for mag in magbins:
+        # find all Gaia stars in this magnitude bin
+        I = np.where((gaia['mask_mag'] >= mag) * (gaia['mask_mag'] < mag+dmag))[0]
+    
+        # search within 2 times the largest masking radius to be efficient searching!
+        maxradius = 2. * np.max(gaia['radius'][I]) # [degrees]
+        print(f'Found {len(I):,d} Gaia stars in magnitude bin {mag:.0f} to ' + \
+              f'{mag+dmag:.0f} with max radius {maxradius:.4f} degrees.')
+
+        #this is similar to the skycoord match function
+        #for every source it is finding the closest star with the search radius being twice the max radius of any star being search
+        # m1, m2, sep = match_radec(cat['RA'], cat['DEC'], gaia['ra'][I], gaia['dec'][I], maxradius, nearest=True)
+         # m1: indices into the "ra1,dec1" arrays of matching points.
+        # m2: same, but for "ra2,dec2".
+        # sep: distance, in degrees, between the matching points.
+
+        idx, d2d, _ = match_c_to_catalog(c_cat = cat, catalog_cat = gaia[I], c_ra = "RA", c_dec = "DEC", catalog_ra = "ra", catalog_dec = "dec")
+        # idx are indices into catalog that are the closest objects to each of the coordinates in c,
+
+        #this is the matched gaia catalog in this magnitude bin that we will work it
+        gaia_match = gaia[I][idx]
+
+        ##for each source, we need to compute the stardist, starfdist, and starmag
+        ##if the source is beyond twice the largest masking radius in this bin, then we do not want to update it
+
+        #these are the seperations in arcsecs
+        all_stardists = d2d.deg
+        #these are the separations normalized to the star radius
+        all_starfdists = d2d.deg / gaia_match['radius'].data
+        #these are the stellar mags
+        all_starmag = gaia_match['mask_mag'].data
+
+        #getting the radius of the star in arcsecs
+        all_star_radii = gaia_match['radius'].data * 3600
+        all_star_ras = gaia_match['ra'].data 
+        all_star_decs = gaia_match['dec'].data 
+        
+
+        #however, we will only update the locations where the all_stardists < maxradius
+        update_mask = (all_stardists < maxradius)
+        #also only update if the new match is *closer* than previous one
+        closer_match = (all_starfdists < cat["STARFDIST"])
+        update_mask &= closer_match
+
+        if np.sum(update_mask) > 0:
+            cat["STARDIST_DEG"][update_mask] = all_stardists[update_mask] 
+            cat["STARFDIST"][update_mask] = all_starfdists[update_mask]
+            cat["STARMAG"][update_mask] = all_starmag[update_mask]
+            cat["STAR_RADIUS_ARCSEC"][update_mask] =  all_star_radii[update_mask]
+            cat["STAR_RA"][update_mask] =  all_star_ras[update_mask]
+            cat["STAR_DEC"][update_mask] =  all_star_decs[update_mask]
+            
+        # if len(m1) > 0:
+        #     zero = np.where(sep == 0.)[0]
+        #     if len(zero) > 0:
+        #         cat['STARDIST_DEG'][m1[zero]] = 0.
+        #         cat['STARFDIST'][m1[zero]] = 0.
+        #         cat['STARMAG'][m1[zero]] = gaia['mask_mag'][I[m2[zero]]]
+    
+        #     # separations can be identically zero
+        #     pos = np.where(sep > 0.)[0]
+        #     if len(pos) > 0:
+        #         # distance to the nearest star (in this mag bin)
+        #         # relative to the mask radius of that star (given its
+        #         # mag), capped at a factor of 2; values <1 mean the
+        #         # object is within the star's masking radius
+        #         fdist = sep[pos] / gaia['radius'][I[m2[pos]]].value
+        #         # only store the smallest value
+        #         J = np.where((fdist < 2.) * (fdist < cat['STARFDIST'][m1[pos]]))[0]
+        #         if len(J) > 0:
+        #             cat['STARDIST'][m1[pos[J]]] = sep[pos[J]] # [degrees]
+        #             cat['STARFDIST'][m1[pos[J]]] = fdist[J]
+        #             cat['STARMAG'][m1[pos[J]]] = gaia['mask_mag'][I[m2[pos[J]]]]
+    
+    return cat
+    
         
 if __name__ == '__main__':
      
@@ -469,15 +537,14 @@ if __name__ == '__main__':
     
         ## for the final catalog, add info on the sweep file!
         vac_data_cat_f = add_sweeps_column(vac_data_cat_f)
-        
-        # print(len(vac_data_cat_f))
-        # print(len(vac_data_cat_f[ (vac_data_cat_f["FRACFLUX_G"] > 0.35) & (vac_data_cat_f["FRACFLUX_R"] > 0.35) & (vac_data_cat_f["FRACFLUX_Z"] > 0.35) ]))
-    
+
+        ##add information on bright star stuff!!
+        vac_data_cat_f = bright_star_filter(vac_data_cat_f)
+
         ## save this catalog 
         save_table(vac_data_cat_f,  save_folder + "/" + save_filename,comment=comment)
 
 
- 
 #### OLD CODE
 
 

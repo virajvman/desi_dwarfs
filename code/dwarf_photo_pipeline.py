@@ -21,13 +21,14 @@ import matplotlib.patches as patches
 from scarlet_photo import run_scarlet_pipe
 from aperture_photo import run_aperture_pipe
 # from get_sga_distances import get_sga_info
-from desi_lowz_funcs import save_subimage, fetch_psf
+from desi_lowz_funcs import save_subimage, fetch_psf, generate_random_string
 
 
 def parse_tgids(value):
     if not value:
         return None
     return [int(x) for x in value.split(',')]
+
     
 def argument_parser():
     '''
@@ -36,7 +37,7 @@ def argument_parser():
     result = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     # path to the config file with parameters and information about the run
     result.add_argument('-sample', dest='sample', type=str, default = "BGSB") 
-    result.add_argument('-file_ending', dest='file_ending', type=str, default = "") 
+    #the sample is like BGS_BRIGHT, BGS_FAINT, etc.
     result.add_argument('-save_img', dest='save_img', type=str, default = "") 
     result.add_argument('-min', dest='min', type=int,default = 0)
     result.add_argument('-max', dest='max', type=int,default = 100000) 
@@ -51,7 +52,8 @@ def argument_parser():
     result.add_argument('-run_scarlet',dest='run_scarlet', action='store_true')
     result.add_argument('-nchunks',dest='nchunks', type=int,default = 1)
     result.add_argument('-no_pz_aper',dest='no_pz_aper', action = "store_true")
-    
+    result.add_argument('-no_save',dest='no_save', action = "store_true")
+        
     return result
 
 def save_cutouts(ra,dec,img_path,session, size=350, timeout = 30):
@@ -153,7 +155,6 @@ def get_relevant_files_scarlet(input_dict):
     '''
 
     tgid_k = input_dict["TARGETID"]
-    #sample is a string saying BGSB, BGSF, or ELG
     samp_k = input_dict["SAMPLE"]
     ra_k = input_dict["RA"]
     dec_k = input_dict["DEC"]
@@ -193,7 +194,6 @@ def get_relevant_files_aper(input_dict):
     '''
 
     tgid_k = input_dict["TARGETID"]
-    #sample is a string saying BGSB, BGSF, or ELG
     samp_k = input_dict["SAMPLE"]
     ra_k = input_dict["RA"]
     dec_k = input_dict["DEC"]
@@ -245,7 +245,8 @@ def make_clean_shreds_catalogs():
     elg_list = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_elg_filter_zsucc_zrr05_allfracflux.fits")
     lowz_list = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_lowz_filter_zsucc_zrr03.fits")
 
-    from desi_lowz_funcs import get_sweep_filename, save_table, is_target_in_south
+    from desi_lowz_funcs import get_sweep_filename, save_table, is_target_in_south, get_sga_norm_dists, get_sga_norm_dists_FAST
+    from construct_dwarf_galaxy_catalogs import bright_star_filter
 
     # ##add the sweep, catalog info
     # bgsb_list = add_sweeps_column(bgsb_list, "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_bgs_bright_filter_zsucc_zrr02_allfracflux.fits")
@@ -268,12 +269,19 @@ def make_clean_shreds_catalogs():
     # clean_mask_bgsf = (~bgsf_mask)
     # clean_mask_elg = (~elg_mask)
 
-    ## MAYBE HERE, WE CAN PRESELECT FOR GALAXIES THAT SHOW MAIN SF SIGNATURE. What if agn signature is apparent in spectra?
-    fracflux_limit = 0.25
+    ## what is correct fracflux limit
+    ## I want to use the fraflux limit for z<0.05, not really needed for z>0.05 objects
+    fracflux_limit = 0.15
     
     clean_mask_bgsb = (bgsb_list["FRACFLUX_R"] < fracflux_limit) & (bgsb_list["FRACFLUX_G"] < fracflux_limit) & (bgsb_list["FRACFLUX_Z"] < fracflux_limit)
     clean_mask_bgsf = (bgsf_list["FRACFLUX_R"] < fracflux_limit) & (bgsf_list["FRACFLUX_G"] < fracflux_limit) & (bgsf_list["FRACFLUX_Z"] < fracflux_limit)
     clean_mask_elg = (elg_list["FRACFLUX_R"] < fracflux_limit) & (elg_list["FRACFLUX_G"] < fracflux_limit) & (elg_list["FRACFLUX_Z"] < fracflux_limit)
+
+
+    #### TO DO:
+    ## FIGURE OUT WHY THIS SOURCE IS IN MY BGS FAINT SHRED CATALOG: https://www.legacysurvey.org/viewer/ls-dr9/cat?ralo=151.2670&rahi=151.2690&declo=-8.1414&dechi=-8.1394&objid=1146
+    ## bgsf_shreds[bgsf_shreds["RA"]==151.26800199587416]
+
     
     ##construct the clean catalog
     ## to make things easy in the cleaning stage, we will use the optical based colors
@@ -286,16 +294,17 @@ def make_clean_shreds_catalogs():
     dwarf_mask_bgsb = (bgsb_list["LOGM_SAGA"] < 9.5) 
     dwarf_mask_bgsf = (bgsf_list["LOGM_SAGA"] < 9.5) 
     dwarf_mask_lowz = (lowz_list["LOGM_SAGA"] < 9.5) 
-    dwarf_mask_elg = (elg_list["LOGM_SAGA"] < 10)   
+    dwarf_mask_elg = (elg_list["LOGM_SAGA"] < 9.5)   
 
     #the log_mstar > 7 cut as I am more confident in them
-    bgsb_clean_dwarfs = bgsb_list[ clean_mask_bgsb & (bgsb_list["LOGM_SAGA"] > 7) & (dwarf_mask_bgsb) ]
+    #removing the logmstar < 7 conditions 
+    bgsb_clean_dwarfs = bgsb_list[ clean_mask_bgsb  & (dwarf_mask_bgsb) ] #& (bgsb_list["LOGM_SAGA"] > 7)
 
-    bgsf_clean_dwarfs = bgsf_list[ clean_mask_bgsf & (bgsf_list["LOGM_SAGA"] > 7) & (dwarf_mask_bgsf) ]
+    bgsf_clean_dwarfs = bgsf_list[ clean_mask_bgsf  & (dwarf_mask_bgsf) ] # & (bgsf_list["LOGM_SAGA"] > 7)
     
     lowz_clean_dwarfs = lowz_list[ dwarf_mask_lowz ]
 
-    elg_clean_dwarfs = elg_list[ clean_mask_elg & dwarf_mask_elg & (elg_list["LOGM_SAGA"] > 7) ]
+    elg_clean_dwarfs = elg_list[ clean_mask_elg & dwarf_mask_elg  ] # & (elg_list["LOGM_SAGA"] > 7)
 
     bgsb_clean_dwarfs["SAMPLE"] = np.array(len(bgsb_clean_dwarfs)*["BGS_BRIGHT"])
     bgsf_clean_dwarfs["SAMPLE"] = np.array(len(bgsf_clean_dwarfs)*["BGS_FAINT"])
@@ -314,38 +323,64 @@ def make_clean_shreds_catalogs():
     print("Total number of galaxies in clean catalog=",len(all_clean_dwarfs))
 
     ## we add the SGA information to the objects now!
-    # all_clean_dwarfs = get_sga_info(all_clean_dwarfs)
+    all_clean_dwarfs = get_sga_norm_dists_FAST(all_clean_dwarfs, siena_path="/global/cfs/cdirs/cosmo/data/sga/2020/SGA-2020.fits")
+
+    #load the existing file
+    # clean_all_exist = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v3.fits")
+
+    # try:    
+    #     all_clean_dwarfs["SGA_ID_MATCH"] = clean_all_exist["SGA_ID_MATCH"].data
+    #     all_clean_dwarfs["SGA_D26_NORM_DIST"] = clean_all_exist["SGA_D26_NORM_DIST"].data
+    #     print("SGA information already computed in earlier iteration of catalog. Copying values from there.")
+            
+    # except:
+    #     print_stage("Computing SGA matches")
+    #     matched_sgaids, matched_norm_dists = get_sga_norm_dists(all_clean_dwarfs["RA"].data , all_clean_dwarfs["DEC"].data, all_clean_dwarfs["Z"].data, Nmax = 1500,run_parr = False,ncores = 256,siena_path="/global/cfs/cdirs/cosmo/data/sga/2020/SGA-2020.fits",verbose=False)
     
-    #save the clean dwarfs now!
-    save_table(all_clean_dwarfs,"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v2.fits",comment="This is a compilation of dwarf galaxy candidates in DESI Y1 data from the BGS Bright, BGS Faint, ELG and LOW-Z samples. Only galaxies with 7 < LogMstar < 9.5 (in LOGM_SAGA or CIGALE, 10.5 for ELGs) and that have robust photometry are included. Galaxies that we have identified as shreds are not included here and their photometry is currently being measured. See redo_photometry.py script for more details on how this made.")
+    #     all_clean_dwarfs["SGA_ID_MATCH"] = matched_sgaids
+    #     all_clean_dwarfs["SGA_D26_NORM_DIST"] = matched_norm_dists
+
+    #does existing file also already have bright star info?
+    bstar_keys = [ "STARFDIST", "STARDIST_DEG","STARMAG", "STAR_RADIUS_ARCSEC", "STAR_RA","STAR_DEC"]
+    
+    try:
+        for ki in bstar_keys:
+            all_clean_dwarfs[ki] = clean_all_exist[ki].data
+        print("Bright star information already existed. Copying values from there.")    
+    except:
+        #if not, then we have to recompute it!
+        all_clean_dwarfs = bright_star_filter(all_clean_dwarfs)
+
+    # del clean_all_exist
+
+    # save the clean dwarfs now!
+    save_table(all_clean_dwarfs,"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v3.fits",comment="This is a compilation of dwarf galaxy candidates in DESI Y1 data from the BGS Bright, BGS Faint, ELG and LOW-Z samples. Only galaxies with LogMstar < 9.5 (w/SAGA based stellar masses) and that have robust photometry are included.")
         
     ##applying the mask and then stacking them!!
 
-    bgsb_shreds = bgsb_list[ ~clean_mask_bgsb & dwarf_mask_bgsb ]
-    #even including clean dwarfs that are below LogMstar < 7 to confirm their existence!
-    bgsb_shreds_p1 = bgsb_list[ clean_mask_bgsb & (bgsb_list["LOGM_SAGA"] <= 7) ]
-
-    bgsf_shreds = bgsf_list[  ~clean_mask_bgsf & (bgsf_list["LOGM_SAGA"] < 9.5) ]
-    bgsf_shreds_p1 = bgsf_list[ clean_mask_bgsf & (bgsf_list["LOGM_SAGA"] <= 7)  ]
+    bgsb_shreds = bgsb_list[ ~clean_mask_bgsb & dwarf_mask_bgsb]
+    bgsf_shreds = bgsf_list[  ~clean_mask_bgsf & dwarf_mask_bgsf]
+    elg_shreds = elg_list[ ~clean_mask_elg & dwarf_mask_elg]
     
-    lowz_shreds = lowz_list[lowz_list["LOGM_SAGA"] < 7]
-
-    elg_shreds = elg_list[ ~clean_mask_elg]
-    elg_shreds_p1 = elg_list[ clean_mask_elg & dwarf_mask_elg & (elg_list["LOGM_SAGA"] <= 7) ]
+    #many elgs are below this stellar mass cut and so we do not apply it
+    #even including clean dwarfs that are below LogMstar < 7 to confirm their existence!
+    # bgsb_shreds_p1 = bgsb_list[ clean_mask_bgsb & (bgsb_list["LOGM_SAGA"] <= 7) ]
+    # bgsf_shreds_p1 = bgsf_list[ clean_mask_bgsf & (bgsf_list["LOGM_SAGA"] <= 7)  ]
+    # lowz_shreds = lowz_list[lowz_list["LOGM_SAGA"] <= 7]
+    # bgsb_shreds_p1["SAMPLE"] = np.array(["BGS_BRIGHT"]*len(bgsb_shreds_p1))
+    # bgsf_shreds_p1["SAMPLE"] = np.array(["BGS_FAINT"]*len(bgsf_shreds_p1))
+    # elg_shreds_p1["SAMPLE"] = np.array(["ELG"]*len(elg_shreds_p1))
     
     #adding the sample column
     bgsb_shreds["SAMPLE"] = np.array(["BGS_BRIGHT"]*len(bgsb_shreds))
     bgsf_shreds["SAMPLE"] = np.array(["BGS_FAINT"]*len(bgsf_shreds))
     elg_shreds["SAMPLE"] = np.array(["ELG"]*len(elg_shreds))
-    lowz_shreds["SAMPLE"] = np.array(["LOWZ"]*len(lowz_shreds))
-    
-    bgsb_shreds_p1["SAMPLE"] = np.array(["BGS_BRIGHT"]*len(bgsb_shreds_p1))
-    bgsf_shreds_p1["SAMPLE"] = np.array(["BGS_FAINT"]*len(bgsf_shreds_p1))
-    elg_shreds_p1["SAMPLE"] = np.array(["ELG"]*len(elg_shreds_p1))
-    
-    #stacking all the shreds now 
-    shreds_all = vstack( [bgsb_shreds, bgsf_shreds, elg_shreds, lowz_shreds, bgsb_shreds_p1,bgsf_shreds_p1, elg_shreds_p1 ] )
+    # lowz_shreds["SAMPLE"] = np.array(["LOWZ"]*len(lowz_shreds))
 
+    #stacking all the shreds now 
+    # shreds_all = vstack( [bgsb_shreds, bgsf_shreds, elg_shreds, lowz_shreds, bgsb_shreds_p1,bgsf_shreds_p1]) #, elg_shreds_p1 ] )
+    shreds_all = vstack( [bgsb_shreds, bgsf_shreds, elg_shreds ])
+    
     shreds_all.remove_column("OII_FLUX")
     shreds_all.remove_column("OII_FLUX_IVAR")
     shreds_all.remove_column("Z_HPX")
@@ -355,94 +390,100 @@ def make_clean_shreds_catalogs():
     
     print("Total number of objects whose photometry needs to be redone = ", len(shreds_all))
 
-    ## we add the SGA information to the objects now!
-    from desi_lowz_funcs import get_sga_norm_dists
-
     shreds_ra, shreds_dec, shreds_z = shreds_all["RA"].data, shreds_all["DEC"].data, shreds_all["Z"].data
 
-    matched_sgaids, matched_norm_dists = get_sga_norm_dists(shreds_ra,shreds_dec, shreds_z, 
-                                                            Nmax = 100,run_parr = False,ncores = 128,siena_path="/global/cfs/cdirs/cosmo/data/sga/2020/SGA-2020.fits",verbose=True)
+    ##if the existing file already has SGA info, then we just add that
+    shreds_all = get_sga_norm_dists_FAST(shreds_all, siena_path="/global/cfs/cdirs/cosmo/data/sga/2020/SGA-2020.fits")
 
-    shreds_all["SGA_ID_MATCH"] = matched_sgaids
-    shreds_all["SGA_D26_NORM_DIST"] = matched_norm_dists
+    #load the existing file
+    # shreds_all_exist = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v2.fits")
+    # try:    
+    #     shreds_all["SGA_ID_MATCH"] = shreds_all_exist["SGA_ID_MATCH"].data
+    #     shreds_all["SGA_D26_NORM_DIST"] = shreds_all_exist["SGA_D26_NORM_DIST"].data
+    #     print("SGA information already computed in earlier iteration of catalog. Copying values from there.")
 
-    save_table(shreds_all,"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v2.fits")
+    #     del shreds_all_exist
+        
+    # except:
+    #     print("Recomputing SGA matches")
+    #     matched_sgaids, matched_norm_dists = get_sga_norm_dists(shreds_ra,shreds_dec, shreds_z, 
+    #                                                             Nmax = 1500,run_parr = False,ncores = 3,siena_path="/global/cfs/cdirs/cosmo/data/sga/2020/SGA-2020.fits",verbose=True)
     
-    ### PLOTTING THE FRACTION OF GALAXIES THAT ARE LIKELY SHREDS/BAD PHOTOMETRY
-    # zgrid = np.arange(0.00,0.3,0.02)
-
-    # def get_shred_frac(tot_cat, sample,zlow, zhi, shred_mask):
-    #     shreds_count = len(tot_cat[ (tot_cat["SAMPLE"] == sample) & (tot_cat["Z"] < zhi) & (tot_cat["Z"] > zlow) & shred_mask ] )
-    #     tot_count = len(tot_cat[ (tot_cat["SAMPLE"] == sample) & (tot_cat["Z"] < zhi) & (tot_cat["Z"] > zlow) ] )
+    #     shreds_all["SGA_ID_MATCH"] = matched_sgaids
+    #     shreds_all["SGA_D26_NORM_DIST"] = matched_norm_dists
+        
     
-    #     if tot_count > 0:
-    #         return shreds_count / tot_count
-    #     else:
-    #         return None
+    try:
+        for ki in bstar_keys:
+            shreds_all[ki] = shreds_all_exist[ki].data
+        print("Bright star information already existed. Copying values from there.")
+            
+    except:
+        #if not, then we have to recompute it!
+        shreds_all = bright_star_filter(shreds_all)
 
-    # shred_frac_all_bgsb = []
-    # shred_frac_all_bgsf = []
-    # shred_frac_all_elg = []
-
-    # shred_frac_jf_bgsb = []
-    # shred_frac_jf_bgsf = []
-    # shred_frac_jf_elg = []
-
-    # bgsb_list["SAMPLE"] = np.array(len(bgsb_list)*["BGS_BRIGHT"])
-    # bgsf_list["SAMPLE"] = np.array(len(bgsf_list)*["BGS_FAINT"])
-    # elg_list["SAMPLE"] = np.array(len(elg_list)*["ELG"])
-    # #also fitlering for dwarf candidates as we only care about those!
-    # all_list = vstack( [bgsb_list[dwarf_mask_bgsb], bgsf_list[dwarf_mask_bgsf], elg_list[dwarf_mask_elg] ] )
-
-    # remove_queries_all = [Query(_n_or_more_lt(fracflux_grz, 2, 0.35), _n_or_more_lt(rchisq_grz, 2, 2) )]
+    # del shreds_all_exist
     
-    # # remove_queries_only_frac = [Query(_n_or_more_lt(fracflux_grz, 2, 0.35))]
+    save_table(shreds_all,"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v3.fits")
     
-    # mask_shred_all = get_remove_flag(all_list, remove_queries_all) == 0
-    # mask_only_frac = get_remove_flag(all_list, remove_queries_only_frac) == 0
+    ## PLOTTING THE FRACTION OF GALAXIES THAT ARE LIKELY SHREDS/BAD PHOTOMETRY
+    zgrid = np.arange(0.00,0.1,0.005)
 
-    # # print( len(all_list[ (all_list["SAMPLE"] == "ELG") & mask_only_frac ]) )
-    # # print( len(all_list[ (all_list["SAMPLE"] == "ELG") & mask_shred_all ]) )
+    def get_shred_frac(tot_cat, sample,zlow, zhi, shred_mask):
+        shreds_count = len(tot_cat[ (tot_cat["SAMPLE"] == sample) & (tot_cat["Z"] < zhi) & (tot_cat["Z"] > zlow) & shred_mask ] )
+        tot_count = len(tot_cat[ (tot_cat["SAMPLE"] == sample) & (tot_cat["Z"] < zhi) & (tot_cat["Z"] > zlow) ] )
     
-    # for i in trange(len(zgrid)-1):
-    #     zlow = zgrid[i]
-    #     zhi = zgrid[i+1]
+        if tot_count > 0:
+            return shreds_count / tot_count
+        else:
+            return None
 
-    #     shred_frac_all_bgsb.append(   get_shred_frac(all_list, "BGS_BRIGHT",zlow, zhi, mask_shred_all)  ) 
-    #     shred_frac_all_bgsf.append(   get_shred_frac(all_list, "BGS_FAINT",zlow, zhi, mask_shred_all)  ) 
-    #     shred_frac_all_elg.append(   get_shred_frac(all_list, "ELG",zlow, zhi, mask_shred_all)  ) 
+    shred_frac_all_bgsb = []
+    shred_frac_all_bgsf = []
+    shred_frac_all_elg = []
 
-    #     shred_frac_jf_bgsb.append(   get_shred_frac(all_list, "BGS_BRIGHT",zlow, zhi, mask_only_frac)  ) 
-    #     shred_frac_jf_bgsf.append(   get_shred_frac(all_list, "BGS_FAINT",zlow, zhi, mask_only_frac)  ) 
-    #     shred_frac_jf_elg.append(   get_shred_frac(all_list, "ELG",zlow, zhi, mask_only_frac)  ) 
-    
+    bgsb_list["SAMPLE"] = np.array(len(bgsb_list)*["BGS_BRIGHT"])
+    bgsf_list["SAMPLE"] = np.array(len(bgsf_list)*["BGS_FAINT"])
+    elg_list["SAMPLE"] = np.array(len(elg_list)*["ELG"])
+    #also fitlering for dwarf candidates as we only care about those!
+    all_list = vstack( [bgsb_list[dwarf_mask_bgsb], bgsf_list[dwarf_mask_bgsf], elg_list[dwarf_mask_elg] ] )
 
-    # bgs_col = "#648FFF" #DC267F
-    # elg_col = "#FFB000"
-    
-    # zcens = 0.5*(zgrid[1:] + zgrid[:-1])
-    
-    # plt.figure(figsize = (5,5))
-    # plt.plot(zcens, shred_frac_all_bgsb,label = "BGS Bright",lw = 3,color = bgs_col,ls = "-",alpha = 0.75)
-    # plt.plot(zcens, shred_frac_jf_bgsb,lw = 3,color = bgs_col,ls = "--")
-    
-    # plt.plot(zcens, shred_frac_all_bgsf,label = "BGS Faint",lw = 3,color = "r",ls = "-",alpha = 0.75)
-    # plt.plot(zcens, shred_frac_jf_bgsf,lw = 3,color = "r",ls = "--")
-    
-    # plt.plot(zcens, shred_frac_all_elg,label = "ELG",lw = 3,color = elg_col,ls = "-",alpha = 0.75)
-    # plt.plot(zcens, shred_frac_jf_elg,lw = 3,color = elg_col,ls = "--")
+    mask_shred = ~((all_list["FRACFLUX_G"] < fracflux_limit) & (all_list["FRACFLUX_R"] < fracflux_limit) & (all_list["FRACFLUX_Z"] < fracflux_limit))
 
-    # plt.plot( [-10,-1],[-10,-1], color = "k", ls = "-", alpha = 0.75,label = r"FRACFLUX + RCHISQ cut")
+    # print( len(all_list[ (all_list["SAMPLE"] == "ELG") & mask_only_frac ]) )
+    # print( len(all_list[ (all_list["SAMPLE"] == "ELG") & mask_shred_all ]) )
+    
+    for i in trange(len(zgrid)-1):
+        zlow = zgrid[i]
+        zhi = zgrid[i+1]
+
+        shred_frac_all_bgsb.append(   get_shred_frac(all_list, "BGS_BRIGHT",zlow, zhi, mask_shred)  ) 
+        shred_frac_all_bgsf.append(   get_shred_frac(all_list, "BGS_FAINT",zlow, zhi, mask_shred)  ) 
+        shred_frac_all_elg.append(   get_shred_frac(all_list, "ELG",zlow, zhi, mask_shred)  ) 
+
+
+    bgs_col = "#648FFF" #DC267F
+    elg_col = "#FFB000"
+    
+    zcens = 0.5*(zgrid[1:] + zgrid[:-1])
+    
+    plt.figure(figsize = (5,5))
+    plt.plot(zcens, shred_frac_all_bgsb,label = "BGS Bright",lw = 3,color = bgs_col,ls = "-",alpha = 0.75)
+    
+    plt.plot(zcens, shred_frac_all_bgsf,label = "BGS Faint",lw = 3,color = "r",ls = "-",alpha = 0.75)
+    
+    plt.plot(zcens, shred_frac_all_elg,label = "ELG",lw = 3,color = elg_col,ls = "-",alpha = 0.75)
+
     # plt.plot( [-10,-1],[-10,-1], color = "k", ls = "--",label = r"FRACFLUX cut")
     
-    # plt.legend(fontsize = 12)
-    # plt.xlim([0,0.2])
-    # plt.ylim([0,1])
-    # plt.xlabel("z (Redshift)",fontsize = 15)
-    # plt.ylabel(r"N(candidate shreds | z) / N(z)",fontsize = 15)
-    # plt.grid(ls=":",color = "lightgrey",alpha = 0.5)
-    # plt.savefig("paper_plots/frac_shreds.pdf", bbox_inches="tight")
-    # plt.show()
+    plt.legend(fontsize = 12)
+    plt.xlim([0,0.1])
+    plt.ylim([0,1])
+    plt.xlabel("z (Redshift)",fontsize = 15)
+    plt.ylabel(r"Likely Fragmented Source Fraction",fontsize = 15)
+    plt.grid(ls=":",color = "lightgrey",alpha = 0.5)
+    plt.savefig("/global/homes/v/virajvm/DESI2_LOWZ/quenched_fracs_nbs/paper_plots/frac_shreds.pdf", bbox_inches="tight")
+    plt.show()
         
     return 
 
@@ -507,13 +548,14 @@ if __name__ == '__main__':
     overwrite_bool = args.overwrite
     make_cats = args.make_cats
     tgids_list = args.tgids_list
-    file_ending = args.file_ending
-    save_other_image_path = args.save_img
+    #this will be the name of pdf file where we store summary images
+    summary_scroll_file_name = args.save_img
     nchunks = args.nchunks
-
-    run_w_source = args.run_w_source
-    no_pz_aper = args.no_pz_aper
+    #if no_save is true, a summary file will NOT be saved
+    no_save = args.no_save
     
+    run_w_source = args.run_w_source
+    no_pz_aper = args.no_pz_aper    
     
     run_aper = args.run_aper
     run_scarlet = args.run_scarlet
@@ -521,14 +563,17 @@ if __name__ == '__main__':
 
     run_own_detect = not run_w_source
     #whether to use photo-z in separating sources
-    use_pz_aper = not use_pz_aper
+    use_pz_aper = not no_pz_aper
+
+
+    #this is the flag that is used in the file names 
+    if use_pz_aper:
+        pz_flag = "w_pz"
+    else:
+        pz_flag = "no_pz"
     
     ## can I come up with a robust way to choose box size?
     box_size = 350
-    
-    if save_other_image_path != "":
-        #confirm that this folder exists
-        check_path_existence(all_paths=[save_other_image_path])
         
     c_light = 299792 #km/s
 
@@ -538,7 +583,7 @@ if __name__ == '__main__':
 
     # make_clean_shreds_catalogs()
 
-    #make sure the get_sga_distances.py script has been run!!
+    #information on sga and bright stars is added in the above function
 
     ##################
     ##PART 2: Generate nested folder structure with relevant files for doing photometry
@@ -549,12 +594,13 @@ if __name__ == '__main__':
 
     ##load the relevant catalogs!
     if use_clean==False:
-        shreds_all = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v2.fits")
+        shreds_all = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v3.fits")
+        shreds_all = shreds_all[  shreds_all["SGA_D26_NORM_DIST"] > 1.5 ]
     else:
-        shreds_all = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v2.fits")
+        shreds_all = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v3.fits")
         #to get the final clean part we remove all objects above LogMstar > 7 
         
-    shreds_focus = shreds_all[(shreds_all["SAMPLE"] ==  sample_str)]
+    shreds_focus = shreds_all[(shreds_all["SAMPLE"] ==  sample_str) & (shreds_all["is_south"] == 1)]
 
     ##### CODE FOR TESTING APERTURE PHOTOMETRY ON BAD RCHISQ OBJECTS
     # rchisq_bins = np.arange(0,9,1)
@@ -570,7 +616,6 @@ if __name__ == '__main__':
     #     shreds_focus.append(temp_ij)
     # shreds_focus = vstack(shreds_focus)
     
-
     ##finally, if a list of targetids is provided, then we only select those
     if tgids_list is not None:
         print("List of targetids to process:",tgids_list)
@@ -586,7 +631,7 @@ if __name__ == '__main__':
         print_stage("Generating relevant files for doing aperture photometry")
         print("Using cleaned catalogs =",use_clean==True)
     
-        print("Number of objects whose photometry will be redone = ", len(shreds_focus_i) )
+        print("Number of objects whose photometry will be redone = ", len(shreds_focus) )
     
         if use_clean == False:
             top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds"
@@ -706,6 +751,16 @@ if __name__ == '__main__':
         sweep_k = shreds_focus["SWEEP"][k]
         brick_k = shreds_focus["BRICKNAME"][k]
 
+        #get the bright star info
+        bstar_ra = shreds_focus["STAR_RA"][k]
+        bstar_dec = shreds_focus["STAR_DEC"][k]
+        bstar_radius = shreds_focus["STAR_RADIUS_ARCSEC"][k]
+        bstar_fdist = shreds_focus["STARFDIST"][k]
+
+        #first one is SGA distance in degrees
+        sga_dist = shreds_focus["SGA_DIST_DEG"][k]
+        sga_ndist = shreds_focus["SGA_D26_NORM_DIST"][k]
+        
         wcat_k = all_wcats[int(shreds_focus["is_south"][k])]
 
         sweep_folder = sweep_k.replace("-pz.fits","")
@@ -750,13 +805,11 @@ if __name__ == '__main__':
             # import shutil
             # shutil.copy(img_path_k, save_path_k + "/")
 
-        temp_dict = {"tgid":tgid_k, "ra":ra_k, "dec":dec_k, "redshift":redshift_k, "save_path":save_path_k, "img_path":img_path_k, "save_sample_path" : save_sample_path, "wcs": wcs , "image_data": data_arr, "source_cat": source_cat_f, "index":k , "org_mag_g": shreds_focus["MAG_G"][k], "overwrite": overwrite_bool, "save_other_image_path":save_other_image_path, "run_own_detect":run_own_detect, "box_size" : box_size, "session":session, "use_photoz": use_pz_aper}
+        temp_dict = {"tgid":tgid_k, "ra":ra_k, "dec":dec_k, "redshift":redshift_k, "save_path":save_path_k, "img_path":img_path_k, "wcs": wcs , "image_data": data_arr, "source_cat": source_cat_f, "index":k , "org_mag_g": shreds_focus["MAG_G"][k], "overwrite": overwrite_bool, "run_own_detect":run_own_detect, "box_size" : box_size, "session":session, "use_photoz": use_pz_aper,
+                    "bright_star_info": (bstar_ra, bstar_dec, bstar_radius, bstar_fdist), "sga_info": (sga_dist, sga_ndist) }
 
         return temp_dict
         
-        # else:
-        #     return
-
     
     print("Number of cores used is =",ncores)
 
@@ -765,6 +818,13 @@ if __name__ == '__main__':
     print(len(all_ks))
     
     all_ks_chunks = np.array_split(all_ks, nchunks)
+
+
+    all_aper_saveimgs = []
+    #a boolean mask for objects that we want to save in a different pdf!
+    special_plot_mask = []
+    all_scarlet_saveimgs = []
+    
     
     #if nchunks = 1, then it just returns the entire original list as 1 list
     #LOOPING OVER ALL THE CHUNKS!!
@@ -817,21 +877,42 @@ if __name__ == '__main__':
         
             print_stage("Done running aperture photometry!!")
         
-            final_star_dists = results[:,0].astype(float)
-            final_new_mags = np.vstack(results[:,1])
-            final_org_mags = np.vstack(results[:,2])
+            final_close_star_dists = results[:,0].astype(float)
+            final_close_star_maxmags = results[:,1].astype(float)
+            
+            final_new_mags = np.vstack(results[:,2])
+            final_org_mags = np.vstack(results[:,3])
+            
+            final_save_paths = results[:,4].astype(str)
+            
     
-            final_save_paths = results[:,3].astype(str)
-                    
+            #these final image paths will be used to make a scrollable png file!
+            final_image_paths = results[:,5].astype(str)
+            
+            final_image_paths = final_image_paths[final_image_paths != ""]
+            all_aper_saveimgs += list(final_image_paths)
+
+            bright_star_pix_frac = results[:,6].astype(float)
+
+            ##what criterion to use here when showing the special objects?
+            ##if within 1.5 of the stellar radius and the star is within 45 arcsecs of ths source
+            special_plot_mask += list( (shreds_focus_i["STARFDIST"] < 1.5) & (shreds_focus_i["STARDIST_DEG"]*3600 < 45) )
+            
+    
             #check that the org mags make sense
             print("Maximum Abs difference between org mags = ",np.max( np.abs(final_org_mags[:,0] - shreds_focus_i["MAG_G"]) ))
             
-            shreds_focus_i["NEAREST_STAR_DIST"] = final_star_dists
+            shreds_focus_i["NEAREST_STAR_DIST"] = final_close_star_dists
+            shreds_focus_i["NEAREST_STAR_MAX_MAG"] = final_close_star_maxmags
+            
             shreds_focus_i["MAG_G_APERTURE"] = final_new_mags[:,0]
             shreds_focus_i["MAG_R_APERTURE"] = final_new_mags[:,1]
             shreds_focus_i["MAG_Z_APERTURE"] = final_new_mags[:,2]
+            
             shreds_focus_i["SAVE_PATH"] = final_save_paths 
-    
+ 
+            shreds_focus_i["BRIGHT_STAR_PIXEL_FRAC"] = bright_star_pix_frac 
+        
             print("Compute aperture-photometry based stellar masses now!")
                 
             #compute the aperture photometry based stellar masses!
@@ -844,20 +925,20 @@ if __name__ == '__main__':
             
             from desi_lowz_funcs import get_stellar_mass
     
-            all_mstar_aper = np.ones(len(shreds_focus_i))*np.nan
+            all_mstar_aper = np.ones(len(shreds_focus_i)) *np.nan
     
             mstar_aper_nonan = get_stellar_mass( gr_aper[~nan_mask],rmag_aper[~nan_mask], shreds_focus_i["Z"][~nan_mask]  )
     
             all_mstar_aper[~nan_mask] = mstar_aper_nonan
             
             shreds_focus_i["LOGM_SAGA_APERTURE"] = all_mstar_aper 
-        
+
             #then save this file!
             if tgids_list is None:
                 if use_clean == False:
-                    file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_shreds_catalog_w_aper_mags_chunk_%d.fits"%(sample_str,chunk_i)
+                    file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_shreds_catalog_w_aper_mags_%s_chunk_%d.fits"%(sample_str, pz_flag, chunk_i)
                 else:
-                    file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_clean_catalog_w_aper_mags_chunk_%d.fits"%(sample_str, chunk_i) 
+                    file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_clean_catalog_w_aper_mags_%s_chunk_%d.fits"%(sample_str,pz_flag, chunk_i) 
 
                 save_table( shreds_focus_i, file_save)   
                 print_stage("Saved aperture summary files at %s!"%file_save)
@@ -875,10 +956,18 @@ if __name__ == '__main__':
                 #run aper was not run right before and so we have to load in the saved data files 
                 #note that if pipeline is being run on a single object, then we need to run_aper before to produce shreds_focus_i table as summary files are not saved in the tgids mode
                 if use_clean == False:
-                    file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_shreds_catalog_w_aper_mags_chunk_%d.fits"%(sample_str,chunk_i)
+                    try:
+                        file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_shreds_catalog_w_aper_mags_%s_chunk_%d.fits"%(sample_str, pz_flag, chunk_i)
+                    except:
+                        file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_shreds_catalog_w_aper_mags_%s.fits"%(sample_str, pz_flag)
+                        
                 else:
-                    file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_clean_catalog_w_aper_mags_chunk_%d.fits"%(sample_str, chunk_i) 
+                    try:
+                        file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_clean_catalog_w_aper_mags_%s_chunk_%d.fits"%(sample_str, pz_flag, chunk_i) 
 
+                    except:
+                        file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_clean_catalog_w_aper_mags_%s.fits"%(sample_str, pz_flag) 
+                        
                 shreds_focus_i = Table.read(file_save)
 
 
@@ -889,15 +978,17 @@ if __name__ == '__main__':
             print("Number of objects initially (in south only) -> %d"%len(shreds_focus_i[shreds_focus_i["is_south"] == 1]))
 
 
-            ##furthermore, right now scarlet only works on south data  ....                                                                                                                                 
-            temp_if = shreds_focus_i[ (shreds_focus_i["LOGM_SAGA_APERTURE"] <= 9.5) & (~np.isnan(shreds_focus_i["LOGM_SAGA_APERTURE"])) & (shreds_focus_i["is_south"] == 1])   ]
-            temp_i_nans = shreds_focus_i[ (np.isnan(shreds_focus_i["LOGM_SAGA_APERTURE"])) & (shreds_focus_i["is_south"] == 1]) ]
+            ##furthermore, right now scarlet only works on south data  ....      
+            
+            temp_if = shreds_focus_i[ (shreds_focus_i["LOGM_SAGA_APERTURE"] <= 9.5) & (~np.isnan(shreds_focus_i["LOGM_SAGA_APERTURE"])) & (shreds_focus_i["is_south"] == 1)   ]
+            
+            temp_i_nans = shreds_focus_i[ (np.isnan(shreds_focus_i["LOGM_SAGA_APERTURE"])) & (shreds_focus_i["is_south"] == 1)  ]
 
             print("Number of objects with updated Mstar <= 9.5 -> %d"%len(temp_if))
             print("Number of objects with NaN photometry -> %d"%len(temp_i_nans))
 
             #the mask is that take objects from south, and if they have NaN stellar masses or stellar masses that are below 9.5 and not nans
-            do_scarlet_mask = (shreds_focus_i["is_south"] == 1]) & ( ( (shreds_focus_i["LOGM_SAGA_APERTURE"] <= 9.5) & (~np.isnan(shreds_focus_i["LOGM_SAGA_APERTURE"])) ) |  (np.isnan(shreds_focus_i["LOGM_SAGA_APERTURE"] ) ) )
+            do_scarlet_mask = (shreds_focus_i["is_south"] == 1) & ( ( (shreds_focus_i["LOGM_SAGA_APERTURE"] <= 9.5) & (~np.isnan(shreds_focus_i["LOGM_SAGA_APERTURE"])) ) |  (np.isnan(shreds_focus_i["LOGM_SAGA_APERTURE"] ) ) ) & (shreds_focus_i["Z"] < 0.02)
                                                                                                       
             #these are the objects on which we will be doing scarlet photometry!                                                                                                          
             all_inputs_scarlet = all_inputs[  do_scarlet_mask ]
@@ -968,6 +1059,11 @@ if __name__ == '__main__':
             final_new_mags = np.vstack(results[:,0])
             final_org_mags = np.vstack(results[:,1])
             
+            final_saveimgs = np.vstack(results[:,2])
+
+            final_saveimgs = final_saveimgs[final_saveimgs != ""]
+            all_scarlet_saveimgs += list(final_saveimgs)
+            
             #check that the org mags make sense
             print("Maximum Abs difference between org mags = ",np.max( np.abs(final_org_mags[:,0] - shreds_focus_scarlet["MAG_G"]) ))
             
@@ -984,6 +1080,7 @@ if __name__ == '__main__':
                 else:
                     file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_clean_catalog_w_scarlet_mags_chunk_%d.fits"%(sample_str, chunk_i) 
 
+                
                 save_table( shreds_focus_i, file_save)   
                 print_stage("Saved scarlet summary files at %s!"%file_save)
     
@@ -991,7 +1088,9 @@ if __name__ == '__main__':
     ##################
     ##PART 5: Once all the chunks are done, combine them all!
     ##################
-    if tgids_list is None and (run_aper | run_scarlet):
+
+    yes_save = not no_save
+    if tgids_list is None and (run_aper | run_scarlet) and yes_save:
         print_stage("Consolidating all the saved chunks!")
         
         #files were saved and so we will consolidate them!
@@ -1000,7 +1099,8 @@ if __name__ == '__main__':
         else:
             clean_flag = "clean"
 
-        file_template_aper = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_%s_catalog_w_aper_mags"%(sample_str, clean_flag)
+
+        file_template_aper = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_%s_catalog_w_aper_mags_%s"%(sample_str, clean_flag, pz_flag)
         
         if run_scarlet:
             file_template_scarlet = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_%s_catalog_w_scarlet_mags"%(sample_str, clean_flag)
@@ -1018,12 +1118,14 @@ if __name__ == '__main__':
             for ni in trange(nchunks):
                 shreds_focus_part = Table.read(file_template_aper + "_chunk_%d.fits"%ni  )
                 shreds_focus_combine_aper.append(shreds_focus_part)
-
+                #and then we delete that file!
+                os.remove(file_template_aper + "_chunk_%d.fits"%ni)
+                
             shreds_focus_combine_aper = vstack(shreds_focus_combine_aper)
 
             print_stage("Total number of objects in consolidated aperture file = %d"%len(shreds_focus_combine_aper))
-            
-            save_table( shreds_focus_combine_aper, file_template_aper + ".fits") 
+
+            save_table( shreds_focus_combine_aper, file_template_aper + ".fits" ) 
             
             print_stage("Consolidated aperture chunk saved at %s"%(file_template_aper + ".fits") )
 
@@ -1034,14 +1136,62 @@ if __name__ == '__main__':
                 for ni in trange(nchunks):
                     shreds_focus_part = Table.read(file_template_scarlet + "_chunk_%d.fits"%ni  )
                     shreds_focus_combine_scarlet.append(shreds_focus_part)
+                    #and then we delete that file!
+                    os.remove(file_template_scarlet + "_chunk_%d.fits"%ni)
+                    
                 shreds_focus_combine_scarlet = vstack(shreds_focus_combine_scarlet)
                 print_stage("Total number of objects in consolidated scarlet file = %d"%len(shreds_focus_combine_scarlet))
                 
                 save_table( shreds_focus_combine_scarlet, file_template_scarlet + ".fits") 
                 
-                print_stage("Consolidated aperture chunk saved at %s"%(file_template_scarlet + ".fits") )
+                print_stage("Consolidated scarlet chunk saved at %s"%(file_template_scarlet + ".fits") )
+
+    ##make a scrollable pdf to view the final results!
+    ##only make for some objects?
+    from PIL import Image
+    from pathlib import Path
     
-                    
+    if run_aper:
+        # Path to images
+        if summary_scroll_file_name == "":
+            summary_scroll_file_name = "images_" + generate_random_string(5) + ".pdf"
+        
+        output_pdf = save_sample_path + "%s"%summary_scroll_file_name
+
+        #maximum number of objects to store in a file
+        max_num = 500
+        all_aper_saveimgs = np.array(all_aper_saveimgs)
+        
+
+        # Load images
+        image_files = all_aper_saveimgs[:max_num]
+        
+        images = [Image.open(img).convert("RGB") for img in image_files]
+        
+        # Save as PDF without extra white space
+        images[0].save(output_pdf, save_all=True, append_images=images[1:])
+        print(f"Aperture photo summary images saved at {output_pdf}")
+
+        #now specifically plot the special objects we selected
+        special_plot_mask = np.array(special_plot_mask)
+        
+        # Load images
+        image_files = all_aper_saveimgs[special_plot_mask][:max_num]
+        images = [Image.open(img).convert("RGB") for img in image_files]
+        # Save as PDF without extra white space
+        from datetime import datetime
+        # Get the current date in your preferred format
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        output_special_pdf = save_sample_path + "images_special_%s_%s.pdf"%(date_str, generate_random_string(3)) 
+
+        images[0].save( output_special_pdf , save_all=True, append_images=images[1:])
+        
+        print(f"Aperture photo summary images saved at {output_special_pdf}")
+
+        
+
+    
+    
     ##################
     ##PART 5: Using the aperture photometry footprint, find the desi sources that lie around on it and similar redshift as well??
     ##################

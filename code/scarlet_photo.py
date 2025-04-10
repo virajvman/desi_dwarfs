@@ -234,7 +234,6 @@ def run_scarlet_pipe(input_dict):
     #do we run our own peak finder, or use LS DR9 sources as peaks?
     run_own_detect = input_dict["run_own_detect"]
     box_size = input_dict["box_size"]
-    save_other_image_path = input_dict["save_other_image_path"]
 
     ## load the newly computed aperture mags for plotting
     aper_mag_g = input_dict["MAG_G_APERTURE"]
@@ -260,7 +259,7 @@ def run_scarlet_pipe(input_dict):
             np.save(save_path  + "/psf_data_z.npy",psf_dict["z"])
         else:
             print("Psfs could not be downloaded :(")
-            return -99, [-99,-99,-99], [-99,-99,-99]
+            return [np.nan,np.nan,np.nan], [np.nan,np.nan, np.nan], ""
 
     psf_g = np.load(save_path +"/psf_data_g.npy")
     psf_r = np.load(save_path +"/psf_data_r.npy")
@@ -313,12 +312,12 @@ def run_scarlet_pipe(input_dict):
             
         except:
             print("Sub-images were not downloaded successfully :( ")
-            return [np.nan,np.nan,np.nan], [np.nan,np.nan,np.nan]
+            return [np.nan,np.nan,np.nan], [np.nan,np.nan,np.nan], ""
                 
     if psf is None:
         #try download the psf again
 
-        return [np.nan,np.nan,np.nan], [np.nan,np.nan, np.nan]
+        return [np.nan,np.nan,np.nan], [np.nan,np.nan, np.nan], ""
     else:
         
         #fontsize for all the xlabels in titles in plots
@@ -1136,38 +1135,38 @@ def run_scarlet_pipe(input_dict):
         
         #########################################
         #ISOLATED DWARF GALAXY COMPONENTS
-        #TODO: How to deal with colors that are like not the 
+        #TODO: How to deal with color gradients in galaxies?
         #########################################
 
-        if False:
-            gmm_file_zgrid = np.arange(0.001, 0.425,0.025)
-            
-            ##below part is not needed everytime! Can just directly load the dictionary of conf levels
-            file_index = np.where( source_redshift > gmm_file_zgrid )[0][-1]
-            #load the relevant gmm file
-            gmm = joblib.load("/pscratch/sd/v/virajvm/redo_photometry_plots/gmm_color_models/gmm_model_idx_%d.pkl"%file_index)
+        # if False:
+        gmm_file_zgrid = np.arange(0.001, 0.425,0.025)
         
-            # Create a grid for evaluation
-            xmin, xmax = -1, 2
-            ymin, ymax = -1, 1.5
-            X, Y = np.meshgrid(np.linspace(xmin, xmax, 200), np.linspace(ymin, ymax, 200))
-            positions = np.vstack([X.ravel(), Y.ravel()])
-            # Evaluate the density on the grid
-            Z_gmm = np.exp(gmm.score_samples(positions.T)).reshape(X.shape)
-            Znorm = np.sum(Z_gmm)
-            
-            #we normalize the gaussian mixture sum. However, to get the confidence levels in terms of the absolute probability returned by gmm, we will multiply by Znorm again
-            Z_gmm = Z_gmm/Znorm       
-            # plot contours if contour levels are specified in clevs 
-            lvls = []
-            # clevs = [0.16,0.50,0.841,0.977,0.998,0.99994]
-            clevs = [0.38,0.68,0.86,0.954,0.987] #,0.997]
-            for cld in clevs:  
-                sig = opt.brentq( conf_interval, 0., 1., args=(Z_gmm,cld) )   
-                lvls.append(sig)
-                
-            conf_levels = { "38":lvls[0]*Znorm,"68":lvls[1]*Znorm,"86":lvls[2]*Znorm,"95.4":lvls[3]*Znorm,"98.7":lvls[4]*Znorm} #,"99.7":lvls[5]*Znorm}
+        ##below part is not needed everytime! Can just directly load the dictionary of conf levels
+        file_index = np.where( source_redshift > gmm_file_zgrid )[0][-1]
+        #load the relevant gmm file
+        gmm = joblib.load("/pscratch/sd/v/virajvm/redo_photometry_plots/gmm_color_models/gmm_model_idx_%d.pkl"%file_index)
+    
+        # Create a grid for evaluation
+        xmin, xmax = -1, 2
+        ymin, ymax = -1, 1.5
+        X, Y = np.meshgrid(np.linspace(xmin, xmax, 200), np.linspace(ymin, ymax, 200))
+        positions = np.vstack([X.ravel(), Y.ravel()])
+        # Evaluate the density on the grid
+        Z_gmm = np.exp(gmm.score_samples(positions.T)).reshape(X.shape)
+        Znorm = np.sum(Z_gmm)
         
+        #we normalize the gaussian mixture sum. However, to get the confidence levels in terms of the absolute probability returned by gmm, we will multiply by Znorm again
+        Z_gmm = Z_gmm/Znorm       
+        # plot contours if contour levels are specified in clevs 
+        lvls = []
+        # clevs = [0.16,0.50,0.841,0.977,0.998,0.99994]
+        clevs = [0.38,0.68,0.86,0.954,0.987] #,0.997]
+        for cld in clevs:  
+            sig = opt.brentq( conf_interval, 0., 1., args=(Z_gmm,cld) )   
+            lvls.append(sig)
+            
+        conf_levels = { "38":lvls[0]*Znorm,"68":lvls[1]*Znorm,"86":lvls[2]*Znorm,"95.4":lvls[3]*Znorm,"98.7":lvls[4]*Znorm} #,"99.7":lvls[5]*Znorm}
+    
             ## we ignore the fluxs and magnitudes of all the other sources. We just consider the sources that lie on this main segmen
         
         #get the scarlet components that lie on the main segment (excluding the total LSB component)
@@ -1257,10 +1256,10 @@ def run_scarlet_pipe(input_dict):
 
         #is in the blue box or is along the contour!
         # has to have good color and not be a star!
+        ## FOR THE SCARLET PIPELINE, WE ARE AS OF NOW DECIDING NOT USE THESE COLOR CONTOURS ... 
         # dwarf_mask = ( ((all_grs < gr_cut) & (all_rzs < rz_cut)) | (Z_likely_comps >= conf_levels["98.7"])) & (~scar_comp_inseg_isstar_bool)
         dwarf_mask = ( ((all_grs < gr_cut) & (all_rzs < rz_cut))) & (~scar_comp_inseg_isstar_bool)
         
-
         ##we can plot this star mask in the color-color plot
         star_mask = scar_comp_inseg_isstar_bool
 
@@ -1284,12 +1283,10 @@ def run_scarlet_pipe(input_dict):
         #the image model with no dwarf
         nondwarf_model = blend.get_model(frame=model_frame) - dwarf
     
-    
         ## COMPUTE THE FINAL DWARF MAGNITUDES
         new_mag_g = 22.5 - 2.5*np.log10(np.sum(dwarf[0]))
         new_mag_r = 22.5 - 2.5*np.log10(np.sum(dwarf[1]))
         new_mag_z = 22.5 - 2.5*np.log10(np.sum(dwarf[2]))
-    
     
         ######################################
         
@@ -1364,7 +1361,7 @@ def run_scarlet_pipe(input_dict):
         ax[4].text(0.05,0.95 - spacing*1,"Aper-mag g = %.2f"%aper_mag_g,size = 11,transform=ax[4].transAxes, verticalalignment='top')
         ax[4].text(0.05,0.95 - spacing*2,"Scarlet-mag g = %.2f"%new_mag_g,size = 11,transform=ax[4].transAxes, verticalalignment='top')
         
-        ax[4].text(0.05,0.95 - spacing*3,"fracflux_g, rchisq_g = %.2f"%(source_cat_obs["fracflux_g"], source_cat_obs["rchisq_g"]),size = 11,transform=ax[4].transAxes, verticalalignment='top')
+        ax[4].text(0.05,0.95 - spacing*3,"fracflux_g, rchisq_g = %.2f, %.2f"%(source_cat_obs["fracflux_g"], source_cat_obs["rchisq_g"]),size = 11,transform=ax[4].transAxes, verticalalignment='top')
         
         ax[4].text(0.05,0.95 - spacing*4,"Org-mag r = %.2f"%source_mag_r,size =11,transform=ax[4].transAxes, verticalalignment='top')
         ax[4].text(0.05,0.95 - spacing*5,"Aper-mag r = %.2f"%aper_mag_r,size = 11,transform=ax[4].transAxes, verticalalignment='top')
@@ -1391,13 +1388,10 @@ def run_scarlet_pipe(input_dict):
                 axi.set_yticks([])
                 
 
-        fig_tot.savefig(save_path + "/grz_scarlet_tgid_%d_ra_%.3f_dec_%.3f.png"%(source_tgid, source_ra, source_dec),bbox_inches="tight")
-        # save this figure elsewhere as well!
-        # also save the figure in another plot!
-                
-        if save_other_image_path != "":
-            fig_tot.savefig(save_other_image_path + "grz_scarlet_tgid_%d_ra_%.3f_dec_%.3f.png"%(source_tgid, source_ra, source_dec),bbox_inches="tight")
-        
+
+        save_summary_png = save_path + "/grz_scarlet_tgid_%d_ra_%.3f_dec_%.3f.png"%(source_tgid, source_ra, source_dec)
+        fig_tot.savefig(save_summary_png ,bbox_inches="tight")
+
         plt.close(fig_tot)
         
         new_mag_g_mwc = new_mag_g + 2.5 * np.log10(source_cat_obs["mw_transmission_g"])
@@ -1407,7 +1401,7 @@ def run_scarlet_pipe(input_dict):
         new_mags = [ new_mag_g_mwc, new_mag_r_mwc,new_mag_z_mwc ]
         org_mags =   [ source_mag_g_mwc,source_mag_r_mwc,source_mag_z_mwc  ]
         
-        return new_mags, org_mags
+        return new_mags, org_mags, save_summary_png
 
     
 
@@ -1463,7 +1457,6 @@ if __name__ == '__main__':
     input_dict["run_own_detect"] = True
     input_dict["session"] = session
     input_dict["box_size"] = 350
-    input_dict["save_other_image_path"]= ""
 
     #provide this input dict to the scarlet function!
     run_scarlet_pipe(input_dict)

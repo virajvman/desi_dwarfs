@@ -14,8 +14,15 @@ from astropy.table import Table, vstack, hstack
 from easyquery import Query, QueryMaker
 import random
 import multiprocessing as mp
+import string
 
-    
+c_light = 299792 #km/s
+filler_sga_ind = 999999
+
+def generate_random_string(length):
+    characters = string.ascii_letters + string.digits  # Includes A-Z, a-z, 0-9
+    return ''.join(random.choices(characters, k=length))
+
 def sdss_rgb(imgs, bands, scales=None,m = 0.02):
     rgbscales = {'u': (2,1.5), #1.0,
                  'g': (2,2.5),
@@ -110,6 +117,8 @@ def calc_normalized_dist(obj_ra, obj_dec, cen_ra, cen_dec, cen_r, cen_ba=None, c
     with np.errstate(divide="ignore", invalid="ignore"):
         return np.hypot((dx * cos_t + dy * sin_t) / a, (-dx * sin_t + dy * cos_t) / b)
 
+
+    
 
 
 def is_target_in_south(ras,decs):
@@ -560,7 +569,6 @@ def calc_normalized_dist_broadcast(ra_list, dec_list, redshift_list, s20_ra, s20
     '''
     Function that computes the distance normalized to D26 units in a vectorized manner. This function can be passed to a multiprocessor as well
     '''
-    c_light = 299792 #km/s
 
     #expanding the ra,dec arrays for broad-casting
     ra_i = ra_list[:,np.newaxis]
@@ -594,9 +602,10 @@ def calc_normalized_dist_broadcast(ra_list, dec_list, redshift_list, s20_ra, s20
     if verbose:
         print(np.shape(no_match_mask))
 
-    nearest_inds[no_match_mask] = -99
-    #where there does not exist a valid match, we assign np.nan value
-    nearest_norm_dist[no_match_mask] = np.nan
+    nearest_inds[no_match_mask] = filler_sga_ind
+    #where there does not exist a valid match, we assign np.inf value
+    
+    nearest_norm_dist[no_match_mask] = np.inf
 
     return nearest_inds, nearest_norm_dist
 
@@ -612,6 +621,10 @@ def get_sga_norm_dists(ra_list,dec_list, redshift_list, Nmax = 500,run_parr = Fa
     dec_list: list pf all the DECs in the catalog
     redshift_list: list of all the redshifts in the catalog
     Nmax : the number of chunks to split the ra_lists into for parallelizing
+
+    ONE IDEA IS TO DO SOMETHING SIMILAR TO WHAT THE BRIGHT STAR FUNCTION IS DOING. SPLIT IN BINS OF D26 OR SOMETHING?
+    BUT I NEED TO GET IT AT THE SAME REDSHIFT ... 
+    first get the biggest ones, if there is no difference, then we go the smaller one. We only update it if we get something similar at a smaller redshift 
 
     '''
 
@@ -681,13 +694,69 @@ def get_sga_norm_dists(ra_list,dec_list, redshift_list, Nmax = 500,run_parr = Fa
         all_nearest_dists = np.concatenate(all_nearest_dists)
 
 
-    matched_sga_ids = np.ones( len(ra_list) ) * -99
-
+    matched_sga_ids = np.ones( len(ra_list) ) * filler_sga_ind
+    
     matched_sga_ids[ all_nearest_inds != -99 ] = s20_sgaid[ all_nearest_inds[all_nearest_inds!=-99 ] ]
 
     return matched_sga_ids, all_nearest_dists
 
     
+def get_sga_norm_dists_FAST(cat, siena_path="/global/cfs/cdirs/cosmo/data/sga/2020/SGA-2020.fits"):
+    '''
+    This function takes in an array of ra,dec and redshift values and see which ones are potentially shreds of a larger SGA galaxy.
+    It uses the the calc_normalized_dist function to compute the distance of source from SGA in units of its elliptical aperture
+
+    This function shall return a list of matched SGA id and associated angular norm dist (if relevant) for each object in list
+
+    ra_list: list of all the RAs in the catalog
+    dec_list: list pf all the DECs in the catalog
+    redshift_list: list of all the redshifts in the catalog
+    Nmax : the number of chunks to split the ra_lists into for parallelizing
+
+    The way this is done faster is by first just finding the closest galaxy, and then seeing if the closest galaxy is at similar redshift
+    As sga galaxies are rare enough, this is fine.
+    '''
+
+    #read the SIENA Galaxy Atlas
+    siena20 = Table.read(siena_path,hdu = "ELLIPSE")
+    
+    ## the D26 column is in units of arcmins and is the major axis diameter measured at the 𝜇=26 mag arcsec−2 r-band isophote
+    ## below is what SAGA does, Yao recommended me to do this 
+    ## np.minimum(sga_this["SMA_MOMENT"] * 1.3333, sga_this["D26"] * 30.0)
+
+    s20_sgaid = np.array(siena20["SGA_ID"])
+
+    #find the nearest SGA galaxy to it!
+    idx, d2d, _ = match_c_to_catalog( c_cat = cat, catalog_cat = siena20, c_ra="RA", c_dec="DEC", catalog_ra="RA_MOMENT", catalog_dec="DEC_MOMENT")
+
+    siena20_matched = siena20[idx]
+    matched_ids = s20_sgaid[idx]
+    s20_matched_zreds = s20_sgaid[idx]
+    
+    #given these close matches, compute how far away it is in terms of angular distance!
+    #this approach, probably works fine as there are not going to be that many SGA galaxies ... 
+
+    all_norm_dist = calc_normalized_dist(cat["RA"].data, cat["DEC"].data, 
+                                         siena20_matched["RA_MOMENT"].data, siena20_matched["DEC_MOMENT"].data,
+                                         siena20_matched["D26"].data * 30, cen_ba=siena20_matched["BA"].data, 
+                                         cen_phi=siena20_matched["PA"].data, multiplier=1)
+
+    #where ever the redshift is not consistent with each other we make the nearest dist and inds as nans!
+    s20_matched_zreds = siena20_matched["Z_LEDA"].data
+
+    redshift_not_consistent_mask = (np.abs(cat["Z"].data - s20_matched_zreds) * c_light > 1000 )
+
+    all_norm_dist[redshift_not_consistent_mask] = np.inf
+    matched_ids[redshift_not_consistent_mask] = filler_sga_ind
+
+    cat["SGA_ID_MATCH"] = matched_ids
+    cat["SGA_D26_NORM_DIST"] = all_norm_dist
+    cat["SGA_DIST_DEG"] = d2d.deg
+    
+    print("Number of galaxies that are within 2 times the D26 aperture are = %d/%d"%(len(cat[cat["SGA_D26_NORM_DIST"] < 2 ]), len(cat)  ) )
+    
+    return cat
+
     
 
 def read_tractorphot_iron(zcat, specprod='iron', verbose=False):
