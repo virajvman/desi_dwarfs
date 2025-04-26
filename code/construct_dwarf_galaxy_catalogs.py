@@ -438,11 +438,7 @@ if __name__ == '__main__':
                 _n_or_more_lt(sigma_grz, nsigma_bands, 5),  # 7
                 Query(_n_or_more_gt(fracflux_grz, 3, 0.7)),  # 8
                 ]
-                
-                # "FRACFLUX_G > 0.7",
-                # "FRACFLUX_R > 0.7",
-                # "FRACFLUX_Z > 0.7"
-                
+                                
             ## read tractor phot
             zpix_cat = read_tractorphot(vac_data_cat, verbose=True)
             zpix_cat = get_useful_cat_colms(zpix_cat)

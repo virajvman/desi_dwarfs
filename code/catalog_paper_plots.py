@@ -41,7 +41,7 @@ def get_image_summary(ax,data_table , cutout_size = 40, img_folder = "/pscratch/
               
     ## plot the image
     ax.imshow(rgb_stuff,origin="lower")
-    ax.scatter( sources_f_xpix, sources_f_ypix,facecolor="none",edgecolor = "white",lw =0.75,s=400 )
+    ax.scatter( sources_f_xpix, sources_f_ypix,facecolor="none",edgecolor = "white",lw =0.75,s=400,ls = "dotted" )
     ax.scatter( fiber_xpix, fiber_ypix,facecolor="none",edgecolor = "r",lw =2,s=400 )
     
     cutout_size = int(cutout_size/0.262)
@@ -65,8 +65,9 @@ def get_image_summary(ax,data_table , cutout_size = 40, img_folder = "/pscratch/
     return
 
 
-def make_shred_panel():
-    
+def make_shred_panel(bgsb_shreds, bgsf_shreds, elg_shreds):
+
+
     mask1 = (bgsb_shreds["RA"]== 133.14261025691368)
     data_1 = bgsb_shreds[mask1]
     
@@ -76,16 +77,17 @@ def make_shred_panel():
     mask3 = (elg_shreds["RA"] == 37.85279871518745)
     data_3 = elg_shreds[mask3]
     
-    mask0 = (bgsb_shreds["RA"] == 265.3569194336881)
-    data_0 = bgsb_shreds[mask0]
+    # mask0 = (bgsb_shreds["RA"] == 265.3569194336881)
+    # data_0 = bgsb_shreds[mask0]
+    mask0 = (bgsb_shreds["TARGETID"]== 39627752084603180) #39627752084603392)
+data_0 = bgsb_shreds[mask0]
 
     #this is the super star source that would be good to add as it is clearly fragmented and has a low fracflux value as so extended
     # bgsb_shreds[bgsb_shreds["TARGETID"] == 39627685319676194]
     
-
     axs = make_subplots(ncol = 4, nrow = 1, col_spacing = 0.4)
 
-    get_image_summary(axs[0], data_0, cutout_size = 40, img_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds_cutouts/",fsize = 11,label = 1)
+    get_image_summary(axs[0], data_0, cutout_size = 60, img_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds_cutouts/",fsize = 11,label = 1)
     get_image_summary(axs[1], data_1, cutout_size = 40, img_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds_cutouts/",fsize = 11,label = 2)
     get_image_summary(axs[2], data_2, cutout_size = 40, img_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds_cutouts/",fsize = 11,label = 3)
     get_image_summary(axs[3], data_3, cutout_size = 40, img_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds_cutouts/",fsize = 11,label = 4)
@@ -95,6 +97,12 @@ def make_shred_panel():
     plt.show()
 
     return
+
+
+if __name__ == '__main__':
+    bgsb_shreds = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_BGS_BRIGHT_shreds_catalog_w_aper_mags_no_pz.fits")
+    bgsf_shreds = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_BGS_FAINT_shreds_catalog_w_aper_mags_w_pz.fits")
+    elg_shreds = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_ELG_shreds_catalog_w_aper_mags_w_pz.fits")
 
 
 

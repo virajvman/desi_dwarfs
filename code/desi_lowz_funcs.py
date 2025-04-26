@@ -15,9 +15,31 @@ from easyquery import Query, QueryMaker
 import random
 import multiprocessing as mp
 import string
+from PIL import Image
+from pathlib import Path
 
 c_light = 299792 #km/s
 filler_sga_ind = 999999
+
+def get_scrollable_pdfs(all_img_paths, output_pdf):
+    '''
+    Function that generates scrollable pdf from a list of png paths!
+    '''
+
+    images = [Image.open(img).convert("RGB") for img in all_img_paths]
+    
+    # Save as PDF without extra white space
+    images[0].save(output_pdf, save_all=True, append_images=images[1:])
+    print(f"Scrollable pdf saved at {output_pdf}")
+    return
+
+
+    
+def parse_tgids(value):
+    if not value:
+        return None
+    return [int(x) for x in value.split(',')]
+
 
 def generate_random_string(length):
     characters = string.ascii_letters + string.digits  # Includes A-Z, a-z, 0-9
@@ -70,7 +92,7 @@ def sdss_rgb(imgs, bands, scales=None,m = 0.02):
 
 
 def get_random_markers(n):
-    markers = ["o", "s", "D", "^", "v", "<", ">", "p", "*", "H", "+", "x", "|", "_"]
+    markers = ["o", "s", "D", "^", "v", "<", ">", "p", "H", "+", "x", "|", "_"]
     
     # If n is larger than the number of unique markers, allow repetition
     return random.choices(markers, k=n) if n > len(markers) else random.sample(markers, n)
