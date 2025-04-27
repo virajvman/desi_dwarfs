@@ -2,15 +2,8 @@
 shifterimg pull docker:legacysurvey/legacypipe:DR10.3.4
 shifter --image docker:legacysurvey/legacypipe:DR10.3.4 python3 tractor_sources.py
 
-In this script, I try to figure out how to construct a model image given some tractor sources and then subtract it from the real image!
-
+In this script, we will loop over all the shred galaxies and save their model image, and residual image, and residual image!
 '''
-
-
-# session = requests.Session()
-# psf_dict = fetch_psf(ra_k,dec_k, session)
-
-
 
 # from desi_lowz_funcs import fetch_psf
 # import requests
@@ -102,21 +95,11 @@ def srcs2image(cat, wcs, band='r', allbands='grz', pixelized_psf=None, psf_sigma
 
     return mod
     
-ra_k = 39.07210225914647
-dec_k = 8.368685407411268	
-tgid = 39627984176418324
-pixscale = 0.262
-width = 350
 
-
-rel_path = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds/south/sweep-030p005-040p010/0390p082/LOWZ_tgid_39627984176418324"
-
-if __name__ == '__main__':
-
-
-    # img_path = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds_cutouts/image_tgid_39627803590660098_ra_44.384196_dec_0.644421.fits"
-    img_path = glob.glob(f"/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds_cutouts/image_tgid_{tgid}*")[0]
-    print(img_path)
+def get_img_source(ra,dec,tgid,file_path, img_path, pixscale=0.262,width=350,testing=True):
+    '''
+    Function that constructs the tractor model of source of interest to get IMG-S
+    '''
 
     # hdulist = fits.open("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/temp/copsf_44.3842_0.6444.fits")
     # psf = {'grz'[i]: hdulist[i].data for i in range(3)}
@@ -125,49 +108,50 @@ if __name__ == '__main__':
     # ppsf_r = PixelizedPSF(psf["r"])
     # ppsf_z = PixelizedPSF(psf["z"])
 
-    brickname = 'custom-{}'.format(custom_brickname(ra_k, dec_k))
-    brick = BrickDuck(ra_k, dec_k, brickname)
+    brickname = 'custom-{}'.format(custom_brickname(ra, dec))
+    brick = BrickDuck(ra, dec, brickname)
     targetwcs = wcs_for_brick(brick, W=float(width), H=float(width), pixscale=pixscale)
     #the above targetwcs is in the correct tan format needed for below function!
     wcs = ConstantFitsWcs(targetwcs)
 
     #the below code is taken from: https://github.com/moustakas/legacyhalos/blob/main/py/legacyhalos/virgofilaments.py#L693C1-L694C1
-    # tractorfile = os.path.join(galaxydir, '{}-{}.fits'.format(galaxy, filt2imfile['tractor']))
+    tractor_file = file_path+"/source_cat_f_more.fits"
+    if os.path.exists(tractor_file):
+        pass
+    else:
+        tractorfile = file_path + "/source_cat_f_more.fits"
 
-    tractorfile = rel_path + "/source_cat_f_more.fits"
-         
+    #select the columns of relevance!
     cols = ['ra', 'dec', 'bx', 'by', 'type', 'ref_cat', 'ref_id',
             'sersic', 'shape_r', 'shape_e1', 'shape_e2',
             'flux_g', 'flux_r', 'flux_z',
             'flux_ivar_g', 'flux_ivar_r', 'flux_ivar_z',
             'nobs_g', 'nobs_r', 'nobs_z',
             'psfdepth_g', 'psfdepth_r', 'psfdepth_z',
-            'psfsize_g', 'psfsize_r', 'psfsize_z']
+            'psfsize_g', 'psfsize_r', 'psfsize_z', "BRICKID","OBJID"]
 
     tractor = fits_table(tractorfile, columns=cols)
 
     #however, we only need to the feed the source of interest to the src2image
-    #given all the ras/decs in the catalog, find the one that is our source!!
-    our_source = tractor.get("ra") == ra_k
-    ##maybe a better way to select this?
+    #given all the ras/decs in the catalog, find the one that is our source, this is the source we will be subtracting!
+    our_source = (tractor.get("BRICKID") == brickid_i) & (tractor.get("OBJID") == objid)
 
     tractor_source = tractor[our_source]
 
-    #a relevant column in the tractor catalog
-    # psfsize_g float32 arcsec Weighted average PSF FWHM in the g band
-    #we have to convert it to sigma and to pixels (using the adopted pixel scale)
+    if len(tractor_source) != 1:
+        raise ValueError("Number of sources found in tractor not equal to 1!")
 
+    #a relevant column in the tractor catalog
+    # psfsize_g = arcsec Weighted average PSF FWHM in the g band
+    #we have to convert it to sigma and to pixels (using the adopted pixel scale)
     psf_sigma_g = (tractor_source.get("psfsize_g")[0]/2.3548)/0.262
     psf_sigma_r = (tractor_source.get("psfsize_r")[0]/2.3548)/0.262
     psf_sigma_z = (tractor_source.get("psfsize_z")[0]/2.3548)/0.262
-    
-    print(psf_sigma_g, psf_sigma_r,psf_sigma_z)
 
     #when providing with pixelized psf
     # mod_g = srcs2image(tractor_source, wcs, band='g', allbands='grz', pixelized_psf=ppsf_g, psf_sigma=1.0)
     # mod_r = srcs2image(tractor_source, wcs, band='r', allbands='grz', pixelized_psf=ppsf_r, psf_sigma=1.0)
     # mod_z = srcs2image(tractor_source, wcs, band='z', allbands='grz', pixelized_psf=ppsf_z, psf_sigma=1.0)
-
 
     #constructing the model image
     mod_g = srcs2image(tractor_source, wcs, band='g', allbands='grz', pixelized_psf=None, psf_sigma=psf_sigma_g)
@@ -187,7 +171,7 @@ if __name__ == '__main__':
     resis = data_arr - mod_tot   
     rgb_resis = sdss_rgb(resis, ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
     
-    #let us make the color image!
+    #let us make the color image and zoom in on 64x64
     #let us zoom in 64x64
     size = 64
     start = (width - size) // 2
@@ -198,9 +182,27 @@ if __name__ == '__main__':
     ax[1].imshow(rgb_data[start:end, start:end,:],origin="lower")
     ax[2].imshow(rgb_resis[start:end, start:end,:],origin="lower")
     
-    plt.savefig(rel_path + "/temp_image.png")
-    
+    plt.savefig(file_path + "/tractor_model_image.png")
+    if testing:
+        plt.savefig(f"pscratch/sd/v/virajvm/temp_tractor_models/tractor_model_{tgid}.png")
+        
     plt.close()
+
+if __name__ == '__main__':
+
+
+    ##load the file 
+
+    dwarf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v3.fits")
+
+    dwarf_cat = dwarf_cat[dwarf_cat["is_south"] == 0]
+
+    for i in trange(100):
+        get_img_source( dwarf_cat["RA"][i], dwarf_cat["DEC"][i], dwarf_cat["TARGETID"][i], dwarf_cat["FILE_PATH"][i], dwarf_cat["IMAGE_PATH"][i] )
+
+        
+
+ 
     
 
     

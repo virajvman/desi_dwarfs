@@ -12,7 +12,7 @@ import numpy as np
 from astropy.io import fits
 import matplotlib.pyplot as plt
 from multiprocessing import Pool, cpu_count
-from dwarf_photo_pipeline import save_cutouts
+from desi_lowz_funcs import save_cutouts, parallel_run
 import requests
 
 
@@ -21,74 +21,11 @@ def print_spec_urls(tgid_list,max_num=10):
         print("https://www.legacysurvey.org/viewer-desi/desi-spectrum/dr1/targetid%d"%ti )
     
 
-## below are functions used to curate the dataset, and add the image paths to catalog for ease!
 
-img_good_path = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_good_cutouts"
-img_shred_path = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds_cutouts"
-
-# NOTE: requests.Session() is not picklable, so we'll initialize it inside the subprocess.
-def init_session(good_files, shred_files):
-    global session, good_dict, shred_dict
-    session = requests.Session()
-    good_dict = good_files
-    shred_dict = shred_files
-
-def get_image_path(args):
-    tgid, ra, dec = args
-    top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_good"
-
-    if tgid in good_dict:
-        return good_dict[tgid]
-    elif tgid in shred_dict:
-        return shred_dict[tgid]
-    else:
-        image_path = f"{top_folder}_cutouts/image_tgid_{tgid}_ra_{ra:.6f}_dec_{dec:.6f}.fits"
-        save_cutouts(ra, dec, image_path, session, size=350, timeout=30)
-        if os.path.exists(image_path):
-            return image_path
-        else:
-            return None
-
-## construct the dictionary
-def preload_file_dict(directory):
-    """
-    Load all filenames in a directory and map tgid -> filepath.
-    Assumes filenames contain 'tgid_1234567890' or similar.
-    """
-    file_paths = glob.glob(os.path.join(directory, "image_tgid_*"))
-    file_dict = {}
-    for path in tqdm(file_paths):
-        base = os.path.basename(path)
-        if "tgid_" in base:
-            try:
-                tgid = int(base.split("tgid_")[1].split("_")[0])
-                file_dict[tgid] = path
-            except:
-                continue
-    return file_dict
 
     
-def parallel_run(target_list, n_processes=None):
-    """
-    Runs get_image_path in parallel.
+def add_imgpath_to_catalog(org_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v3.fits", new_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v3_logm9.fits"):
     
-    Parameters:
-        - target_list: List of (tgid, ra, dec) tuples.
-        - n_processes: Number of parallel processes (default: number of CPUs).
-    """
-    # all_inputs = list(tqdm(pool.imap(produce_input_dicts, all_ks_i), total = len(all_ks_i)  ))
-
-    good_dict = preload_file_dict(img_good_path)
-    shred_dict = preload_file_dict(img_shred_path)
-
-    with Pool(processes=n_processes or cpu_count(), initializer=init_session, initargs=(good_dict, shred_dict) ) as pool:
-        results = list(tqdm(pool.imap(get_image_path, target_list), total=len(target_list)))
-
-    ##this is then added to the catalog and saved!
-    return np.array(results)
-
-    
-def add_imgpath_to_catalog():
     '''
     This function adds the image path as a column to a given catalog
     '''

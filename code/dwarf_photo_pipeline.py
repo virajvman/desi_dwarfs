@@ -1,3 +1,11 @@
+'''
+The different things that are parallelized:
+
+When creating the relevant_files_for_aper
+
+1) The creating 
+
+'''
 import numpy as np
 import astropy.io.fits as fits
 import matplotlib as mpl
@@ -21,11 +29,14 @@ import matplotlib.patches as patches
 from scarlet_photo import run_scarlet_pipe
 from aperture_photo import run_aperture_pipe
 # from get_sga_distances import get_sga_info
-from desi_lowz_funcs import save_subimage, fetch_psf, generate_random_string
+from desi_lowz_funcs import save_subimage, fetch_psf, generate_random_string, add_paths_to_catalog, save_cutouts
 from desiutil import brick
 import fitsio
 from easyquery import Query, QueryMaker
 import shutil
+from process_tractors import get_nearby_source_catalog, are_more_bricks_needed, return_sources_wneigh_bricks, read_source_pzs, read_source_cat
+from functools import partial
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def parse_tgids(value):
     if not value:
@@ -62,227 +73,6 @@ def argument_parser():
 
     return result
 
-def save_cutouts(ra,dec,img_path,session, size=350, timeout = 30):
-    url = url_prefix + f'cutout.fits?ra={ra}&dec={dec}&size=%s&'%size
-
-    url += 'layer=ls-dr9&pixscale=0.262&bands=grz'
-
-    try:
-        resp = session.get(url, timeout=timeout)
-        resp.raise_for_status()  # Raise error for bad status codes
-        # Save the FITS file
-        with open(img_path, "wb") as f:
-            f.write(resp.content)
-    
-        #load the wcs and image data
-        # img_data = fits.open(img_path)
-        # data_arr = img_data[0].data
-        # wcs = WCS(fits.getheader( img_path ))
-    except:
-        print("getting coadd image data failed!")
-        print(url)
-    
-    return
-
-
-def get_nearby_source_catalog(ra_k, dec_k, wcat, brick_i, save_path_k, source_cat, source_pzs,save=True,primary=True):
-    '''
-    Function that gets source catalog within 45 arcsec radius of object
-    primary = True if ra_k,dec_k are the main source. If False, then this function is just being used to get the relevant files!
-    '''
-
-    #define the center.see the nearby dwarf catalog mISTY ipynb for a visual confirmation
-    center = SkyCoord(ra=ra_k * u.deg, dec=dec_k * u.deg)
-    # Define the source catalog coordinates
-    source_coords = SkyCoord(ra=source_cat["ra"] * u.deg,
-                             dec=source_cat["dec"] * u.deg)
-    # Compute angular separation
-    separation = source_coords.separation(center)
-    # Select sources within 45 arcsec
-    within_45arcsec = separation < 45 * u.arcsec
-    source_cat_f = source_cat[within_45arcsec]
-    
-    if primary == False and len(source_cat_f) == 0:
-        #we have to do this because is it not possible to join empty tables
-        #if no sources are find, then we just return None. So we know that no sources are supposed to be added!
-        return None
-
-    #rename columns
-    source_cat_f.rename_column("brickid","BRICKID" )
-    source_cat_f.rename_column("objid","OBJID" )
-
-    ## unique identifier hash is RELEASE,BRICKID,OBJID.
-    # Perform the join operation on 'brickid' and 'objid'
-    source_cat_f = join(source_cat_f, source_pzs, keys=['BRICKID', 'OBJID'], join_type='inner')
-
-    for BAND in ("g", "r", "z"):
-            source_cat_f[f"sigma_{BAND}"] = source_cat_f[f"flux_{BAND}"] * np.sqrt(source_cat_f[f"flux_ivar_{BAND}"])
-    for BAND in ("g", "r", "z"):
-            source_cat_f[f"mag_{BAND}"] = 22.5 - 2.5*np.log10(source_cat_f[f"flux_{BAND}"])
-
-    #filtering to ensure the source is detected at 5 sigma atleast in one band
-    source_cat_f = source_cat_f[ (source_cat_f["sigma_r"] > 5) | (source_cat_f["sigma_g"] > 5) | (source_cat_f["sigma_z"] > 5) ]
-
-    ##compute some color information and errors on source of interest
-    source_cat_f["g-r"] = source_cat_f["mag_g"] - source_cat_f["mag_r"]
-    source_cat_f["r-z"] = source_cat_f["mag_r"] - source_cat_f["mag_z"]
-
-    for BAND in ("g","r","z"):
-        ##compute the errors in the mag assuming they are small :) 
-        source_cat_f[f"mag_{BAND}_err"] = 1.087*(np.sqrt(1/source_cat_f[f"flux_ivar_{BAND}"]) / source_cat_f[f"flux_{BAND}"]) 
-    
-    
-    source_cat_f["g-r_err"] = np.sqrt(  source_cat_f["mag_g_err"]**2 + source_cat_f["mag_r_err"]**2)
-    source_cat_f["r-z_err"] = np.sqrt(  source_cat_f["mag_r_err"]**2 + source_cat_f["mag_z_err"]**2)
-
-    #remove if there are any nans in the data!
-    source_cat_f = source_cat_f[ ~np.isnan(source_cat_f["g-r_err"]) &  ~np.isnan(source_cat_f["r-z_err"]) & ~np.isnan(source_cat_f["g-r"]) &  ~np.isnan(source_cat_f["r-z"])  ]
-
-    if primary:
-        #if we are working in the brick where the primary source is!
-        ##however, if the source object is not in this (for eg. ELGs) we add it back
-        #find difference between source and all the other catalog objects
-        ref_coord = SkyCoord(ra=ra_k * u.deg, dec=dec_k * u.deg)
-        
-        catalog_coords = SkyCoord(ra=source_cat_f["ra"].data * u.deg, dec=source_cat_f["dec"].data * u.deg)
-        # Compute separations
-        
-        separations = ref_coord.separation(catalog_coords).arcsec
-        
-        source_cat_obs = source_cat_f[np.argmin(separations)]
-        
-        if np.min(separations) != 0:
-            #the source we pointed at has been removed
-            tgt_source = source_cat[ (source_cat["ra"] == ra_k) & (source_cat["dec"] == dec_k) ]
-            if len(tgt_source) == 0:
-                #hmm no target source found?
-                print(ra_k, dec_k)
-                print("Hmm. The target source was not found.")
-            source_cat_f = vstack( [source_cat_f,  tgt_source ] )
-        else:
-            pass    
-    else:
-        pass
-    
-    #save this file
-    if save:
-        source_cat_f.write(save_path_k + "/source_cat_f.fits",overwrite=True)
-        return
-    else:
-        return source_cat_f
-
-#the legacy survey definition of brick
-bricks = brick.Bricks(bricksize=0.25)
-
-def bricks_overlapping_circle(ra_center, dec_center, radius_arcsec, n_points=16):
-    '''
-    This function figures out the bricks that are overlapping a given circle. It also returns the ra,decs that were used to compute this!
-    '''
-    center = SkyCoord(ra=ra_center*u.deg, dec=dec_center*u.deg)
-    radius = radius_arcsec * u.arcsec
-
-    # Sample positions around the circle
-    theta = np.linspace(0, 2*np.pi, n_points, endpoint=False)
-    perimeter_coords = center.directional_offset_by(position_angle=theta*u.rad, separation=radius)
-
-    # Combine center + perimeter points into one SkyCoord array
-    all_coords = SkyCoord(
-        ra=np.concatenate(([center.ra.deg], perimeter_coords.ra.deg)) * u.deg,
-        dec=np.concatenate(([center.dec.deg], perimeter_coords.dec.deg)) * u.deg
-    )
-
-    bricknames = bricks.brickname(all_coords.ra.deg, all_coords.dec.deg)
-
-    #this will be of length 16 and has not been filtered to be unique!
-    return bricknames, all_coords.ra.deg, all_coords.dec.deg
-    
-
-def are_more_bricks_needed(ra,dec,radius_arcsec = 45):
-
-    brick_names, all_ras, all_decs = bricks_overlapping_circle(ra, dec, radius_arcsec, n_points=16 )
-
-    #get the relevant wcats and sweeps for this ra,dec!
-    is_souths = is_target_in_south(all_ras,all_decs).astype(int)
-    all_wcats = np.array(["north","south"])
-    neigh_wcats = all_wcats[is_souths]
-
-    neigh_sweeps = []
-    for i in range(len(all_ras)):
-        neigh_sweeps.append( get_sweep_filename( all_ras[i], all_decs[i] )  )
-    neigh_sweeps = np.array(neigh_sweeps)
-        
-    #this is the original brick that contains the center
-    brick_org = bricks.brickname(ra, dec)
-
-    #also return the indices that make the array unique
-    brick_uniqs, uni_inds = np.unique(brick_names, return_index = True)
-    #use those indices to get the corresponding wcat values
-    wcat_uniqs = neigh_wcats[uni_inds]
-    sweeps_uniqs = neigh_sweeps[uni_inds]
-
-    #get the bricks that are not the center one!
-    neigh_bricks = brick_uniqs[brick_uniqs != brick_org]
-    neigh_wcats = wcat_uniqs[brick_uniqs != brick_org]  
-    neigh_sweeps = sweeps_uniqs[brick_uniqs != brick_org] 
-    
-    return neigh_bricks, neigh_wcats, neigh_sweeps
-
-
-def get_neighboring_bricks(ra, dec, neigh_bricks ,neigh_wcats, neigh_sweeps):
-    '''
-    In this function, we check if a given source and the region of interest around it is fully contained in one brick or not.
-    size is the radius of the circular region of interest in arcseconds
-    '''
-
-    #we are sitting at the boundary of multiple bricks! We will load each brick and perform the same cut!
-    #is there an issue if I am sitting at the edge of north and south? What about the edge of a sweep?
-    ## TO DO: ADD THE EDGE CASE WHERE WE ARE AT THE EDGE OF A SWEEP AS WELL
-    # print_stage("%f, %f, We are sitting at the edge of more than 1 brick! Reading %d neighboring bricks"%(ra,dec, len(brick_uniqs) - 1) )
-
-    new_sources = []
-
-    for i,nbi in enumerate(neigh_bricks):
-        source_cat_i  = read_source_cat(neigh_wcats[i], nbi)
-
-        #read the corresponding pzs of this object?
-        source_pzs_i = read_source_pzs(neigh_wcats[i],neigh_sweeps[i])
-
-        source_cat_i = get_nearby_source_catalog(ra, dec, neigh_wcats[i], nbi, None, source_cat_i, source_pzs_i, save=False,primary=False)
-        # print("%d objects read from the one of the neighboring bricks"%len(source_cat_i))
-        if source_cat_i is not None:
-            new_sources.append(source_cat_i)
-
-    #stack'em all!
-    if new_sources == []:
-        return None
-    else:
-        new_sources = vstack(new_sources)
-        #this will be the list of additional sources that will be tacked onto the existing source file!
-        return new_sources
-
-
-def return_sources_wneigh_bricks(save_path, ra, dec, more_bricks, more_wcats, more_sweeps):
-    '''
-    Function that saves the final source cat file that consolidates sources from the other bricks
-    '''
-    source_cat_f = Table.read(save_path + "/source_cat_f.fits")
-    #neighboring bricks are needed
-    # if os.path.exists(save_path_k + "/source_cat_f_more.fits"):
-        
-    #     #the combined bricks file already exists
-    #     source_cat_f = Table.read( save_path_k + "/source_cat_f_more.fits"  )
-    # else:
-    #the combined brick file is being made!
-    source_cat_more = get_neighboring_bricks(ra, dec, more_bricks,more_wcats, more_sweeps)
-
-    if source_cat_more is not None:
-        source_cat_f = vstack([source_cat_f, source_cat_more])
-    else:
-        pass
-
-    source_cat_f.write(save_path + "/source_cat_f_more.fits",overwrite=True)
-
-    return
 
 def get_relevant_files_scarlet(input_dict):
     '''
@@ -340,23 +130,17 @@ def get_relevant_files_aper(input_dict):
     wcat = input_dict["wcat"]
     source_pzs_i = input_dict["source_pzs_i"]
     source_cat = input_dict["source_cat"]
-    session = input_dict["session"]
     
-    top_path_k = top_folder + "/%s/"%wcat + sweep_folder + "/" + brick_i + "/%s_tgid_%d"%(samp_k, tgid_k)
+    # top_path_k = top_folder + "/%s/"%wcat + sweep_folder + "/" + brick_i + "/%s_tgid_%d"%(samp_k, tgid_k)
+    top_path_k = f"{top_folder}/{wcat}/{sweep_folder}/{brick_i}/{samp_k}_tgid_{tgid_k}"
 
-    print(top_path_k)
+    # print(top_path_k)
 
     check_path_existence(all_paths=[top_path_k])
     #inside this folder, we will save all the relevant files and info!!
     image_path =  top_folder + "_cutouts/image_tgid_%d_ra_%f_dec_%f.fits"%(tgid_k,ra_k,dec_k)
-
-    ## save the source catalog 
-    # if os.path.exists(top_path_k + "/source_cat_f.fits"):
-    #     pass
-    # else:
-
-    #TODO: ADD FEATURE TO REMOVE ALL THE PREVIOUS SOURCE FILE IN CASES THAT CREATES CONFUSION
     
+
     get_nearby_source_catalog(ra_k, dec_k, wcat, brick_i, top_path_k, source_cat, source_pzs_i)
     
     ## check if the source is at the edge of the brick, if so we will need to combine stuff
@@ -366,7 +150,7 @@ def get_relevant_files_aper(input_dict):
         #there are no neighboring bricks needed
         pass
     else:
-        return_sources_wneigh_bricks(top_path_k, ra_k, dec_k, more_bricks, more_wcats, more_sweeps)
+        return_sources_wneigh_bricks(top_path_k, ra_k, dec_k, more_bricks, more_wcats, more_sweeps,use_pz = False)
         
 
     if os.path.exists(image_path):
@@ -385,7 +169,11 @@ def get_relevant_files_aper(input_dict):
             shutil.copy(image_path_other, image_path)
         else:
             #we need to obtain the cutout data!
-            save_cutouts(ra_k,dec_k,image_path,session,size=350)
+
+            #as we are multi-threading the processing for each galaxy, and sessions are not thread safe
+            #we will be creating a session per image and then closing it right away!
+            with requests.Session() as session:
+                save_cutouts(ra_k, dec_k, image_path, session, size=350)
         
     ##done saving all the files!
     return
@@ -427,17 +215,6 @@ def make_clean_shreds_catalogs():
     clean_mask_bgsf = (~bgsf_mask)
     clean_mask_elg = (~elg_mask)
     clean_mask_lowz = (~lowz_mask)
-    
-
-    ## what is correct fracflux limit
-    ## I want to use the fraflux limit for z<0.05, not really needed for z>0.05 objects
-    # fracflux_limit = 0.15
-    
-    # clean_mask_bgsb = (bgsb_list["FRACFLUX_R"] < fracflux_limit) & (bgsb_list["FRACFLUX_G"] < fracflux_limit) & (bgsb_list["FRACFLUX_Z"] < fracflux_limit)
-    # clean_mask_bgsf = (bgsf_list["FRACFLUX_R"] < fracflux_limit) & (bgsf_list["FRACFLUX_G"] < fracflux_limit) & (bgsf_list["FRACFLUX_Z"] < fracflux_limit)
-    # clean_mask_elg = (elg_list["FRACFLUX_R"] < fracflux_limit) & (elg_list["FRACFLUX_G"] < fracflux_limit) & (elg_list["FRACFLUX_Z"] < fracflux_limit)
-    # clean_mask_lowz = (lowz_list["FRACFLUX_R"] < fracflux_limit) & (lowz_list["FRACFLUX_G"] < fracflux_limit) & (lowz_list["FRACFLUX_Z"] < fracflux_limit)
-    
     
     ##construct the clean catalog
     ## to make things easy in the cleaning stage, we will use the optical based colors
@@ -591,8 +368,6 @@ def make_clean_shreds_catalogs():
         shred_frac_all_elg.append(   get_shred_frac(all_list, "ELG",zlow, zhi, mask_shred)  ) 
         shred_frac_all_lowz.append(   get_shred_frac(all_list, "LOWZ",zlow, zhi, mask_shred)  ) 
         
-
-
     bgs_col = "#648FFF" #DC267F
     lowz_col = "#DC267F"
     elg_col = "#FFB000"
@@ -619,52 +394,65 @@ def make_clean_shreds_catalogs():
         
     return 
 
-   
-def read_source_cat(wcat, brick_i):
+
+
+def create_brick_jobs(brick_i, shreds_focus_w, wcat, top_folder):
     '''
-    Given north/south and brick name, read the corresponding source catalog!
+    In this function, we parallelize the reading of the source cat and creation of the galaxy dicts!!
+    We will be multi-threading here so it will share the memory of shreds_focus_w catalog!!
+
+    The brick_i is the only variable that is changing, the others can be kept constant over north/south                 
     '''
-    #read the source catalog for this brick
-    if "p" in brick_i:
-        brick_folder = brick_i[:brick_i.find("p")-1]
-    else:
-        brick_folder = brick_i[:brick_i.find("m")-1]
 
+    source_cat = read_source_cat(wcat, brick_i)
 
-    imp_cols = ["ra","dec","ref_cat","type","pmra","pmdec","pmra_ivar","pmdec_ivar", "brickid", "objid", "gaia_phot_bp_mean_mag", "gaia_phot_rp_mean_mag", "gaia_phot_g_mean_mag"]
+    #select galaxies corresponding to this brick!!
+    shreds_focus_brick_i = shreds_focus_w[shreds_focus_w["BRICKNAME"] == brick_i]
 
+    # Prepare input dictionaries
+    brick_dicts = []
 
-    #these other cols are for the source model reconstruction
-    other_cols = ['bx', 'by', 'ref_id',
-        'sersic', 'shape_r', 'shape_e1', 'shape_e2',
-        'nobs_g', 'nobs_r', 'nobs_z',
-        'psfdepth_g', 'psfdepth_r', 'psfdepth_z',
-        'psfsize_g', 'psfsize_r', 'psfsize_z']
+    #usually there are not that many galaxies in a brick so this is fast for-loop
+    for i in range(len(shreds_focus_brick_i)):
 
-    include_cols = imp_cols + other_cols
-    
-    for bi in "grz":
-        include_cols.append( "flux_%s"%bi )
-        include_cols.append( "flux_ivar_%s"%bi )
-        include_cols.append( "mw_transmission_%s"%bi )
-        include_cols.append( "fracflux_%s"%bi )
+        sweep_i = shreds_focus_brick_i["SWEEP"][i]
+        sweep_folder = sweep_i.replace("-pz.fits", "")
+
+        galaxy_dict = {
+            "TARGETID": shreds_focus_brick_i["TARGETID"][i],
+            "SAMPLE": shreds_focus_brick_i["SAMPLE"][i],
+            "RA": shreds_focus_brick_i["RA"][i],
+            "DEC": shreds_focus_brick_i["DEC"][i],
+            "Z": shreds_focus_brick_i["Z"][i],
+            "OBJID": shreds_focus_brick_i["OBJID"][i],
+            "wcat": wcat,
+            "brick_i": brick_i,
+            "sweep_folder": sweep_folder,
+            "top_folder": top_folder,
+            "source_cat": source_cat,
+            "source_pzs_i": None
+        }
         
-    ## only read the columns I need
-    source_cat = Table(fitsio.read("/global/cfs/cdirs/cosmo/data/legacysurvey/dr9/%s/tractor/%s/tractor-%s.fits"%(wcat, brick_folder,brick_i), columns = include_cols  ))
+        brick_dicts.append(galaxy_dict)
 
-    return source_cat
+    #brick_dicts is a list of dictionaries where one dictionary corresponds to one galaxy!
 
+    return brick_dicts
+    
 
-def read_source_pzs(wcat, sweep_i):
+def process_bricks_parallel(brick_dict):
     '''
-    Function that reads the source photo-zs sweeps. sweep_i is taken from the "SWEEP" columns in the catalog
+    This function takes in a single list of dictionaries (brick_dict) corresponding to all galaxies in that brick!!
     '''
-    include_cols = ["Z_PHOT_L95", "Z_PHOT_U95","Z_PHOT_L68", "Z_PHOT_U68", "Z_PHOT_STD", "Z_PHOT_MEAN", "BRICKID", "OBJID"]
-    source_pzs_i = Table(fitsio.read( "/global/cfs/cdirs/cosmo/data/legacysurvey/dr9/%s/sweep/9.1-photo-z/"%wcat + sweep_i, columns = include_cols))
 
-    return source_pzs_i
-
-
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        #if there are a lot of galaxies then only we use tqdm!
+        if len(brick_dict) > 50:
+             list(tqdm(executor.map(get_relevant_files_aper, brick_dict), total=len(brick_dict), desc=f"Galaxies in brick {brick_dict[0]['brick_i']}" ) )
+        else:
+            list(executor.map(get_relevant_files_aper, brick_dict))
+       
+    
 if __name__ == '__main__':
 
     import warnings
@@ -754,20 +542,48 @@ if __name__ == '__main__':
 
     #information on sga and bright stars is added in the above function
 
+    ##add the columns on image path and file_path to these catalogs!!
+    shreds_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v3.fits"
+    clean_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v3.fits"
+
+    if use_clean == False:
+        top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds"
+    else:
+        top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_good"
+
+    shreds_cat = Table.read(shreds_file)
+    clean_cat = Table.read(clean_file)
+    
+    if "IMAGE_PATH" in shreds_cat.colnames and "FILE_PATH" in shreds_cat.colnames:
+        print("image_path and file_path columns already exist in shreds catalog!")        
+    else:
+        print("Adding image_path and file_path to shreds catalog!")
+        
+        add_paths_to_catalog(org_file = shreds_file, out_file = shreds_file,top_folder=top_folder)
+        #add those two paths to the file!
+
+    if "IMAGE_PATH" in clean_cat.colnames and "FILE_PATH" in clean_cat.colnames:
+        print("image_path and file_path columns already exist in clean catalog!")
+    else:
+        print("Adding image_path and file_path to clean catalog!")
+        add_paths_to_catalog(org_file = clean_file, out_file = clean_file,top_folder=top_folder)
+
+    #delete these variables as no longer needed!
+    del shreds_cat, clean_cat
+    
     ##################
     ##PART 2: Generate nested folder structure with relevant files for doing photometry
     ##################
 
-    # creating a single session!
-    session = requests.Session()
-
     ##load the relevant catalogs!
     if use_clean==False:
-        shreds_all = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v3.fits")
+        shreds_all = Table.read(shreds_file)
         # shreds_all = shreds_all[  shreds_all["SGA_D26_NORM_DIST"] > 1.5 ]
     else:
-        shreds_all = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v3.fits")
+        shreds_all = Table.read(clean_file)
 
+    ##let us do a quick tally on how many of the image paths are blank! that is, they need new image paths!
+    print("In this catalog, " + str(len(shreds_all[shreds_all['IMAGE_PATH'] == ""])) + " objects do not have image paths!")
     
     ## filtering for the sample now 
     if sample_list:
@@ -803,95 +619,63 @@ if __name__ == '__main__':
     
         print("Number of objects whose photometry will be redone = ", len(shreds_focus) )
     
-        if use_clean == False:
-            top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds"
-        else:
-            top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_good"
-            
-        print(len(shreds_focus[shreds_focus["is_south"] == 1]))
-        print(len(shreds_focus[shreds_focus["is_south"] == 0]))
+        print(f"Number of objects in south: {len(shreds_focus[shreds_focus['is_south'] == 1])}" )
+        print(f"Number of objects in north: {len(shreds_focus[shreds_focus['is_south'] == 0])}" )
+        
+        ##I do not need the photo-z file and so we will not bother loading it!
     
         for wcat_ind, wcat in enumerate(["north","south"]):
             check_path_existence(all_paths=[top_folder + "/%s"%wcat])
 
+            #if we are not using the photo-z file, we can parallize directly over the bricks!
+
             ##we can invert this if we want to make sure all cats are being made without long code times
             unique_sweeps = np.unique( shreds_focus[shreds_focus["is_south"] == wcat_ind]["SWEEP"])
             print(len(unique_sweeps), f"unique sweeps found in {wcat}")
+
+            shreds_focus_w = shreds_focus[(shreds_focus["is_south"] == wcat_ind)]
     
-            #this is just to make sure the very end sweeps have their files made as well
-            # unique_sweeps = unique_sweeps[::-1]
-    
-            #counter for number of sweeps done
-            sweeps_done=0
+            unique_bricks_w = np.unique(shreds_focus_w["BRICKNAME"])
+
+            print(f"{len(unique_bricks_w)} unique bricks found in {wcat}")
+            print(f"{len(shreds_focus_w)} number of galaxies found in {wcat}")
+
+            ##this is the number of bricks we will process at one time!
+            brick_chunk = 256
             
-            for sweep_i in unique_sweeps:
+            print(f"Bricks will be processed in chunks of {brick_chunk}")
+
+            #the number of brick jobs we have to process
+            num_bricks = len(unique_bricks_w)
+
+             # Fix everything except brick_i
+            create_brick_jobs_fixed = partial(create_brick_jobs, shreds_focus_w=shreds_focus_w, wcat=wcat, top_folder=top_folder)
+
+            for min_brick_id in trange(0, num_bricks, brick_chunk):
+                #get the relevant brick names in this chunk
+                unique_bricks_chunki = unique_bricks_w[ min_brick_id : min_brick_id + brick_chunk]
+
+                # with ThreadPoolExecutor(max_workers=64) as executor:
+                    # all_brick_jobs = list(tqdm( executor.map(create_brick_jobs_fixed, unique_bricks_chunki),
+                    #                            total=len(unique_bricks_chunki),
+                    #                             desc="Creating brick jobs!"   ) )
                 
-                print(f"Sweeps done = {sweeps_done}/{len(unique_sweeps)}")
-                sweeps_done += 1
-                #make a sweep folder if it does not exist
-                sweep_folder = sweep_i.replace("-pz.fits","")
-                check_path_existence(all_paths=[top_folder + "/%s/"%wcat + sweep_folder ])
+                #we do not care about the order in the brick jobs!!
+                all_brick_jobs = []
+                with ThreadPoolExecutor(max_workers=64) as executor:
+                    futures = [executor.submit(create_brick_jobs_fixed, brick_i) for brick_i in unique_bricks_chunki]
                 
-                ##load the relevant sweep photo-z file
-                #only read the relevant columns of interest!
-                source_pzs_i = read_source_pzs(wcat, sweep_i)
-                
-                #get all the galaxies that fall in this sweep
-                shreds_focus_i = shreds_focus[(shreds_focus["SWEEP"] == sweep_i) & (shreds_focus["is_south"] == wcat_ind)]
-        
-                #get all the unique brick names for this source
-                brick_names_i = np.unique( shreds_focus_i["BRICKNAME"] )
-    
-                ## for a given sweep can we parallelize this??
-                print("Total number of bricks in this sweep = ", len(brick_names_i) )
-                print("Total number of galaxies in this sweep = ", len(shreds_focus_i) )
+                    for future in tqdm(as_completed(futures), total=len(futures), desc="Creating brick jobs!"):
+                        all_brick_jobs.append(future.result())
 
-                ##prepare all inputs now!
-    
-                all_source_cats = {}
-    
-                #looping over all the bricks and saving the source cat files!
-                for brick_i in tqdm(brick_names_i):
-                    #make a folder for each brick
-                    check_path_existence(all_paths=[top_folder + "/%s/"%wcat + sweep_folder  + "/" + brick_i])
-    
-                    #inside this brick folder, we will have folders for each galaxy then
-    
-                    shreds_focus_ij = shreds_focus_i[ shreds_focus_i["BRICKNAME"] == brick_i]
-    
-                    #read the source catalog for this brick
-                    source_cat = read_source_cat(wcat, brick_i)
-                    
-                    all_source_cats[brick_i] = source_cat
-
-
-                ## so not how what is made parallel here is per galaxy
-                ## what happens if I make the parallel the bricks themselves and the galaxies in each brick are serial
-                ## As I have more galaxies than bricks? This does not make sense?
-    
-                #list of dictionaries
-                all_input_dicts = []
-    
-                ##looping over all the galaxies in this sweep file to get get the input dict file
-                for i in range(len(shreds_focus_i)):
-                    temp = { "TARGETID": shreds_focus_i["TARGETID"][i], "SAMPLE": shreds_focus_i["SAMPLE"][i], "RA": shreds_focus_i["RA"][i], 
-                            "DEC": shreds_focus_i["DEC"][i], "Z": shreds_focus_i["Z"][i], "OBJID": shreds_focus_i["OBJID"][i],
-                            "wcat":wcat, "brick_i":shreds_focus_i["BRICKNAME"][i], "sweep_folder":sweep_folder, "top_folder":top_folder,
-                            "source_cat" : all_source_cats[ shreds_focus_i["BRICKNAME"][i] ], "source_pzs_i": source_pzs_i, 
-                           "session":session }
-    
-                    all_input_dicts.append(temp)
-    
-                ## get the relevant files for the the 
-                # with mp.Pool(processes=ncores) as pool:
-                #     results = list(tqdm(pool.imap(get_relevant_files_aper, all_input_dicts), total = len(all_input_dicts)  ))
-
-                #as we are not returning anything, this is faster than pool.imap
+                                          
+                ##all_brick_jobs is the list we will be sending to different cores. One item is this list corresponds to list of all galaxies in a single brick!
+            
+                ##each brick will be processed on a core, and within each brick, the galaxies will be multi-threading!
                 with mp.Pool(processes=ncores) as pool:
-                    pool.map_async(get_relevant_files_aper, all_input_dicts)
-                    pool.close()
-                    pool.join()
-                     
+                    results = list(tqdm(pool.imap(process_bricks_parallel, all_brick_jobs), total=len(all_brick_jobs), desc="Bricks"))
+
+
     ##################
     ##PART 3: Preparing inputs for the aperture and/or scarlet photometry functions
     ##################
@@ -971,7 +755,8 @@ if __name__ == '__main__':
     
             ## check if the source is at the edge of the brick, if so we will need to combine stuff
             more_bricks, more_wcats, more_sweeps = are_more_bricks_needed(ra_k,dec_k,radius_arcsec = 45)
-            
+
+            ##SPEED THE READING OF THIS CATALOG !
             if len(more_bricks) == 0:
                 #there are no neighboring bricks needed
                 source_cat_f = Table.read(save_path_k + "/source_cat_f.fits")
@@ -982,7 +767,7 @@ if __name__ == '__main__':
                    ##this means that there this source was missed!
                     print_stage("Multiple bricks are intersecting and was not accounted for. Getting all the sources now!")
                     
-                    return_sources_wneigh_bricks(save_path_k, ra_k, dec_k, more_bricks, more_wcats, more_sweeps)
+                    return_sources_wneigh_bricks(save_path_k, ra_k, dec_k, more_bricks, more_wcats, more_sweeps,use_pz = False)
                     source_cat_f = Table.read(save_path_k + "/source_cat_f_more.fits")
             
                 
@@ -1122,7 +907,7 @@ if __name__ == '__main__':
                 shreds_focus_i["MAG_Z_APERTURE"] = final_new_mags[:,2]
                 
                 shreds_focus_i["SAVE_PATH"] = final_save_paths 
-                shreds_focus_i["IMAGE_PATH"] = all_data_paths
+                shreds_focus_i["FITS_PATH"] = all_data_paths
                 
                 shreds_focus_i["APER_BKG_ESTIMATED"] = bkg_estimated
             

@@ -59,20 +59,20 @@ def mask_radius_for_mag(mag):
     return 1630./3600. * 1.396**(-mag)
 
 
-def fetch_noise(ra, dec,size = 300):
-    """
-    Returns the noise matrix per pixel level. Use to compute errors!
-    """
-    url = url_prefix + f'cutout.fits?ra={ra}&dec={dec}&'
+# def fetch_noise(ra, dec,size = 300):
+#     """
+#     Returns the noise matrix per pixel level. Use to compute errors!
+#     """
+#     url = url_prefix + f'cutout.fits?ra={ra}&dec={dec}&'
     
-    url += 'layer=ls-dr9&size=%d&subimage'%size
-    print(url)
-    session = requests.Session()
-    resp = session.get(url)
-    cutout = fits.open(BytesIO(resp.content))
-    # ## THIS IS WORKING BUT NEED TO FIGURE OUT WHY THE ARRAY IS ALWAYS SMALLER...
-    # noise_image = {'g'}
-    # return noise_image
+#     url += 'layer=ls-dr9&size=%d&subimage'%size
+#     print(url)
+#     session = requests.Session()
+#     resp = session.get(url)
+#     cutout = fits.open(BytesIO(resp.content))
+#     # ## THIS IS WORKING BUT NEED TO FIGURE OUT WHY THE ARRAY IS ALWAYS SMALLER...
+#     # noise_image = {'g'}
+#     # return noise_image
 
 def mask_circle(array, x0, y0, r,value = 0):
     '''

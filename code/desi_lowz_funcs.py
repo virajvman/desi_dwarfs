@@ -17,6 +17,10 @@ import multiprocessing as mp
 import string
 from PIL import Image
 from pathlib import Path
+import glob
+url_prefix = 'https://www.legacysurvey.org/viewer/'
+import requests
+from io import BytesIO
 
 c_light = 299792 #km/s
 filler_sga_ind = 999999
@@ -1278,5 +1282,158 @@ def save_subimage(ra, dec, sbimg_path, session, size = 350, timeout = 30):
     except:
         print("getting sub image data failed!")
         
+    return
+
+
+
+
+
+## below are functions used to curate the dataset, and add the image paths to catalog for ease!
+
+img_good_path = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_good_cutouts"
+img_shred_path = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds_cutouts"
+
+# NOTE: requests.Session() is not picklable, so we'll initialize it inside the subprocess.
+def init_session(good_files, shred_files):
+    global session, good_dict, shred_dict
+    session = requests.Session()
+    good_dict = good_files
+    shred_dict = shred_files
+
+
+## construct the dictionary
+def preload_file_dict(directory):
+    """
+    Load all filenames in a directory and map tgid -> filepath.
+    Assumes filenames contain 'tgid_1234567890' or similar.
+    """
+    file_paths = glob.glob(os.path.join(directory, "image_tgid_*"))
+    file_dict = {}
+    for path in tqdm(file_paths):
+        base = os.path.basename(path)
+        if "tgid_" in base:
+            try:
+                tgid = int(base.split("tgid_")[1].split("_")[0])
+                file_dict[tgid] = path
+            except:
+                continue
+    return file_dict
+
+
+def get_image_path(args):
+    tgid, ra, dec = args
+    top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_good"
+
+    if tgid in good_dict:
+        return good_dict[tgid]
+    elif tgid in shred_dict:
+        return shred_dict[tgid]
+    else:
+        image_path = f"{top_folder}_cutouts/image_tgid_{tgid}_ra_{ra:.6f}_dec_{dec:.6f}.fits"
+        save_cutouts(ra, dec, image_path, session, size=350, timeout=30)
+        if os.path.exists(image_path):
+            return image_path
+        else:
+            return None
+
+def parallel_run(target_list, n_processes=None):
+    """
+    Runs get_image_path in parallel.
+    
+    Parameters:
+        - target_list: List of (tgid, ra, dec) tuples.
+        - n_processes: Number of parallel processes (default: number of CPUs).
+    """
+    # all_inputs = list(tqdm(pool.imap(produce_input_dicts, all_ks_i), total = len(all_ks_i)  ))
+
+    good_dict = preload_file_dict(img_good_path)
+    shred_dict = preload_file_dict(img_shred_path)
+
+    with mp.Pool(processes=n_processes or cpu_count(), initializer=init_session, initargs=(good_dict, shred_dict) ) as pool:
+        results = list(tqdm(pool.imap(get_image_path, target_list), total=len(target_list)))
+
+    ##this is then added to the catalog and saved!
+    return np.array(results)
+
+
+def add_paths_to_catalog(org_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v3.fits", out_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v3_logm9.fits",top_folder=None):
+    
+    '''
+    In this function, we add the image path and file path to the catalog for ease!
+
+    top_folder is the main directory that contains the good objects or shred objects!
+    '''
+
+    dwarf_cat = Table.read(org_file)
+
+
+    print("Adding image paths!")
+    target_list = []
+    all_tgids  = dwarf_cat["TARGETID"].data
+    all_ras  = dwarf_cat["RA"].data
+    all_decs  = dwarf_cat["DEC"].data
+    
+    for i in trange(len(dwarf_cat)):
+        target_list.append( ( all_tgids[i], all_ras[i], all_decs[i] )  )
+
+    all_image_paths = parallel_run(target_list, n_processes=64)
+
+    print(len(all_image_paths), len(target_list), len(dwarf_cat))
+
+    #filling in Nones with blank filler values
+    all_image_paths[all_image_paths == None] = ""
+
+    #converting to same dtype!
+    all_image_paths = all_image_paths.astype(str)
+
+    dwarf_cat["IMAGE_PATH"] = all_image_paths
+
+    ##ADD THE FILE PATHS!!
+    print("Adding file paths!")
+
+    all_file_paths = []
+
+    region_labels = np.where(dwarf_cat["is_south"], "south","north")
+
+    for i in trange(len(dwarf_cat)):
+        #the top folder will be added later!
+        wcat_i = region_labels[i]
+        sweep_i = dwarf_cat["SWEEP"][i]
+        sweep_folder = sweep_i.replace("-pz.fits","")
+        brick_i = dwarf_cat["BRICKNAME"][i]
+        sample_i = dwarf_cat["SAMPLE"][i]
+        tgid_i = dwarf_cat["TARGETID"][i]
+    
+        temp_path = f"{top_folder}/{wcat_i}/{sweep_folder}/{brick_i}/{sample_i}_tgid_{tgid_i}"
+        all_file_paths.append(temp_path)
+
+
+    dwarf_cat["FILE_PATH"] = all_file_paths
+    
+    dwarf_cat.write(out_file,overwrite=True)
+    
+    return
+
+
+def save_cutouts(ra,dec,img_path,session, size=350, timeout = 30):
+    url = url_prefix + f'cutout.fits?ra={ra}&dec={dec}&size=%s&'%size
+
+    url += 'layer=ls-dr9&pixscale=0.262&bands=grz'
+
+    try:
+        resp = session.get(url, timeout=timeout)
+        resp.raise_for_status()  # Raise error for bad status codes
+        # Save the FITS file
+        with open(img_path, "wb") as f:
+            f.write(resp.content)
+    
+        #load the wcs and image data
+        # img_data = fits.open(img_path)
+        # data_arr = img_data[0].data
+        # wcs = WCS(fits.getheader( img_path ))
+    except:
+        print("getting coadd image data failed!")
+        print(url)
+    
     return
     
