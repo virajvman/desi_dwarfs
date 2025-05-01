@@ -74,29 +74,3 @@ def parallel_residual(inputs, n_processes=None):
     return np.array(resids)
 
 
-# Autoencoder model
-class ResidualAutoencoder(nn.Module):
-    def __init__(self, input_dim, latent_dim=10):
-        '''
-        The input dimension is the dimension of the 1D spectra residual. So around ~4000.
-        The latent dimension is the dimension we will be compressing it into. 
-        '''
-        super().__init__()
-        self.encoder = nn.Sequential(
-            nn.Linear(input_dim, 256),
-            nn.ReLU(),
-            nn.Linear(256, latent_dim)
-        )
-        self.decoder = nn.Sequential(
-            nn.Linear(latent_dim, 256),
-            nn.ReLU(),
-            nn.Linear(256, input_dim)
-        )
-
-    def forward(self, x):
-        z = self.encoder(x)
-        x_hat = self.decoder(z)
-        return x_hat, z
-
-
-

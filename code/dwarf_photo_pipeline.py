@@ -65,7 +65,6 @@ def argument_parser():
     result.add_argument('-run_aper',dest='run_aper', action='store_true')
     result.add_argument('-run_scarlet',dest='run_scarlet', action='store_true')
     result.add_argument('-nchunks',dest='nchunks', type=int,default = 1)
-    result.add_argument('-no_pz_aper',dest='no_pz_aper', action = "store_true")
     result.add_argument('-no_save',dest='no_save', action = "store_true")
     result.add_argument('-make_main_cats',dest='make_main_cats', action = "store_true")
     result.add_argument('-end_name',dest='end_name', type = str, default = "")
@@ -512,21 +511,22 @@ if __name__ == '__main__':
     end_name = args.end_name
     
     run_w_source = args.run_w_source
-    no_pz_aper = args.no_pz_aper    
     
     run_aper = args.run_aper
     run_scarlet = args.run_scarlet
 
 
     run_own_detect = not run_w_source
-    #whether to use photo-z in separating sources
-    use_pz_aper = not no_pz_aper
+    # #whether to use photo-z in separating sources
+    # use_pz_aper = not no_pz_aper
 
     #this is the flag that is used in the file names 
-    if use_pz_aper:
-        pz_flag = "w_pz"
-    else:
-        pz_flag = "no_pz"
+    # if use_pz_aper:
+    #     pz_flag = "w_pz"
+    # else:
+    #     pz_flag = "no_pz"
+    # pz_flag = "no_pz"
+    # use_pz_aper = False
     
     ## can I come up with a robust way to choose box size?
     box_size = 350
@@ -749,39 +749,28 @@ if __name__ == '__main__':
                     
                 img_path_k = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_good_cutouts/image_tgid_%d_ra_%f_dec_%f.fits"%(tgid_k,ra_k,dec_k) 
     
-    
             if tgids_list is not None:
                 print(save_path_k)
-    
-            ## check if the source is at the edge of the brick, if so we will need to combine stuff
-            more_bricks, more_wcats, more_sweeps = are_more_bricks_needed(ra_k,dec_k,radius_arcsec = 45)
 
-            ##SPEED THE READING OF THIS CATALOG !
-            if len(more_bricks) == 0:
-                #there are no neighboring bricks needed
-                source_cat_f = Table.read(save_path_k + "/source_cat_f.fits")
+            ##read the relevant source catalog files!
+            source_file = save_path_k+"/source_cat_f_more.fits"
+            if os.path.exists(source_file):
+                pass
             else:
-                if os.path.exists(save_path_k + "/source_cat_f_more.fits"):
-                    source_cat_f = Table.read(save_path_k + "/source_cat_f_more.fits")
-                else:
-                   ##this means that there this source was missed!
-                    print_stage("Multiple bricks are intersecting and was not accounted for. Getting all the sources now!")
-                    
-                    return_sources_wneigh_bricks(save_path_k, ra_k, dec_k, more_bricks, more_wcats, more_sweeps,use_pz = False)
-                    source_cat_f = Table.read(save_path_k + "/source_cat_f_more.fits")
-            
-                
-            # if os.path.exists(save_path_k + "/source_cat_f.fits"):
-            #     pass
-            # else:
-            #     print("Source catalog is being downloaded as did not exist!")
-                
-            #     #in case, we have arrived at this point and stil some files are not made, we make them!
-            #     source_pzs_i = Table.read( "/global/cfs/cdirs/cosmo/data/legacysurvey/dr9/%s/sweep/9.1-photo-z/"%wcat_k + sweep_k)
-            #     source_cat_i = read_source_cat(wcat, brick_i)
-                
-            #     get_nearby_source_catalog(ra_k, dec_k, wcat_k, brick_k, save_path_k, source_cat_i, source_pzs_i)
+                source_file = save_path_k + "/source_cat_f.fits"
+
+            source_cat_f = Table.read(source_file)
+
+            ##remove the potential duplicates!
+            coords = np.array(list(zip(source_cat_f["ra"].data, source_cat_f["dec"].data )))
     
+            # Find unique rows based on RA and DEC
+            _, unique_indices = np.unique(coords, axis=0, return_index=True)
+            
+            # Keep only the unique rows
+            source_cat_f = source_cat_f[unique_indices]
+            
+            ##read the relevant image files!!
             if os.path.exists(img_path_k):
                 img_data = fits.open(img_path_k)
                 data_arr = img_data[0].data
@@ -789,7 +778,10 @@ if __name__ == '__main__':
             else:
                 #in case image is not downloaded, we download it!
                 print("Image is being downloaded as did not exist!")
-                save_cutouts(ra_k,dec_k,img_path_k,session,size=350)
+                
+                with requests.Session() as session:
+                    save_cutouts(ra_k,dec_k,img_path_k,session,size=350)
+                    
                 img_data = fits.open(img_path_k)
                 data_arr = img_data[0].data
                 wcs = WCS(fits.getheader( img_path_k ))
@@ -800,7 +792,7 @@ if __name__ == '__main__':
                 # import shutil
                 # shutil.copy(img_path_k, save_path_k + "/")
     
-            temp_dict = {"tgid":tgid_k, "ra":ra_k, "dec":dec_k, "redshift":redshift_k, "save_path":save_path_k, "img_path":img_path_k, "wcs": wcs , "image_data": data_arr, "source_cat": source_cat_f, "index":k , "org_mag_g": shreds_focus["MAG_G"][k], "overwrite": overwrite_bool, "run_own_detect":run_own_detect, "box_size" : box_size, "session":session, "use_photoz": use_pz_aper,
+            temp_dict = {"tgid":tgid_k, "ra":ra_k, "dec":dec_k, "redshift":redshift_k, "save_path":save_path_k, "img_path":img_path_k, "wcs": wcs , "image_data": data_arr, "source_cat": source_cat_f, "index":k , "org_mag_g": shreds_focus["MAG_G"][k], "overwrite": overwrite_bool, "run_own_detect":run_own_detect, "box_size" : box_size,
                         "bright_star_info": (bstar_ra, bstar_dec, bstar_radius, bstar_fdist), "sga_info": (sga_dist, sga_ndist) }
     
             return temp_dict
@@ -850,10 +842,10 @@ if __name__ == '__main__':
             
             if run_aper == True:
         
-                if use_pz_aper:
-                    print_stage("Photo-zs will be used in separating sources")
-                else:
-                    print_stage("Photo-zs will NOT be used in separating sources")
+                # if use_pz_aper:
+                #     print_stage("Photo-zs will be used in separating sources")
+                # else:
+                #     print_stage("Photo-zs will NOT be used in separating sources")
                 
         
                 if run_parr:
@@ -934,9 +926,9 @@ if __name__ == '__main__':
                 #then save this file!
                 if tgids_list is None:
                     if use_clean == False:
-                        file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_shreds_catalog_w_aper_mags_%s_chunk_%d.fits"%(sample_str, pz_flag, chunk_i)
+                        file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_shreds_catalog_w_aper_mags_chunk_%d.fits"%(sample_str, chunk_i)
                     else:
-                        file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_clean_catalog_w_aper_mags_%s_chunk_%d.fits"%(sample_str,pz_flag, chunk_i) 
+                        file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_clean_catalog_w_aper_mags_chunk_%d.fits"%(sample_str, chunk_i) 
     
                     save_table( shreds_focus_i, file_save)   
                     print_stage("Saved aperture summary files at %s!"%file_save)
@@ -955,16 +947,16 @@ if __name__ == '__main__':
                     #note that if pipeline is being run on a single object, then we need to run_aper before to produce shreds_focus_i table as summary files are not saved in the tgids mode
                     if use_clean == False:
                         try:
-                            file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_shreds_catalog_w_aper_mags_%s_chunk_%d.fits"%(sample_str, pz_flag, chunk_i)
+                            file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_shreds_catalog_w_aper_mags_chunk_%d.fits"%(sample_str, chunk_i)
                         except:
-                            file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_shreds_catalog_w_aper_mags_%s.fits"%(sample_str, pz_flag)
+                            file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_shreds_catalog_w_aper_mags.fits"%(sample_str)
                             
                     else:
                         try:
-                            file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_clean_catalog_w_aper_mags_%s_chunk_%d.fits"%(sample_str, pz_flag, chunk_i) 
+                            file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_clean_catalog_w_aper_mags_chunk_%d.fits"%(sample_str, chunk_i) 
     
                         except:
-                            file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_clean_catalog_w_aper_mags_%s.fits"%(sample_str, pz_flag) 
+                            file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_clean_catalog_w_aper_mags.fits"%(sample_str) 
                             
                     shreds_focus_i = Table.read(file_save)
     
@@ -1096,7 +1088,7 @@ if __name__ == '__main__':
             clean_flag = "clean"
 
 
-        file_template_aper = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_%s_catalog_w_aper_mags_%s"%(sample_str, clean_flag, pz_flag)
+        file_template_aper = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_%s_catalog_w_aper_mags"%(sample_str, clean_flag)
         
         if run_scarlet:
             file_template_scarlet = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_%s_catalog_w_scarlet_mags"%(sample_str, clean_flag)

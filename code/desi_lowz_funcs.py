@@ -205,6 +205,15 @@ def match_c_to_catalog(c_cat = None, catalog_cat = None, c_ra = "TARGET_RA", c_d
 
 
 
+def compute_separations(ra_ref = None, dec_ref = None, ra_all = None, dec_all = None):
+    '''
+    Function that computes the separation in arcsecs between reference ra,dec and a list/array of ra,decs
+    '''
+
+    ref_pos = SkyCoord(ra= ra_ref* u.degree, dec= dec_ref*u.degree )
+    all_pos = SkyCoord(ra= ra_all*u.degree, dec=dec_all*u.degree )
+    seps = ref_pos.separation(all_pos).arcsec
+    return seps
 
 def print_radecs(object_list, num=100, ra="TARGET_RA", dec="TARGET_DEC"):
     num = np.minimum( num, len(object_list) )
