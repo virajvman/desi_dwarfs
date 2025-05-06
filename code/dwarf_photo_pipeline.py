@@ -177,6 +177,8 @@ def get_relevant_files_aper(input_dict):
     ##done saving all the files!
     return
 
+
+
 def make_clean_shreds_catalogs():
     '''
     This function makes the primary clean and shred catalogs we work with!
@@ -189,12 +191,6 @@ def make_clean_shreds_catalogs():
 
     from desi_lowz_funcs import get_sweep_filename, save_table, is_target_in_south, get_sga_norm_dists, get_sga_norm_dists_FAST
     from construct_dwarf_galaxy_catalogs import bright_star_filter
-
-    # ##add the sweep, catalog info
-    # bgsb_list = add_sweeps_column(bgsb_list, "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_bgs_bright_filter_zsucc_zrr02_allfracflux.fits")
-    # bgsf_list = add_sweeps_column(bgsf_list, "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_bgs_faint_filter_zsucc_zrr03_allfracflux.fits")
-    # elg_list = add_sweeps_column(elg_list, "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_elg_filter_zsucc_zrr05_allfracflux.fits")
-    # lowz_list = add_sweeps_column(lowz_list, "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_lowz_filter_zsucc_zrr03.fits")
 
     #identifying the objects that have the 
     fracflux_grz = [f"FRACFLUX_{b}" for b in "GRZ"]
@@ -217,6 +213,7 @@ def make_clean_shreds_catalogs():
     
     ##construct the clean catalog
     ## to make things easy in the cleaning stage, we will use the optical based colors
+    ## we will probably stick with these as our fiducial stellar masses
 
     dwarf_mask_bgsb = (bgsb_list["LOGM_SAGA"] < 9.5) 
     dwarf_mask_bgsf = (bgsf_list["LOGM_SAGA"] < 9.5) 
@@ -250,21 +247,16 @@ def make_clean_shreds_catalogs():
     ## we add the SGA information to the objects now!
     all_clean_dwarfs = get_sga_norm_dists_FAST(all_clean_dwarfs, siena_path="/global/cfs/cdirs/cosmo/data/sga/2020/SGA-2020.fits")
 
-    #load the existing file
-    clean_all_exist = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v3.fits")
-    
-    # does existing file also already have bright star info?
     bstar_keys = [ "STARFDIST", "STARDIST_DEG","STARMAG", "STAR_RADIUS_ARCSEC", "STAR_RA","STAR_DEC"]
-    
-    try:
-        for ki in bstar_keys:
-            all_clean_dwarfs[ki] = clean_all_exist[ki].data
-        print("Bright star information already existed. Copying values from there.")    
-    except:
-        #if not, then we have to recompute it!
-        all_clean_dwarfs = bright_star_filter(all_clean_dwarfs)
 
-    del clean_all_exist
+    # Check if all bright star keys exist
+    if all(key in all_clean_dwarfs.colnames for key in bstar_keys):
+        print("Bright star information already exists!")
+    else:
+        # Recompute if missing
+        print("Bright star information did not exist and will be computed.")
+        all_clean_dwarfs = bright_star_filter(all_clean_dwarfs)
+    
 
     # save the clean dwarfs now!
     save_table(all_clean_dwarfs,"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v3.fits",comment="This is a compilation of dwarf galaxy candidates in DESI Y1 data from the BGS Bright, BGS Faint, ELG and LOW-Z samples. Only galaxies with LogMstar < 9.5 (w/SAGA based stellar masses) and that have robust photometry are included.")
@@ -275,16 +267,7 @@ def make_clean_shreds_catalogs():
     bgsf_shreds = bgsf_list[  ~clean_mask_bgsf & dwarf_mask_bgsf]
     elg_shreds = elg_list[ ~clean_mask_elg & dwarf_mask_elg]
     lowz_shreds = lowz_list[ ~clean_mask_lowz & dwarf_mask_lowz]
-    
-    #many elgs are below this stellar mass cut and so we do not apply it
-    #even including clean dwarfs that are below LogMstar < 7 to confirm their existence!
-    # bgsb_shreds_p1 = bgsb_list[ clean_mask_bgsb & (bgsb_list["LOGM_SAGA"] <= 7) ]
-    # bgsf_shreds_p1 = bgsf_list[ clean_mask_bgsf & (bgsf_list["LOGM_SAGA"] <= 7)  ]
-    # lowz_shreds = lowz_list[lowz_list["LOGM_SAGA"] <= 7]
-    # bgsb_shreds_p1["SAMPLE"] = np.array(["BGS_BRIGHT"]*len(bgsb_shreds_p1))
-    # bgsf_shreds_p1["SAMPLE"] = np.array(["BGS_FAINT"]*len(bgsf_shreds_p1))
-    # elg_shreds_p1["SAMPLE"] = np.array(["ELG"]*len(elg_shreds_p1))
-    
+
     #adding the sample column
     bgsb_shreds["SAMPLE"] = np.array(["BGS_BRIGHT"]*len(bgsb_shreds))
     bgsf_shreds["SAMPLE"] = np.array(["BGS_FAINT"]*len(bgsf_shreds))
@@ -292,7 +275,6 @@ def make_clean_shreds_catalogs():
     lowz_shreds["SAMPLE"] = np.array(["LOWZ"]*len(lowz_shreds))
 
     #stacking all the shreds now 
-    # shreds_all = vstack( [bgsb_shreds, bgsf_shreds, elg_shreds, lowz_shreds, bgsb_shreds_p1,bgsf_shreds_p1]) #, elg_shreds_p1 ] )
     shreds_all = vstack( [bgsb_shreds, bgsf_shreds, elg_shreds, lowz_shreds ])
     
     shreds_all.remove_column("OII_FLUX")
@@ -302,26 +284,18 @@ def make_clean_shreds_catalogs():
     shreds_all.remove_column("OII_SNR")
     shreds_all.remove_column("ZSUCC")
     
-    print("Total number of objects whose photometry needs to be redone = ", len(shreds_all))
-
-    shreds_ra, shreds_dec, shreds_z = shreds_all["RA"].data, shreds_all["DEC"].data, shreds_all["Z"].data
+    print("Total number of objects identified as likely shreds = ", len(shreds_all))
 
     ##if the existing file already has SGA info, then we just add that
     shreds_all = get_sga_norm_dists_FAST(shreds_all, siena_path="/global/cfs/cdirs/cosmo/data/sga/2020/SGA-2020.fits")
 
-    #load the existing file
-    shreds_all_exist = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v3.fits")
-    
-    try:
-        for ki in bstar_keys:
-            shreds_all[ki] = shreds_all_exist[ki].data
-        print("Bright star information already existed. Copying values from there.")
-            
-    except:
-        #if not, then we have to recompute it!
+    # Check if the bright star key already exist
+    if all(key in shreds_all.colnames for key in bstar_keys):
+        print("Bright star information already exists!")
+    else:
+        # Recompute if missing
+        print("Bright star information did not exist and will be computed.")
         shreds_all = bright_star_filter(shreds_all)
-
-    del shreds_all_exist
     
     save_table(shreds_all,"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v3.fits")
     
@@ -515,19 +489,9 @@ if __name__ == '__main__':
     run_aper = args.run_aper
     run_scarlet = args.run_scarlet
 
-
+    #whether own peak detection will be used in the scarlet pipeline
     run_own_detect = not run_w_source
-    # #whether to use photo-z in separating sources
-    # use_pz_aper = not no_pz_aper
 
-    #this is the flag that is used in the file names 
-    # if use_pz_aper:
-    #     pz_flag = "w_pz"
-    # else:
-    #     pz_flag = "no_pz"
-    # pz_flag = "no_pz"
-    # use_pz_aper = False
-    
     ## can I come up with a robust way to choose box size?
     box_size = 350
         
@@ -540,7 +504,6 @@ if __name__ == '__main__':
     if make_main_cats:
         make_clean_shreds_catalogs()
 
-    #information on sga and bright stars is added in the above function
 
     ##add the columns on image path and file_path to these catalogs!!
     shreds_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v3.fits"
@@ -960,9 +923,12 @@ if __name__ == '__main__':
                             
                     shreds_focus_i = Table.read(file_save)
     
-                ##we run scarlet only on objects were the updated aperture stellar mass is below Log Mstar 9.5 and if aperture photometry returned a nan value
-                ##in case of the nan values, it is usually the case that a very bright star is nearby, and the original DR9 photometry is robust!
-                ##need to apply a cut on that too
+                ##We will be running scarlet photometry pipeline as a testing of the original aperture pipeline.
+                ##So we will focus on objects only in south (consistent psf) and low-redshift objects that are most prone to shredding
+
+                #we will also focus on objects that do not have any bright-saturated stars in the vicinity!
+                #In this case, we can optimize the LSB and other components together. We were initially doing this separate because of the presence of bright stars in the field
+                                   
     
                 print("Number of objects initially (in south only) -> %d"%len(shreds_focus_i[shreds_focus_i["is_south"] == 1]))
     
@@ -970,14 +936,15 @@ if __name__ == '__main__':
                 
                 temp_if = shreds_focus_i[ (shreds_focus_i["LOGM_SAGA_APERTURE"] <= 9.5) & (~np.isnan(shreds_focus_i["LOGM_SAGA_APERTURE"])) & (shreds_focus_i["is_south"] == 1)   ]
                 
-                temp_i_nans = shreds_focus_i[ (np.isnan(shreds_focus_i["LOGM_SAGA_APERTURE"])) & (shreds_focus_i["is_south"] == 1)  ]
+                # temp_i_nans = shreds_focus_i[ (np.isnan(shreds_focus_i["LOGM_SAGA_APERTURE"])) & (shreds_focus_i["is_south"] == 1)  ]
     
                 print("Number of objects with updated Mstar <= 9.5 -> %d"%len(temp_if))
                 print("Number of objects with NaN photometry -> %d"%len(temp_i_nans))
     
                 #the mask is that take objects from south, and if they have NaN stellar masses or stellar masses that are below 9.5 and not nans
                 do_scarlet_mask = (shreds_focus_i["is_south"] == 1) & ( ( (shreds_focus_i["LOGM_SAGA_APERTURE"] <= 9.5) & (~np.isnan(shreds_focus_i["LOGM_SAGA_APERTURE"])) ) |  (np.isnan(shreds_focus_i["LOGM_SAGA_APERTURE"] ) ) ) & (shreds_focus_i["Z"] < 0.02)
-                                                                                                          
+
+                                                                       
                 #these are the objects on which we will be doing scarlet photometry!                                                                                                          
                 all_inputs_scarlet = all_inputs[  do_scarlet_mask ]
                 shreds_focus_scarlet =shreds_focus_i[  do_scarlet_mask ]
@@ -990,23 +957,24 @@ if __name__ == '__main__':
                     dicti["MAG_R_APERTURE"] = shreds_focus_scarlet[di]["MAG_R_APERTURE"]
                     dicti["MAG_Z_APERTURE"] = shreds_focus_scarlet[di]["MAG_Z_APERTURE"]
                     all_inputs_scarlet_v2.append(dicti)
-    
+
+                
                 ##generate the relevant files for scarlet photometry
                 if make_cats== True:
                     print_stage("Generating relevant files for doing scarlet photometry")
                     
-                    print("Using cleaned catalogs =",use_clean==True)
+                    print("Scarlet: Using cleaned catalogs =",use_clean==True)
             
-                    print("Number of objects whose scarlet files will be obtained = ", len(shreds_focus_scarlet))
+                    print(f"Scarlet: Number of objects whose scarlet files will be obtained = {len(shreds_focus_scarlet)}")
             
                     if use_clean == False:
                         top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds"
                     else:
                         top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_good"
                         
-                    print(len(shreds_focus_scarlet[shreds_focus_scarlet["is_south"] == 1]))
-                    print(len(shreds_focus_scarlet[shreds_focus_scarlet["is_south"] == 0]))
-    
+                    print(f'Scarlet: Number of objects in south = {len(shreds_focus_scarlet[shreds_focus_scarlet["is_south"] == 1])}')
+                    print(f'Scarlet: Number of objects in north = {len(shreds_focus_scarlet[shreds_focus_scarlet["is_south"] == 0])}')
+                        
                     #list of dictionaries we will feed to get_relevant_files_scarlet function
                     
                     ##this can be sped up as we are not reading files or anyting!

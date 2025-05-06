@@ -37,6 +37,9 @@ def get_scrollable_pdfs(all_img_paths, output_pdf):
     print(f"Scrollable pdf saved at {output_pdf}")
     return
 
+def print_maxabs_diff(arr1,arr2):
+    print(f"The MaxAbs difference between these two is {np.max(np.abs(arr1-arr2))}")
+    return
 
     
 def parse_tgids(value):

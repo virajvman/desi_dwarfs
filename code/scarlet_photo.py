@@ -200,18 +200,6 @@ def run_scarlet_pipe(input_dict):
     TO DO:
     1) Use other redshifts in cutout to help choosing which sources are part of dwarf or not
     
-    2) How to get statistical errors on the component fluxs?
-
-    3) Block known stars in the LSB mask!
-
-    4) How to add more wavelet components in constrained fashion to fix residuals??
-    
-    On a related note, do I have to model the far away sources as well? I could just mask them if they are relatively far away??
-
-    6) When I am fitting scarlet wavelet, is it possible to only focus on the dwarf part??
-
-    7) I have updated the color selection to be just bluer than LSB component and that is good for real dwarfs where that is indeed the case. However, that is not the case for massive galaxies. That is where the color-color contour makes sense ... 
-
     Issues appear to be avoided if stars are removed hehehe. Can mask out those pixels ... 
 
     In the fitting, I could potentially mask out other sources that are not being "blended in?" I could just do this via the weights array?
@@ -345,6 +333,7 @@ def run_scarlet_pipe(input_dict):
         
         ##do image segmentation per band image
         #for faint ELGs, this could be reduced?
+        #we are only running this for testing purposes, and so will not be including the ELG objects
         npixels_min = 10
         from photutils.segmentation import detect_sources
 
@@ -528,7 +517,7 @@ def run_scarlet_pipe(input_dict):
             # Now display the peaks on the original image
             ax[0].contour(footprint_img, [0.5,], colors='w', linewidths=0.5)
         except:
-            print("Extracting sources using wavelets failed, so using DR9 source locations")
+            print("Scarlet: Extracting sources using wavelets failed, so using DR9 source locations")
             run_own_detect = False
         
         if run_own_detect:
@@ -664,14 +653,13 @@ def run_scarlet_pipe(input_dict):
         
         #if there are stars, make the pixels in some region around the stars with weights = 0
         #the region we define is going to be a 3 arcsec region (change this size?)
-        
+        #we only masking stars if they are saturated
+            
         if np.sum(is_star) > 0:
             print("Starting star masking!")
             for si in range(np.sum(is_star)):
-                #get the magnitude of the star to see if it might be saturated or not! 
-                #in any case, if it is bright star, we will mask it
-                #does the invar matrix already take care of this?
-                #what is an appropriate masking radius to choose here?
+
+                ##use rongpu stellar radius here!
                 radius = int(4/0.262)
                 #in general, need to be very careful when copying and modifying arrays
                 invar_weights_starmask = mask_star(invar_weights, ( star_f_xpix[si], star_f_ypix[si]) , radius )

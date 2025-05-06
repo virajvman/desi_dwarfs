@@ -1,3 +1,7 @@
+'''
+This is the script to construct the main dwarf galaxy samples from the Iron fastspecfit catalog! Some basic cleaning cuts are applied
+'''
+
 from desitarget.targetmask import desi_mask, bgs_mask
 # import some helpful python packages 
 import os
@@ -64,10 +68,11 @@ def read_tractorphot(zcat, verbose=False):
 
     tot_len = len(zcat)
     tot_sofar = 0
-    
-    pixels = radec2pix(tractorphot_nside, zcat['TARGET_RA'], zcat['TARGET_DEC'])
 
-    pixels = radec2pix(tractorphot_nside, zcat['RA'], zcat['DEC'])
+    try:
+        pixels = radec2pix(tractorphot_nside, zcat['TARGET_RA'], zcat['TARGET_DEC'])
+    except:
+        pixels = radec2pix(tractorphot_nside, zcat['RA'], zcat['DEC'])
     
     phot = []
     for pixel in set(pixels):
@@ -201,6 +206,7 @@ def get_final_catalogs(vac_data_lowz, zpix_lowz, plot=False):
         vac_data_lowz_table[f"SIGMA_{bi}"] = zpix_lowz[f"FLUX_{bi}"] * np.sqrt(zpix_lowz[f"FLUX_IVAR_{bi}"])
         vac_data_lowz_table[f"FRACFLUX_{bi}"] = zpix_lowz[f"FRACFLUX_{bi}"]
         vac_data_lowz_table[f"RCHISQ_{bi}"] = zpix_lowz[f"RCHISQ_{bi}"]
+        #if the RChisq > 100, make sigma_good = 0. This is to account for bad model fits
         vac_data_lowz_table[f"SIGMA_GOOD_{bi}"] = np.where(vac_data_lowz_table[f"RCHISQ_{bi}"] < 100, vac_data_lowz_table[f"SIGMA_{bi}"], 0.0)
     
     vac_data_lowz_table["SHAPE_R"] = shaper_lowz
@@ -361,7 +367,7 @@ if __name__ == '__main__':
     #either BGS_BRIGHT, ELG or BGS_FAINT
     gal_types = ["BGS_BRIGHT", "BGS_FAINT", "LOWZ", "ELG"]
     
-    save_filenames = ["iron_bgs_bright_filter_zsucc_zrr02_allfracflux.fits","iron_bgs_faint_filter_zsucc_zrr03_allfracflux.fits","iron_lowz_filter_zsucc_zrr03.fits" "iron_elg_filter_zsucc_zrr05_allfracflux.fits"]
+    save_filenames = ["iron_bgs_bright_filter_zsucc_zrr02_allfracflux.fits", "iron_bgs_faint_filter_zsucc_zrr03_allfracflux.fits", "iron_lowz_filter_zsucc_zrr03.fits", "iron_elg_filter_zsucc_zrr05_allfracflux.fits"]
     
     comment = ""
     # "This is the BGS Bright catalog with Z_RR < 0.2 with successful redshifts! Also includes more columns from CIGALE and color-based stellar mass. No cuts on fracflux and rchisq are made."
@@ -414,30 +420,22 @@ if __name__ == '__main__':
             #number of bands we need 5 sigma detection in
             nsigma_bands = 2
             if gal_type == "ELG":
-                nsigma_bands = 3
+                nsigma_bands = 2
+            ##we had initially set nsigma_bands = 3 for ELG
+            ##that would mean if no filters have sigma>5, we remove. So even if one is above, we are good.
+            ##if we wanted to ensure that at least 2 are above 5, we need to remove objects that have at least 2 below 5.
+            ##so we would set nsigm_bands = 2.
         
             ##apply the filtering now
-            if apply_only_maskbit:
-                remove_queries = [
-                "(MASKBITS >> 1) % 2 > 0",  # 1
-                "(MASKBITS >> 5) % 2 > 0",  # 2
-                "(MASKBITS >> 6) % 2 > 0",  # 3
-                "(MASKBITS >> 7) % 2 > 0",  # 4
-                "(MASKBITS >> 12) % 2 > 0",  # 5
-                "(MASKBITS >> 13) % 2 > 0",  # 6
-                _n_or_more_lt(sigma_grz, nsigma_bands, 5),  # 7
-                ]
-            else:
-                remove_queries = [
-                "(MASKBITS >> 1) % 2 > 0",  # 1
-                "(MASKBITS >> 5) % 2 > 0",  # 2
-                "(MASKBITS >> 6) % 2 > 0",  # 3
-                "(MASKBITS >> 7) % 2 > 0",  # 4
-                "(MASKBITS >> 12) % 2 > 0",  # 5
-                "(MASKBITS >> 13) % 2 > 0",  # 6
-                _n_or_more_lt(sigma_grz, nsigma_bands, 5),  # 7
-                Query(_n_or_more_gt(fracflux_grz, 3, 0.7)),  # 8
-                ]
+            remove_queries = [
+            "(MASKBITS >> 1) % 2 > 0",  # 1
+            "(MASKBITS >> 5) % 2 > 0",  # 2
+            "(MASKBITS >> 6) % 2 > 0",  # 3
+            "(MASKBITS >> 7) % 2 > 0",  # 4
+            "(MASKBITS >> 12) % 2 > 0",  # 5
+            "(MASKBITS >> 13) % 2 > 0",  # 6
+            _n_or_more_lt(sigma_grz, nsigma_bands, 5),  # 7
+            ]
                                 
             ## read tractor phot
             zpix_cat = read_tractorphot(vac_data_cat, verbose=True)
@@ -498,8 +496,7 @@ if __name__ == '__main__':
                 save_table(vac_data_cat_f,  save_folder + "/" + save_filename,comment=comment)
                 
                 #applying the cleaning cuts!
-                vac_data_cat_f = vac_data_cat_f[(vac_data_cat_f["ZSUCC"] == 1)]
-    
+                vac_data_cat_f = vac_data_cat_f[(vac_data_cat_f["ZSUCC"] == 1) & (vac_data_cat_f["DELTACHI2"] > 25)]
                 
             else:
                 ## if not ELGs, but BGS etc.
