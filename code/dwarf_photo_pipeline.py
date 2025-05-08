@@ -68,8 +68,8 @@ def argument_parser():
     result.add_argument('-no_save',dest='no_save', action = "store_true")
     result.add_argument('-make_main_cats',dest='make_main_cats', action = "store_true")
     result.add_argument('-end_name',dest='end_name', type = str, default = "")
+    result.add_argument('-no_cnn_cut',dest='no_cnn_cut', action='store_true')
     
-
     return result
 
 
@@ -298,72 +298,6 @@ def make_clean_shreds_catalogs():
         shreds_all = bright_star_filter(shreds_all)
     
     save_table(shreds_all,"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v3.fits")
-    
-    ## PLOTTING THE FRACTION OF GALAXIES THAT ARE LIKELY SHREDS/BAD PHOTOMETRY
-    zgrid = np.arange(0.00,0.15,0.005)
-
-    def get_shred_frac(tot_cat, sample,zlow, zhi, shred_mask):
-        shreds_count = len(tot_cat[ (tot_cat["SAMPLE"] == sample) & (tot_cat["Z"] < zhi) & (tot_cat["Z"] > zlow) & shred_mask ] )
-        tot_count = len(tot_cat[ (tot_cat["SAMPLE"] == sample) & (tot_cat["Z"] < zhi) & (tot_cat["Z"] > zlow) ] )
-    
-        if tot_count > 0:
-            return shreds_count / tot_count
-        else:
-            return None
-
-    shred_frac_all_bgsb = []
-    shred_frac_all_bgsf = []
-    shred_frac_all_elg = []
-    shred_frac_all_lowz = []
-    
-    bgsb_list["SAMPLE"] = np.array(len(bgsb_list)*["BGS_BRIGHT"])
-    bgsf_list["SAMPLE"] = np.array(len(bgsf_list)*["BGS_FAINT"])
-    elg_list["SAMPLE"] = np.array(len(elg_list)*["ELG"])
-    lowz_list["SAMPLE"] = np.array(len(lowz_list)*["LOWZ"])
-    
-    #also fitlering for dwarf candidates as we only care about those!
-    all_list = vstack( [bgsb_list[dwarf_mask_bgsb], bgsf_list[dwarf_mask_bgsf], elg_list[dwarf_mask_elg], lowz_list[dwarf_mask_lowz] ] )
-
-    # mask_shred = ~((all_list["FRACFLUX_G"] < fracflux_limit) & (all_list["FRACFLUX_R"] < fracflux_limit) & (all_list["FRACFLUX_Z"] < fracflux_limit))
-
-    remove_queries = [Query(_n_or_more_lt(fracflux_grz, 2, 0.2)) ]
-    # note that the this is n_or_more_LT!! so be careful about that!
-    #these are masks for objects that did not satisfy the above condition!
-    mask_shred = get_remove_flag(all_list, remove_queries) == 0
-
-    
-    for i in trange(len(zgrid)-1):
-        zlow = zgrid[i]
-        zhi = zgrid[i+1]
-
-        shred_frac_all_bgsb.append(   get_shred_frac(all_list, "BGS_BRIGHT",zlow, zhi, mask_shred)  ) 
-        shred_frac_all_bgsf.append(   get_shred_frac(all_list, "BGS_FAINT",zlow, zhi, mask_shred)  ) 
-        shred_frac_all_elg.append(   get_shred_frac(all_list, "ELG",zlow, zhi, mask_shred)  ) 
-        shred_frac_all_lowz.append(   get_shred_frac(all_list, "LOWZ",zlow, zhi, mask_shred)  ) 
-        
-    bgs_col = "#648FFF" #DC267F
-    lowz_col = "#DC267F"
-    elg_col = "#FFB000"
-    
-    zcens = 0.5*(zgrid[1:] + zgrid[:-1])
-    
-    plt.figure(figsize = (5,5))
-    plt.plot(zcens, shred_frac_all_bgsb,label = "BGS Bright",lw = 3,color = bgs_col,ls = "-",alpha = 0.75)
-    
-    plt.plot(zcens, shred_frac_all_bgsf,label = "BGS Faint",lw = 3,color = "r",ls = "-",alpha = 0.75)
-
-    plt.plot(zcens, shred_frac_all_lowz,label = "LOWZ",lw = 3,color = lowz_col,ls = "-",alpha = 0.75)
-    
-    plt.plot(zcens, shred_frac_all_elg,label = "ELG",lw = 3,color = elg_col,ls = "-",alpha = 0.75)
-    
-    plt.legend(fontsize = 12)
-    plt.xlim([0,0.1])
-    plt.ylim([0,1])
-    plt.xlabel("z (Redshift)",fontsize = 15)
-    plt.ylabel(r"Likely Shredded Source Fraction",fontsize = 15)
-    plt.grid(ls=":",color = "lightgrey",alpha = 0.5)
-    plt.savefig("/global/homes/v/virajvm/DESI2_LOWZ/quenched_fracs_nbs/paper_plots/frac_shreds.pdf", bbox_inches="tight")
-    plt.show()
         
     return 
 
@@ -469,6 +403,7 @@ if __name__ == '__main__':
     run_parr = args.parallel
     #use clean catalog or shred catalog
     use_clean = args.use_clean
+    no_cnn_cut = args.no_cnn_cut
     ncores = args.ncores
     #if we will be using user-input catalog or not
     #will we overwrite/redo the image segmentation part?
@@ -504,7 +439,6 @@ if __name__ == '__main__':
     if make_main_cats:
         make_clean_shreds_catalogs()
 
-
     ##add the columns on image path and file_path to these catalogs!!
     shreds_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v3.fits"
     clean_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v3.fits"
@@ -516,20 +450,21 @@ if __name__ == '__main__':
 
     shreds_cat = Table.read(shreds_file)
     clean_cat = Table.read(clean_file)
-    
+
+    ##we need to be careful here in how we are defining the top folder!! 
     if "IMAGE_PATH" in shreds_cat.colnames and "FILE_PATH" in shreds_cat.colnames:
         print("image_path and file_path columns already exist in shreds catalog!")        
     else:
         print("Adding image_path and file_path to shreds catalog!")
         
-        add_paths_to_catalog(org_file = shreds_file, out_file = shreds_file,top_folder=top_folder)
+        add_paths_to_catalog(org_file = shreds_file, out_file = shreds_file,top_folder="/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds")
         #add those two paths to the file!
 
     if "IMAGE_PATH" in clean_cat.colnames and "FILE_PATH" in clean_cat.colnames:
         print("image_path and file_path columns already exist in clean catalog!")
     else:
         print("Adding image_path and file_path to clean catalog!")
-        add_paths_to_catalog(org_file = clean_file, out_file = clean_file,top_folder=top_folder)
+        add_paths_to_catalog(org_file = clean_file, out_file = clean_file,top_folder="/pscratch/sd/v/virajvm/redo_photometry_plots/all_good")
 
     #delete these variables as no longer needed!
     del shreds_cat, clean_cat
@@ -562,6 +497,14 @@ if __name__ == '__main__':
         sample_mask = (shreds_all["SAMPLE"] ==  sample_str) # & (shreds_all["Z"] < 0.007)
 
     shreds_focus = shreds_all[sample_mask]
+
+
+    #we also apply a mask on the PCNN probabilities if relevant
+    if no_cnn_cut:
+        pass
+    else:
+        #filter for sources that CNN thinks are fragments
+        shreds_focus = shreds_focus[ shreds_focus["PCNN_FRAGMENT"] >= 0.3]
 
     print(len(shreds_focus))
 
@@ -804,13 +747,7 @@ if __name__ == '__main__':
             ##################
             
             if run_aper == True:
-        
-                # if use_pz_aper:
-                #     print_stage("Photo-zs will be used in separating sources")
-                # else:
-                #     print_stage("Photo-zs will NOT be used in separating sources")
-                
-        
+
                 if run_parr:
                     with mp.Pool(processes= ncores ) as pool:
                         results = list(tqdm(pool.imap(run_aperture_pipe, all_inputs), total = len(all_inputs)  ))

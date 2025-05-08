@@ -39,9 +39,11 @@ reduce_compare = QueryMaker.reduce_compare
 import random
 import argparse
 import concurrent.futures
-from photutils.morphology import data_properties
+
 from photutils.segmentation import make_2dgaussian_kernel
 from astropy.convolution import convolve
+from aperture_cogs import get_elliptical_aperture, run_cogs
+
 
 rootdir = '/global/u1/v/virajvm/'
 sys.path.append(os.path.join(rootdir, 'DESI2_LOWZ'))
@@ -121,10 +123,6 @@ def run_aperture_pipe(input_dict):
     3) Make sure the case where a source is in the star segment and thus it will be masked is star is in its own deblended segment. However, do not want to be over-substrating in that case
     '''
 
-
-    ## DONE: JUST MASK ALL STARS WITHIN 0.5 STAR RADIUS THE WHOLE TIME !
-    ## DONE:  GET ALL SOURCES IN GIVEN RADIUS EVEN IN CASE WHERE I AT EDGE OF A BRICK
-    ## DONE: NEED TO ALSO IDENTIFY NON-BRIGHT STARS RADII as they can impact blending .. 
     ## DONE: I THINK SELECTION CUT IS THAT MORE THAN 2 ABOVE 0.2
     ## TO DO: WHY IS THE GAIA STAR RADIUS SLIGHTLY DIFFERENT THAN THE RONGPU FORMULA RADIUS?
 
@@ -140,7 +138,10 @@ def run_aperture_pipe(input_dict):
     org_mag_g = input_dict["org_mag_g"]
     overwrite = input_dict["overwrite"]
 
-    print(source_ra, source_dec)
+    verbose=False
+
+    if verbose:
+        print(source_ra, source_dec)
     
     use_photoz = False
     
@@ -170,16 +171,17 @@ def run_aperture_pipe(input_dict):
     # get catalog of nearby DR9 sources along with their photo-zs info. Nearby is defined as within 45 arcsecs
     ##################
 
-
     ref_coord = SkyCoord(ra=source_ra * u.deg, dec=source_dec * u.deg)
     sources_coords = SkyCoord(ra=source_cat_f["ra"].data * u.deg, dec=source_cat_f["dec"].data * u.deg)
     # Compute separations
     source_seps = ref_coord.separation(sources_coords).arcsec
-     
-    is_star = (source_cat_f["ref_cat"] == "G2") & (source_cat_f['type'] == "PSF") 
-    # ( ( np.abs(source_cat_f["pmra"] * np.sqrt(source_cat_f["pmra_ivar"])) >= 1 ) | ( np.abs(source_cat_f["pmdec"] * np.sqrt(source_cat_f["pmdec_ivar"])) >= 1 )  )
-    # is_star = (source_cat_f["ref_cat"] == "G2") &  ( (source_cat_f["pmra"] != 0 ) | (source_cat_f["pmdec"] != 0 )  ) 
-# 
+
+    ##procedure for selecting a star
+    signi_pm = ( np.abs(source_cat_f["pmra"]) * np.sqrt(source_cat_f["pmra_ivar"]) > 3) | ( np.abs(source_cat_f["pmdec"]) * np.sqrt(source_cat_f["pmdec_ivar"]) > 3)
+    
+    is_star = (source_cat_f["ref_cat"] == "G2")  &  ( 
+        (source_cat_f['type'] == "PSF")  | signi_pm 
+    ) 
 
     #what is the distance to the closest star from us?
     all_stars = source_cat_f[is_star]
@@ -229,8 +231,6 @@ def run_aperture_pipe(input_dict):
             new_mags = np.load(save_path + "/new_aperture_mags.npy")
             org_mags = np.load(save_path + "/org_mags.npy")
 
-            ## NEED TO CORRECTLY LOAD THE BRIGHT STAR PIXEL FRAC??
-        
             return closest_star_dist, closest_star_mag, new_mags, org_mags, save_path, save_summary_png, True, img_path
         except:
             do_i_run = True
@@ -335,10 +335,6 @@ def run_aperture_pipe(input_dict):
             #this variable is returned so we know after when exaclty this happens
             bkg_estimated = False
             
-            
-        from desi_lowz_funcs import make_subplots
-        ax = make_subplots(ncol = 5, nrow = 2, row_spacing = 0.5,col_spacing=0.4, label_font_size = 17,plot_size = 3,direction = "horizontal")
-        #2 rows per band and we have 3 bands:grz
     
         ## list stores the aperture size for each band
         all_aper_rads = []
@@ -465,120 +461,11 @@ def run_aperture_pipe(input_dict):
         segment_map_v2[(segment_map.data != island_num) & (segment_map.data > 0)] = 1
         #rest all remains 0
 
-       
-
-        def get_elliptical_aperture(segment_data, stellar_mask, id_num,sigma = 3):
-            '''
-            I feel the star mask to do so that some parts of the pixels are masked! 
-            '''
-            segment_data_v2 = np.copy(segment_data)
-            ##we set everything else to zero except for our id num of reference
-            segment_data_v2[segment_data != id_num] = 0
-            segment_data_v2[segment_data == id_num] = 1
-
-            #all pixels that are in stars are masked so that the aperture is not larger than it should be if it is blended with a star
-            segment_data_v2[stellar_mask] = 0
-
-            if np.sum( segment_data_v2) == 0:
-                #in case source is too close to the star, then we do not code to crash so we unmask it again
-                segment_data_v2[stellar_mask] = 1
-
-            #we can set everything in the star mask to be zero as well
-            
-            #use this trick to get properties of the main segment 
-            cat = data_properties(segment_data_v2, mask=None)
-        
-            columns = ['label', 'xcentroid', 'ycentroid', 'semimajor_sigma',
-                       'semiminor_sigma', 'orientation']
-            tbl = cat.to_table(columns=columns)
-        
-            from photutils.aperture import EllipticalAperture
-            xypos = (cat.xcentroid, cat.ycentroid)
-
-            r = sigma # choose an appropriate value here
-            a = cat.semimajor_sigma.value * r
-            b = cat.semiminor_sigma.value * r
-            theta = cat.orientation.to(u.rad).value
-                
-            aperture = EllipticalAperture(xypos, a, b, theta=theta)
-        
-            return aperture
-
-        
+        #constructing the fiducial aperture for doing photometry
         aperture_for_phot = get_elliptical_aperture( segment_map_v2, star_mask, 2, sigma = 3.5 )
         aperture_for_phot_noscale = get_elliptical_aperture( segment_map_v2, star_mask, 2, sigma = 1 )
-        
-
-        aperture_for_phot.plot(ax = ax[7], color = "r", lw = 2.5, ls = "-")
-        aperture_for_phot_noscale.plot(ax = ax[7], color = "r", lw = 1, ls = "dotted")
-        
-    
-        ax[5].set_title("grz image w/aperture",fontsize = 13)
-        ax[6].set_title("g+r+z data (log scaling)",fontsize = 13)
-        ax[7].set_title("g+r+z data segmentation",fontsize = 13)
-        # ax[6].set_title("g+r+z segmentation+deblend",fontsize = 13)
-
-        ax[8].set_title("g+r+z band main segment",fontsize = 13)
-        # ax[0].set_title("color-color space",fontsize = 13)
-        ax[9].set_title("g+r+z band aperture mask",fontsize = 13)
-        
-        
-        ax[3].set_title("summary",fontsize = 13)
-
-        # Create a norm object and inspect the vmin/vmax
-        norm_obj = LogNorm()
-        
-        ax[6].imshow(tot_data,origin="lower",norm=norm_obj,cmap = "viridis",zorder = 0)
-
-        tot_data_vmin = norm_obj.vmin
-        tot_data_vmax = norm_obj.vmax
-
-        ax[7].imshow(segment_map, origin='lower', cmap=segment_map.cmap,
-                   interpolation='nearest',zorder = 0)
-    
-        # ax[6].imshow(segm_deblend, origin='lower', cmap=segm_deblend.cmap,
-        #            interpolation='nearest',zorder = 0)
-        
-        ax[5].imshow(rgb_stuff,origin="lower",zorder = 0)
-        #recall the box size is 350x350
-        ax[5].text(65,325, "(%.3f,%.3f, z=%.3f)"%(source_ra,source_dec, source_redshift) ,color = "yellow",fontsize = 10)
-        
-        #show the fiber location on the image
-        
-        #get pixel co-ordinates of the source galaxy
-        circle = patches.Circle( (xpix, ypix),7, color='orange', fill=False, linewidth=1,ls ="-")
-        ax[5].add_patch(circle)
-
-        #overplot the centers of the DR9 sources for reference
-        #all sources
-        ax[7].scatter( sources_f_xpix,sources_f_ypix, s=5,color = "white",marker="^") 
-        # ax[7].scatter( sources_f_xpix,sources_f_ypix, s=5,color = "white",marker = "^") 
-
 
         
-        #sources that are a star, that is psf and pmra!=0
-        ax[7].scatter( sources_f_xpix[is_star],sources_f_ypix[is_star], s=50,color = "white",marker="*",zorder = 3) 
-        # ax[7].scatter( sources_f_xpix[is_star],sources_f_ypix[is_star], s=50,color = "white",marker="*",zorder = 3) 
-
-        #plotting the final aperture
-        for axi in [ax[5],ax[6],ax[7],ax[8]]:
-            axi.set_xlim([0,box_size])
-            axi.set_ylim([0,box_size])
-            axi.set_xticks([])
-            axi.set_yticks([])
-            ##plotting the aperture for photometry.plotting is done below in the for-loop
-            
-            # aperture_for_phot.plot(ax = axi, color = "r", lw = 2.5, ls = "-")
-
-            if bstar_ra != 99:
-                
-                aperture_for_bstar_1.plot(ax = axi, color = "r", lw = 1.5, ls = "dotted")
-                aperture_for_bstar_34.plot(ax = axi, color = "r", lw = 1.5, ls = "dotted")
-                aperture_for_bstar_12.plot(ax = axi, color = "r", lw = 1.5, ls = "dotted")
-
-        
-                
-
         #make a copy of the deblended array, this is the one where even the main segment is split into different deblended components
         segm_deblend_v2 = np.copy(segm_deblend.data)
         #create an array of nans with same shape
@@ -600,6 +487,9 @@ def run_aperture_pipe(input_dict):
             new_deblend_ids.append(i+1)
         new_deblend_ids = np.array(new_deblend_ids)
 
+        ## let us save the main segment map for tractor model use later!
+        np.save(save_path + "/main_segment_map.npy",segm_deblend_v3 )
+  
         #this is the new id of the deblend segment that contains our source
         new_deblend_island_num = int(new_deblend_ids[deblend_ids == deblend_island_num])
 
@@ -613,9 +503,7 @@ def run_aperture_pipe(input_dict):
             else:
                 source_cat_f["new_deblend_id"][k] = int(segm_deblend_v3[ int(sources_f_ypix[k]), int(sources_f_xpix[k]) ])
 
-        ax[8].imshow(segm_deblend_v3, origin='lower', cmap="tab20",
-                   interpolation='nearest')
-
+     
 
         ## compute the colors of each deblend segment that is part of the main segment
         all_segs_grs = []
@@ -690,22 +578,6 @@ def run_aperture_pipe(input_dict):
 
         #note that if there are segments that include the star, the colors are determined from pixels that are not masked by the star!
 
-        ##the color in these plots is from the tab20 color map
-        cmap = cm.tab20
-        # Normalize values to the range [0,1]
-        norm = mcolors.Normalize(vmin=min(new_deblend_ids), vmax=max(new_deblend_ids))
-        # Map values to colors
-        colors = cmap(norm(np.array(new_deblend_ids)))
-
-        ##plot the g-r vs. r-z color contours from the redshift bin of this object        
-        ax[0].contour(X, Y, Z_gmm, levels=sorted(lvls), cmap="viridis_r",alpha = 1,zorder = 1)
-
-        #plotting all the segment colors with error on the color-color plot
-        for i in range(len(new_deblend_ids)):
-            ax[0].scatter([all_segs_grs[i]], [all_segs_rzs[i]], s=50, marker="x",lw=2,zorder=3,color = colors[i])
-            ax[0].errorbar([all_segs_grs[i]], [all_segs_rzs[i]], zorder=3,ecolor = colors[i],
-                                  xerr=[ all_segs_grs_err[i] ], yerr= [ all_segs_rzs_err[i] ], fmt='none',alpha=1, capsize=3)
-
         #for a sanity check, plot these sources to see how they are doing!
         in_main_islands = (source_cat_f["new_deblend_id"] != -99)
         
@@ -745,43 +617,22 @@ def run_aperture_pipe(input_dict):
         markers_rnd = get_random_markers(len(source_cat_inseg_signi) )
         source_cat_inseg_signi["marker"] = markers_rnd
 
-        ax[8].scatter( source_cat_inseg_signi[is_star_inseg_signi]["xpix"],source_cat_inseg_signi[is_star_inseg_signi]["ypix"], s=20,color = "r",marker="*" ) 
-
-        plot_now = source_cat_inseg_signi[(~is_star_inseg_signi)]
-        for p in range(len(plot_now)):
-            ax[8].scatter( [ plot_now["xpix"][p]] , [ plot_now["ypix"][p]], s=10,color = "k",marker=plot_now["marker"][p]) 
-
-        
-        ax[8].set_xlim([0,box_size])
-        ax[8].set_ylim([0,box_size])
-
-        ax[8].set_xticks([])
-        ax[8].set_yticks([])
-        ax[9].set_xticks([])
-        ax[9].set_yticks([])
-        
-         #note that if some of these psf sources are hii regions, then they can be very blue and go outside of our plotting limits!
-        ax[0].scatter( source_cat_inseg_signi[is_star_inseg_signi]["g-r"], source_cat_inseg_signi[is_star_inseg_signi]["r-z"], color =  "r", marker = "*",s= 40,zorder = 2 ) 
-
-        plot_now = source_cat_inseg_signi[(~is_star_inseg_signi) ]
-        for p in range(len(plot_now)):
-            ax[0].scatter( [ plot_now["g-r"][p]], [ plot_now["r-z"][p]], color = "k" , marker = plot_now["marker"][p], s= 20,zorder = 2 ) 
-        
-        ## plot the color-color errorbars
-        ax[0].errorbar(source_cat_inseg_signi["g-r"], source_cat_inseg_signi["r-z"], 
-            xerr=source_cat_inseg_signi["g-r_err"], yerr=source_cat_inseg_signi["r-z_err"], fmt='none', ecolor='k', alpha=0.3, capsize=3,zorder = 2)
-
+        # ax[8].scatter( source_cat_inseg_signi[is_star_inseg_signi]["xpix"],source_cat_inseg_signi[is_star_inseg_signi]["ypix"], s=20,color = "r",marker="*" ) 
+        # ax[9].scatter( source_cat_inseg_signi[is_star_inseg_signi]["xpix"],source_cat_inseg_signi[is_star_inseg_signi]["ypix"], s=20,color = "r",marker="*" ) 
+      
         #how lenient we are in defining the color-color box
         col_lenient = 0.1
-        
-        ##plot the bluer boundary lines
-        ax[0].hlines(y = all_segs_rzs[new_deblend_island_num - 1] + col_lenient,xmin = -0.5, xmax= all_segs_grs[new_deblend_island_num - 1] + col_lenient,color = "k",lw = 1, ls = "-")
-        ax[0].vlines(x = all_segs_grs[new_deblend_island_num - 1] + col_lenient,ymin = -0.5, ymax= all_segs_rzs[new_deblend_island_num - 1] + col_lenient,color = "k",lw = 1, ls = "-")
-
+      
         #generating empty mask array that has same shape as data
         #note that when passing the aperture masking array to the function, 1 = mask, 0 = no mask
         #so we will invert it at end. For our purposes till then, 1 means include/no mask, 0 = mask 
         aperture_mask = np.ones_like( tot_data)
+
+        #this is the mask for only the star or different deblend segments in the main segment if one exists!
+        #we will not be masking yet sources in the exterior!
+        #we will be passing this to the curve of growth analysis later
+        aperture_mask_no_bkg = np.ones_like( tot_data)
+        
 
         #firstly mask all the identified segments that are not part of our main segment island!
         aperture_mask[segment_map_v2 == 1] = 0
@@ -794,14 +645,7 @@ def run_aperture_pipe(input_dict):
         #and has no nan and inf values 
         likely_other_seg_mask =  ( (all_segs_grs > (col_lenient + ref_deblend_gr)) | (all_segs_rzs > (col_lenient + ref_deblend_rz)) ) & ( ~np.isnan(all_segs_grs) ) & (~np.isnan(all_segs_rzs)) & ( ~np.isinf(all_segs_grs) ) & (~np.isinf(all_segs_rzs) )
         
-        # ax[1+8*pind].set_xlim([ np.minimum( -0.5, np.min(all_segs_grs[likely_other_seg_mask])) ,np.maximum(1.5, np.max(all_segs_grs[likely_other_seg_mask]) ) ]  )
-        # ax[1+8*pind].set_ylim([ np.minimum( -0.5, np.min(all_segs_grs[likely_other_seg_mask])) ,np.maximum(1.5, np.max(all_segs_rzs[likely_other_seg_mask] ))])
-        ax[0].set_xlim([ -0.5, 2])
-        ax[0].set_ylim([  -0.5, 1.5])
-        ax[0].tick_params(axis='both', labelsize=10)
-        ax[0].set_xlabel("g-r",fontsize = 17)
-        ax[0].set_ylabel("r-z",fontsize = 17)
-
+    
         new_deblend_ids_likely_other_segs = new_deblend_ids[likely_other_seg_mask]        
         #this is an array of new deblend ids of the likely other deblend segments. This maps on to segm_deblend_v3 it seems
              
@@ -837,9 +681,13 @@ def run_aperture_pipe(input_dict):
                     # print("reject")
                     #we reject this segment as part of our galaxy! 
                     aperture_mask[ segm_deblend_v3 == indi] = 0
+                    aperture_mask_no_bkg[segm_deblend_v3 == indi] = 0
 
 
+        ## MAKING
+        ax = make_subplots(ncol = 5, nrow = 2, row_spacing = 0.5,col_spacing=0.4, label_font_size = 17,plot_size = 3,direction = "horizontal")
 
+        
         ##we have so far dealt with deblended segments being part of main galaxy segment. What about individual sources?
 
         #the counter for total flux we will be subtracting at the end!
@@ -935,6 +783,8 @@ def run_aperture_pipe(input_dict):
                             pass
                         else:
                             aperture_mask[ segm_deblend_v3 == source_cat_nostars_inseg["new_deblend_id"][w] ] = 1
+                            aperture_mask_no_bkg[ segm_deblend_v3 == source_cat_nostars_inseg["new_deblend_id"][w] ] = 1
+                            
                             ##adding flux of that source to the 
                             
                             tot_subtract_sources_g += 10**( (22.5  -  source_cat_nostars_inseg["mag_g"][w] )/2.5 )
@@ -943,11 +793,11 @@ def run_aperture_pipe(input_dict):
                             
 
                              #plot this source for reference on the mask plot!!
-                            ax[9].scatter( [source_cat_nostars_inseg["xpix"][w]] , [source_cat_nostars_inseg["ypix"][w] ],  color = "k", marker = source_cat_nostars_inseg["marker"][w],s= 20,  zorder = 1)
+                            ax[4].scatter( [source_cat_nostars_inseg["xpix"][w]] , [source_cat_nostars_inseg["ypix"][w] ],  color = "k", marker = source_cat_nostars_inseg["marker"][w],s= 20,  zorder = 1)
                             
                             # Annotate the point
                             if use_photoz:
-                                ax[9].text( source_cat_nostars_inseg["xpix"][w] , source_cat_nostars_inseg["ypix"][w] + 5,  "[%.2f,%.2f]"%(zphot_low, zphot_high),fontsize = 8, ha = "center")
+                                ax[4].text( source_cat_nostars_inseg["xpix"][w] , source_cat_nostars_inseg["ypix"][w] + 5,  "[%.2f,%.2f]"%(zphot_low, zphot_high),fontsize = 8, ha = "center")
 
 
             #########
@@ -956,10 +806,14 @@ def run_aperture_pipe(input_dict):
 
             #easy! In one step we just mask all the stars, specifically half of the radius-magnitude relation made by Rongpu
             aperture_mask[star_mask] = 0
+            aperture_mask_no_bkg[star_mask] = 0            
 
-        
+
+        tractor_model = np.load(save_path + "/tractor_source_model.npy")
+
         #we will mask all the nans in the data
         aperture_mask[ np.isnan(tot_data) ] = 0
+        aperture_mask_no_bkg[ np.isnan(tot_data) ] = 0
 
         #what about pixels that anomalous negative values?
         #we will mask pixels that are 5sigma lower than the background!
@@ -973,97 +827,271 @@ def run_aperture_pipe(input_dict):
             
         ##instead of plotting just the aperture mask, let us plot the aperture mask applied to the log log data plot!
         tot_data_plot[~aperture_mask_plot.astype(bool)] = np.nan
-        # ax[1].imshow(aperture_mask_plot,origin="lower",cmap = "PiYG",zorder = 0,interpolation='nearest',vmin=0,vmax=1,alpha = 0.6)
-        ax[9].imshow(tot_data_plot,origin="lower",norm=LogNorm(vmin=tot_data_vmin, vmax = tot_data_vmax),cmap = "viridis",zorder = 0)
 
-        ax[9].set_xlim([0,box_size])
-        ax[9].set_ylim([0,box_size])
-
-        
-        ##plotting the aperture again
-        aperture_for_phot.plot(ax = ax[9], color = "r", lw = 2.5, ls = "-")
-        aperture_for_phot.plot(ax = ax[8], color = "r", lw = 2.5, ls = "-")
-        
-        if bstar_ra != 99:
-            aperture_for_bstar_1.plot(ax = ax[9], color = "r", lw = 1.5, ls = "dotted")
-            aperture_for_bstar_34.plot(ax = ax[9], color = "r", lw = 1.5, ls = "dotted")
-            aperture_for_bstar_12.plot(ax = ax[9], color = "r", lw = 1.5, ls = "dotted")
-
-            # aperture_for_bstar_1.plot(ax = ax[0], color = "r", lw = 1.5, ls = "dotted")
-            # aperture_for_bstar_34.plot(ax = ax[0], color = "r", lw = 1.5, ls = "dotted")
-            # aperture_for_bstar_12.plot(ax = ax[0], color = "r", lw = 1.5, ls = "dotted")
-            
         # np.save(save_path + "/aperture_mask_%s.npy"%bi, ~aperture_mask.astype(bool) )
 
+        ##this is the magnitude at a fixed aperture
         phot_table_g = aperture_photometry(data["g"] , aperture_for_phot, mask = ~aperture_mask.astype(bool))
         phot_table_r = aperture_photometry(data["r"] , aperture_for_phot, mask = ~aperture_mask.astype(bool))
         phot_table_z = aperture_photometry(data["z"] , aperture_for_phot, mask = ~aperture_mask.astype(bool))
 
-        
         new_mag_g = 22.5 - 2.5*np.log10( phot_table_g["aperture_sum"].data[0] - tot_subtract_sources_g )
         new_mag_r = 22.5 - 2.5*np.log10( phot_table_r["aperture_sum"].data[0] - tot_subtract_sources_r )
         new_mag_z = 22.5 - 2.5*np.log10( phot_table_z["aperture_sum"].data[0] - tot_subtract_sources_z )
         
         org_mags = [source_mag_g_mwc,source_mag_r_mwc,source_mag_z_mwc] 
 
-        tractor_model = np.load(save_path + "/tractor_source_model.npy")
+        #do the cog analysis
+        tot_subtract_sources = { "g": tot_subtract_sources_g, "r": tot_subtract_sources_r, "z": tot_subtract_sources_z }
+        fidu_mag = {"g":new_mag_g, "r": new_mag_r, "z": new_mag_z }
+        run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tot_subtract_sources, fidu_mag, source_tgid, save_path)
+        
 
-        #we want to plot the original iamge 
+        ##########################################
+        ### PLOTTING CODE
+        ##########################################
+
+        ##GRZ IMAGE
+        ax_id = 5
+        ax[ax_id].set_title("grz image w/aperture",fontsize = 13)
+        ax[ax_id].imshow(rgb_stuff,origin="lower",zorder = 0)
+        #th box size is 350x350
+        ax[ax_id].text(65,325, "(%.3f,%.3f, z=%.3f)"%(source_ra,source_dec, source_redshift) ,color = "yellow",fontsize = 10)
+
+        #get pixel co-ordinates of the source galaxy
+        circle = patches.Circle( (xpix, ypix),7, color='orange', fill=False, linewidth=1,ls ="-")
+        ax[ax_id].add_patch(circle)
+        ax[ax_id].set_xlim([0,box_size])
+        ax[ax_id].set_ylim([0,box_size])
+        ax[ax_id].set_xticks([])
+        ax[ax_id].set_yticks([])
+        if bstar_ra != 99:
+            aperture_for_bstar_1.plot(ax = ax[ax_id], color = "r", lw = 1.5, ls = "dotted")
+            aperture_for_bstar_34.plot(ax = ax[ax_id], color = "r", lw = 1.5, ls = "dotted")
+            aperture_for_bstar_12.plot(ax = ax[ax_id], color = "r", lw = 1.5, ls = "dotted")
+
+
+        ##G+R+Z DATA LOG IMAGE
+        ax_id = 6
+        ax[ax_id].set_title("g+r+z data (log scaling)",fontsize = 13)
+        # Create a norm object and inspect the vmin/vmax
+        norm_obj = LogNorm()
+        ax[ax_id].imshow(tot_data,origin="lower",norm=norm_obj,cmap = "viridis",zorder = 0)
+        tot_data_vmin = norm_obj.vmin
+        tot_data_vmax = norm_obj.vmax
+        ax[ax_id].set_xlim([0,box_size])
+        ax[ax_id].set_ylim([0,box_size])
+        ax[ax_id].set_xticks([])
+        ax[ax_id].set_yticks([])
+        if bstar_ra != 99:
+            aperture_for_bstar_1.plot(ax = ax[ax_id], color = "r", lw = 1.5, ls = "dotted")
+            aperture_for_bstar_34.plot(ax = ax[ax_id], color = "r", lw = 1.5, ls = "dotted")
+            aperture_for_bstar_12.plot(ax = ax[ax_id], color = "r", lw = 1.5, ls = "dotted")
+
+
+        ##G+R+Z SEGMENTED IMAGE
+        ax_id = 7
+        ##the color in these plots is from the tab20 color map
+        cmap = cm.tab20
+        # Normalize values to the range [0,1]
+        norm = mcolors.Normalize(vmin=min(new_deblend_ids), vmax=max(new_deblend_ids))
+        # Map values to colors
+        colors = cmap(norm(np.array(new_deblend_ids)))
+        
+        ax[ax_id].set_title("g+r+z data segmentation",fontsize = 13)
+        ax[ax_id].imshow(segment_map, origin='lower', cmap=segment_map.cmap,
+                   interpolation='nearest',zorder = 0)
+        aperture_for_phot.plot(ax = ax[7], color = "r", lw = 2.5, ls = "-")
+        aperture_for_phot_noscale.plot(ax = ax[7], color = "r", lw = 1, ls = "dotted")
+        ax[ax_id].scatter( sources_f_xpix,sources_f_ypix, s=5,color = "white",marker="^") 
+        #sources that are stars!
+        ax[ax_id].scatter( sources_f_xpix[is_star],sources_f_ypix[is_star], s=50,color = "white",marker="*",zorder = 3) 
+        ax[ax_id].set_xlim([0,box_size])
+        ax[ax_id].set_ylim([0,box_size])
+        ax[ax_id].set_xticks([])
+        ax[ax_id].set_yticks([])
+        if bstar_ra != 99:
+            aperture_for_bstar_1.plot(ax = ax[7], color = "r", lw = 1.5, ls = "dotted")
+            aperture_for_bstar_34.plot(ax = ax[7], color = "r", lw = 1.5, ls = "dotted")
+            aperture_for_bstar_12.plot(ax = ax[7], color = "r", lw = 1.5, ls = "dotted")
+
+
+        ##G+R+Z MAIN SEGMENT
+        ax_id = 8
+        ax[ax_id].set_title("g+r+z band main segment",fontsize = 13)
+        ax[ax_id].scatter( sources_f_xpix[is_star],sources_f_ypix[is_star], s=50,color = "white",marker="*",zorder = 3) 
+        ax[ax_id].imshow(segm_deblend_v3, origin='lower', cmap="tab20",
+                   interpolation='nearest')
+        #plotting the sources in the main segment
+        plot_now = source_cat_inseg_signi[(~is_star_inseg_signi)]
+        for p in range(len(plot_now)):
+            ax[ax_id].scatter( [ plot_now["xpix"][p]] , [ plot_now["ypix"][p]], s=10,color = "k",marker=plot_now["marker"][p]) 
+        ax[ax_id].set_xlim([0,box_size])
+        ax[ax_id].set_ylim([0,box_size])
+        ax[ax_id].set_xticks([])
+        ax[ax_id].set_yticks([])
+        if bstar_ra != 99:
+            aperture_for_bstar_1.plot(ax = ax[ax_id], color = "r", lw = 1.5, ls = "dotted")
+            aperture_for_bstar_34.plot(ax = ax[ax_id], color = "r", lw = 1.5, ls = "dotted")
+            aperture_for_bstar_12.plot(ax = ax[ax_id], color = "r", lw = 1.5, ls = "dotted")
+        
+
+        aperture_for_phot.plot(ax = ax[ax_id], color = "r", lw = 2.5, ls = "-")
+
+
+        ##ALL DEBLENDED SEGMENTS
+        ax_id = 9
+
+        ax[ax_id].set_title("g+r+z segmentation+deblend",fontsize = 13)
+        
+        aperture_for_phot.plot(ax = ax[ax_id], color = "r", lw = 2.5, ls = "-")
+        aperture_for_phot_noscale.plot(ax = ax[ax_id], color = "r", lw = 1, ls = "dotted")
+        
+        ax[ax_id].imshow(segm_deblend, origin='lower', cmap=segm_deblend.cmap,
+                   interpolation='nearest',zorder = 0)
+           
+        ax[ax_id].scatter( sources_f_xpix[is_star],sources_f_ypix[is_star], s=50,color = "white",marker="*",zorder = 3) 
+        
+        plot_now = source_cat_inseg_signi[(~is_star_inseg_signi)]
+        for p in range(len(plot_now)):
+            ax[ax_id].scatter( [ plot_now["xpix"][p]] , [ plot_now["ypix"][p]], s=10,color = "k",marker=plot_now["marker"][p]) 
+        
+        ax[ax_id].set_xlim([0,box_size])
+        ax[ax_id].set_ylim([0,box_size])
+        ax[ax_id].set_xticks([])
+        ax[ax_id].set_yticks([])
+    
+        
+        ##COLOR-COLOR PLOT
+        ax_id = 0
+        ##plot the g-r vs. r-z color contours from the redshift bin of this object        
+        ax[ax_id].contour(X, Y, Z_gmm, levels=sorted(lvls), cmap="viridis_r",alpha = 1,zorder = 1)
+
+        #plotting all the segment colors with error on the color-color plot
+        for i in range(len(new_deblend_ids)):
+            ax[ax_id].scatter([all_segs_grs[i]], [all_segs_rzs[i]], s=50, marker="x",lw=2,zorder=3,color = colors[i])
+            ax[ax_id].errorbar([all_segs_grs[i]], [all_segs_rzs[i]], zorder=3,ecolor = colors[i],
+                                  xerr=[ all_segs_grs_err[i] ], yerr= [ all_segs_rzs_err[i] ], fmt='none',alpha=1, capsize=3)
+
+        ##to avoid some sources being outside the plotting limits, we will clip their values 
+        def get_updated_gr_rz(gr_vals, rz_vals):
+            gr_vals_up = np.clip(gr_vals, -1, 2)
+            rz_vals_up = np.clip(rz_vals, -1, 1.5)
+            return gr_vals_up, rz_vals_up
+
+        gr_new, rz_new = get_updated_gr_rz(source_cat_inseg_signi[is_star_inseg_signi]["g-r"].data, source_cat_inseg_signi[is_star_inseg_signi]["r-z"].data)
+        ax[ax_id].scatter( gr_new, rz_new, color =  "r", marker = "*",s= 40,zorder = 2 ) 
+
+        plot_now = source_cat_inseg_signi[(~is_star_inseg_signi) ]
+        gr_new, rz_new = get_updated_gr_rz(plot_now["g-r"].data, plot_now["r-z"].data)
+        for p in range(len(plot_now)):
+            ax[ax_id].scatter( [ gr_new[p]], [rz_new[p]], color = "k" , marker = plot_now["marker"][p], s= 20,zorder = 2 ) 
+            
+        gr_new, rz_new = get_updated_gr_rz(source_cat_inseg_signi["g-r"].data, source_cat_inseg_signi["r-z"].data)
+        ## plot the color-color errorbars
+        ax[ax_id].errorbar(gr_new, rz_new, 
+            xerr=source_cat_inseg_signi["g-r_err"], yerr=source_cat_inseg_signi["r-z_err"], fmt='none', ecolor='k', alpha=0.3, capsize=3,zorder = 2)
+  
+        ##plot the bluer boundary lines
+        ax[ax_id].hlines(y = all_segs_rzs[new_deblend_island_num - 1] + col_lenient,xmin = -0.5, xmax= all_segs_grs[new_deblend_island_num - 1] + col_lenient,color = "k",lw = 1, ls = "-")
+        ax[ax_id].vlines(x = all_segs_grs[new_deblend_island_num - 1] + col_lenient,ymin = -0.5, ymax= all_segs_rzs[new_deblend_island_num - 1] + col_lenient,color = "k",lw = 1, ls = "-")
+
+        ax[ax_id].set_xlim([ -0.5, 2])
+        ax[ax_id].set_ylim([  -0.5, 1.5])
+        ax[ax_id].tick_params(axis='both', labelsize=10)
+        ax[ax_id].set_xlabel("g-r",fontsize = 17)
+        ax[ax_id].set_ylabel("r-z",fontsize = 17)
+
+
+        ##TRACTOR IMG AND TRACTOR IMG-S
+        ax_id = 1
+        #getting difference between source of interest model and entire image        
         resis = data_arr - tractor_model 
         rgb_resis = sdss_rgb(resis, ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
-        
+        #we crop to the center 64 as that is our CNN input
         size = 64
         start = (350 - size) // 2
         end = start + size
 
-        ax[1].set_title(r"IMG")
-        ax[1].imshow(rgb_stuff[start:end, start:end,:])
-        ax[1].set_xticks([])
-        ax[1].set_yticks([])
-        ax[1].set_xlim([0,63])
-        ax[1].set_ylim([0,63])
+        ax[ax_id].set_title(r"IMG")
+        ax[ax_id].imshow(rgb_stuff[start:end, start:end,:])
+        ax[ax_id].set_xticks([])
+        ax[ax_id].set_yticks([])
+        ax[ax_id].set_xlim([0,63])
+        ax[ax_id].set_ylim([0,63])
         
-        ax[2].set_title(r"IMG - S")
-        ax[2].imshow(rgb_resis[start:end, start:end,:])
-        ax[2].set_xticks([])
-        ax[2].set_yticks([])
+        ax_id = 2
+        ax[ax_id].set_title(r"IMG - S")
+        ax[ax_id].imshow(rgb_resis[start:end, start:end,:])
+        ax[ax_id].set_xticks([])
+        ax[ax_id].set_yticks([])
+
+
+        ## APERTURE MASK PLOT
+        ax_id = 4
+
+        ax[ax_id].set_title("g+r+z band aperture mask",fontsize = 13)
+        ax[ax_id].set_xticks([])
+        ax[ax_id].set_yticks([])
+        ax[ax_id].set_xlim([0,box_size])
+        ax[ax_id].set_ylim([0,box_size])
+
+        ##getting the aperture mask      
+        ax[ax_id].imshow(tot_data_plot,origin="lower",norm=LogNorm(vmin=tot_data_vmin, vmax = tot_data_vmax),cmap = "viridis",zorder = 0)
+
+        ax[ax_id].set_xlim([0,box_size])
+        ax[ax_id].set_ylim([0,box_size])
+
+        aperture_for_phot.plot(ax = ax[ax_id], color = "r", lw = 2.5, ls = "-")
         
-        ## add text saying what the old magnitude and the new magnitude
-        ax[3].set_xlim([0,1])
-        ax[3].set_ylim([0,1])
-        ax[3].set_xticks([])
-        ax[3].set_yticks([])
+        if bstar_ra != 99:
+            aperture_for_bstar_1.plot(ax = ax[ax_id], color = "r", lw = 1.5, ls = "dotted")
+            aperture_for_bstar_34.plot(ax = ax[ax_id], color = "r", lw = 1.5, ls = "dotted")
+            aperture_for_bstar_12.plot(ax = ax[ax_id], color = "r", lw = 1.5, ls = "dotted")
+            
+
+        
+        ### SUMMARY PLOT WITH INITIAL MAGNITUDE
+        ax_id = 3
+        ax[ax_id].set_title("summary",fontsize = 13)
+
+        ax[ax_id].set_xlim([0,1])
+        ax[ax_id].set_ylim([0,1])
+        ax[ax_id].set_xticks([])
+        ax[ax_id].set_yticks([])
 
         spacing = 0.08
-        start = 0.99
+        start = 0.97
         fsize = 11
-        ax[3].text(0.05,start,"Org-mag g = %.2f"%source_mag_g,size =fsize,transform=ax[3].transAxes, verticalalignment='top')
-        ax[3].text(0.05,start - spacing*1,"New-mag g = %.2f"%new_mag_g,size = fsize,transform=ax[3].transAxes, verticalalignment='top')
-        ax[3].text(0.05,start - spacing*2,"fracflux_g = %.2f"%(source_cat_obs["fracflux_g"]),size = 12,transform=ax[3].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start,"Org-mag g = %.2f"%source_mag_g,size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*1,"New-mag g = %.2f"%new_mag_g,size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*2,"fracflux_g = %.2f"%(source_cat_obs["fracflux_g"]),size = 12,transform=ax[ax_id].transAxes, verticalalignment='top')
         
-        ax[3].text(0.05,start - spacing*3,"Org-mag r = %.2f"%source_mag_r,size =fsize,transform=ax[3].transAxes, verticalalignment='top')
-        ax[3].text(0.05,start - spacing*4,"New-mag r = %.2f"%new_mag_r,size = fsize,transform=ax[3].transAxes, verticalalignment='top')
-        ax[3].text(0.05,start - spacing*5,"fracflux_r= %.2f"%(source_cat_obs["fracflux_r"]),size = fsize,transform=ax[3].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*3,"Org-mag r = %.2f"%source_mag_r,size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*4,"New-mag r = %.2f"%new_mag_r,size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*5,"fracflux_r= %.2f"%(source_cat_obs["fracflux_r"]),size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
 
-        ax[3].text(0.05,start - spacing*6,"Org-mag z = %.2f"%source_mag_z,size =fsize,transform=ax[3].transAxes, verticalalignment='top')
-        ax[3].text(0.05,start - spacing*7,"New-mag z = %.2f"%new_mag_z,size = fsize,transform=ax[3].transAxes, verticalalignment='top')
-        ax[3].text(0.05,start - spacing*8,"fracflux_z = %.2f"%(source_cat_obs["fracflux_z"]),size = fsize,transform=ax[3].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*6,"Org-mag z = %.2f"%source_mag_z,size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*7,"New-mag z = %.2f"%new_mag_z,size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*8,"fracflux_z = %.2f"%(source_cat_obs["fracflux_z"]),size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
 
-        ax[3].text(0.05,start - spacing*9,"Closest Star fdist = %.2f"%(closest_star_norm_dist),size = fsize,transform=ax[3].transAxes, verticalalignment='top')
-        ax[3].text(0.05,start - spacing*10,"Bright star fdist = %.2f"%(bstar_fdist),size = fsize,transform=ax[3].transAxes, verticalalignment='top')
-        ax[3].text(0.05,start - spacing*11,"SGA Dist (deg), NDist = %.2f, %.2f"%(sga_dist, sga_ndist),size = fsize,transform=ax[3].transAxes, verticalalignment='top')
-        
-        
+        ax[ax_id].text(0.05,start - spacing*9,"Closest Star fdist = %.2f"%(closest_star_norm_dist),size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*10,"Bright star fdist = %.2f"%(bstar_fdist),size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*11,"SGA Dist (deg), NDist = %.2f, %.2f"%(sga_dist, sga_ndist),size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+
+
+        ##saving this image :P
+        plt.savefig( save_summary_png ,bbox_inches="tight")
+        plt.close()
+    
+
         new_mag_g = new_mag_g + 2.5 * np.log10(source_cat_obs["mw_transmission_g"])
         new_mag_r = new_mag_r + 2.5 * np.log10(source_cat_obs["mw_transmission_r"])
         new_mag_z = new_mag_z + 2.5 * np.log10(source_cat_obs["mw_transmission_z"])
-        
+
         new_mags = [new_mag_g, new_mag_r, new_mag_z]
 
-        plt.savefig( save_summary_png ,bbox_inches="tight")
 
-        plt.close()
-    
         ##save these as a file for future reference
         np.save(save_path + "/new_aperture_mags.npy", new_mags)
         np.save(save_path + "/org_mags.npy", org_mags)
