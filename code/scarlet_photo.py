@@ -256,14 +256,13 @@ def run_scarlet_pipe(input_dict):
     old_psfs = { "g": psf_g, "r": psf_r, "z": psf_z }
     new_psfs = { "g": psf_g, "r": psf_r, "z": psf_z }
 
-    ##HOW TO HANDLE THE DIFFERENT PSF SIZE IN Z BAND IN DR9-NORTH???
-    
-    for bi in "grz":
-        if np.shape(old_psfs[bi]) != (63,63):
-            if verbose:
-                print(bi)
-                print(np.shape(old_psfs[bi]))
-            new_psfs[bi] = embed_psf(old_psfs[bi])
+    #The psf has a different size in North, but we not consider that for now
+    # for bi in "grz":
+    #     if np.shape(old_psfs[bi]) != (63,63):
+    #         if verbose:
+    #             print(bi)
+    #             print(np.shape(old_psfs[bi]))
+    #         new_psfs[bi] = embed_psf(old_psfs[bi])
             
     psf = np.array( [ new_psfs["g"], new_psfs["r"], new_psfs["z"] ] )
 
@@ -332,8 +331,6 @@ def run_scarlet_pipe(input_dict):
         threshold = 1.5 * brms
         
         ##do image segmentation per band image
-        #for faint ELGs, this could be reduced?
-        #we are only running this for testing purposes, and so will not be including the ELG objects
         npixels_min = 10
         from photutils.segmentation import detect_sources
 
@@ -601,7 +598,6 @@ def run_scarlet_pipe(input_dict):
                 print( "All stars are not matched to a center!" )
                 print(len(centers_stars),len(center_star_inds), len(star_f_xpix))
 
-
         ##I want to make a separate plot just showing the identified peaks!
         fig_detect, axd = make_subplots(ncol = 1, nrow = 1, label_font_size = fontsize,plot_size = 4, return_fig = True)
         
@@ -626,7 +622,7 @@ def run_scarlet_pipe(input_dict):
         #########################################
         #########################################
         #RUN THE SCARLET OPTIMIZER TO FIT SOURCES
-        #Note that is a star is saturated, there is no hope of fitting it with a psf. Easiest solution is just to mask it ... 
+        #Note that if a star is saturated, there is no hope of fitting it with a psf. Easiest solution is just to mask it ... 
         #########################################
         #########################################
 
@@ -1391,7 +1387,46 @@ def run_scarlet_pipe(input_dict):
         
         return new_mags, org_mags, save_summary_png
 
+
+
+# def get_relevant_files_scarlet(input_dict):
+#     '''
+#     Get the relevant files for a single object!
+#     '''
+
+#     tgid_k = input_dict["TARGETID"]
+#     samp_k = input_dict["SAMPLE"]
+#     ra_k = input_dict["RA"]
+#     dec_k = input_dict["DEC"]
+#     top_folder = input_dict["top_folder"]
+#     sweep_folder = input_dict["sweep_folder"]
+#     brick_i = input_dict["brick_i"]
+#     wcat = input_dict["wcat"]
+#     session = input_dict["session"]
     
+#     top_path_k = top_folder + "/%s/"%wcat + sweep_folder + "/" + brick_i + "/%s_tgid_%d"%(samp_k, tgid_k) 
+        
+#     #check if psf already exists
+#     if os.path.exists(top_path_k + "/psf_data_z.npy"):
+#         pass
+#     else:
+#         psf_dict = fetch_psf(ra_k,dec_k, session)
+#         if psf_dict is not None:
+#             #as psf can be of different sizes and so saving each band separately!
+#             np.save(top_path_k  + "/psf_data_g.npy",psf_dict["g"])
+#             np.save(top_path_k  + "/psf_data_r.npy",psf_dict["r"])
+#             np.save(top_path_k  + "/psf_data_z.npy",psf_dict["z"])
+
+    
+#     #similarly, get the subimage!
+#     sbimg_path = top_path_k + "/grz_subimage.fits"
+#     if os.path.exists(sbimg_path):
+#         pass
+#     else:
+#         save_subimage(ra_k, dec_k, sbimg_path, session, size = 350, timeout = 30)
+
+#     ##done saving all the files!
+#     return
 
 if __name__ == '__main__':
 
@@ -1449,3 +1484,181 @@ if __name__ == '__main__':
     #provide this input dict to the scarlet function!
     run_scarlet_pipe(input_dict)
 
+
+
+    #whether own peak detection will be used in the scarlet pipeline
+    run_own_detect = not run_w_source
+
+
+
+      # ##################
+      #       ##PART 4b: Run scarlet photometry for sources that remain as candidate dwarfs after aperture photometry
+      #       ##################
+        
+      #       if run_scarlet == True:
+    
+      #           if run_aper:
+      #               #if run_aper was just run then we do not need to load in the datafiles
+      #               pass
+      #           else:
+      #               #run aper was not run right before and so we have to load in the saved data files 
+      #               #note that if pipeline is being run on a single object, then we need to run_aper before to produce shreds_focus_i table as summary files are not saved in the tgids mode
+      #               if use_clean == False:
+      #                   try:
+      #                       file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_shreds_catalog_w_aper_mags_chunk_%d.fits"%(sample_str, chunk_i)
+      #                   except:
+      #                       file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_shreds_catalog_w_aper_mags.fits"%(sample_str)
+                            
+      #               else:
+      #                   try:
+      #                       file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_clean_catalog_w_aper_mags_chunk_%d.fits"%(sample_str, chunk_i) 
+    
+      #                   except:
+      #                       file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_clean_catalog_w_aper_mags.fits"%(sample_str) 
+                            
+      #               shreds_focus_i = Table.read(file_save)
+    
+      #           ##We will be running scarlet photometry pipeline as a testing of the original aperture pipeline.
+      #           ##So we will focus on objects only in south (consistent psf) and low-redshift objects that are most prone to shredding
+
+      #           #we will also focus on objects that do not have any bright-saturated stars in the vicinity!
+      #           #In this case, we can optimize the LSB and other components together. We were initially doing this separate because of the presence of bright stars in the field
+                                   
+    
+      #           print("Number of objects initially (in south only) -> %d"%len(shreds_focus_i[shreds_focus_i["is_south"] == 1]))
+    
+      #           ##furthermore, right now scarlet only works on south data  ....      
+                
+      #           temp_if = shreds_focus_i[ (shreds_focus_i["LOGM_SAGA_APERTURE"] <= 9.5) & (~np.isnan(shreds_focus_i["LOGM_SAGA_APERTURE"])) & (shreds_focus_i["is_south"] == 1)   ]
+                
+      #           # temp_i_nans = shreds_focus_i[ (np.isnan(shreds_focus_i["LOGM_SAGA_APERTURE"])) & (shreds_focus_i["is_south"] == 1)  ]
+    
+      #           print("Number of objects with updated Mstar <= 9.5 -> %d"%len(temp_if))
+      #           print("Number of objects with NaN photometry -> %d"%len(temp_i_nans))
+    
+      #           #the mask is that take objects from south, and if they have NaN stellar masses or stellar masses that are below 9.5 and not nans
+      #           do_scarlet_mask = (shreds_focus_i["is_south"] == 1) & ( ( (shreds_focus_i["LOGM_SAGA_APERTURE"] <= 9.5) & (~np.isnan(shreds_focus_i["LOGM_SAGA_APERTURE"])) ) |  (np.isnan(shreds_focus_i["LOGM_SAGA_APERTURE"] ) ) ) & (shreds_focus_i["Z"] < 0.02)
+
+                                                                       
+      #           #these are the objects on which we will be doing scarlet photometry!                                                                                                          
+      #           all_inputs_scarlet = all_inputs[  do_scarlet_mask ]
+      #           shreds_focus_scarlet =shreds_focus_i[  do_scarlet_mask ]
+    
+      #           #for plotting purposes, we need to input in the dictionary 3 additional keys on the aperture mags
+      #           all_inputs_scarlet_v2 = []
+    
+      #           for di, dicti in tqdm(enumerate(all_inputs_scarlet)):
+      #               dicti["MAG_G_APERTURE"] = shreds_focus_scarlet[di]["MAG_G_APERTURE"]
+      #               dicti["MAG_R_APERTURE"] = shreds_focus_scarlet[di]["MAG_R_APERTURE"]
+      #               dicti["MAG_Z_APERTURE"] = shreds_focus_scarlet[di]["MAG_Z_APERTURE"]
+      #               all_inputs_scarlet_v2.append(dicti)
+
+                
+      #           ##generate the relevant files for scarlet photometry
+      #           if make_cats== True:
+      #               print_stage("Generating relevant files for doing scarlet photometry")
+                    
+      #               print("Scarlet: Using cleaned catalogs =",use_clean==True)
+            
+      #               print(f"Scarlet: Number of objects whose scarlet files will be obtained = {len(shreds_focus_scarlet)}")
+            
+      #               if use_clean == False:
+      #                   top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds"
+      #               else:
+      #                   top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_good"
+                        
+      #               print(f'Scarlet: Number of objects in south = {len(shreds_focus_scarlet[shreds_focus_scarlet["is_south"] == 1])}')
+      #               print(f'Scarlet: Number of objects in north = {len(shreds_focus_scarlet[shreds_focus_scarlet["is_south"] == 0])}')
+                        
+      #               #list of dictionaries we will feed to get_relevant_files_scarlet function
+                    
+      #               ##this can be sped up as we are not reading files or anyting!
+    
+      #               wcats_array = np.array(["north","south"])[shreds_focus_scarlet["is_south"].data]
+    
+      #               if len(wcats_array) != len(shreds_focus_scarlet):
+      #                   raise ValueError("Error in lenghts of wcat and shreds_focus_scarlet array!")
+                    
+      #               all_input_dicts = []
+      #               for i in range(len(shreds_focus_scarlet)):
+                        
+      #                   temp = { "TARGETID": shreds_focus_scarlet["TARGETID"][i], "SAMPLE": shreds_focus_scarlet["SAMPLE"][i], "RA": shreds_focus_scarlet["RA"][i], 
+      #                           "DEC": shreds_focus_scarlet["DEC"][i],"wcat": wcats_array[i] , "brick_i":shreds_focus_scarlet["BRICKNAME"][i], "sweep_folder": shreds_focus_scarlet["SWEEP"][i].replace("-pz.fits","") , "top_folder":top_folder, "session":session }
+    
+      #                   all_input_dicts.append(temp)
+    
+                    
+      #               ## get the relevant files like psfs and subimages for doing scarlet photometry! 
+      #               with mp.Pool(processes=ncores) as pool:
+      #                   results = list(tqdm(pool.imap(get_relevant_files_scarlet, all_input_dicts), total = len(all_input_dicts)  ))
+                        
+      #           print_stage("Beginning to run scarlet photometry!!")
+    
+      #           if run_parr:
+      #               with mp.Pool(processes= ncores ) as pool:
+      #                   results = list(tqdm(pool.imap(run_scarlet_pipe, all_inputs_scarlet_v2), total = len(all_inputs_scarlet_v2)  ))
+      #           else:
+      #               results = []
+      #               for i in trange(len(all_inputs_scarlet)):
+      #                   results.append( run_scarlet_pipe(all_inputs_scarlet[i]) )
+                        
+      #           ### saving the results of the photometry pipeline
+      #           results = np.array(results)
+                
+      #           print_stage("Done running all the scarlet photometry!!")
+        
+      #           final_new_mags = np.vstack(results[:,0])
+      #           final_org_mags = np.vstack(results[:,1])
+                
+      #           final_saveimgs = np.vstack(results[:,2])
+    
+      #           final_saveimgs = final_saveimgs[final_saveimgs != ""]
+      #           all_scarlet_saveimgs += list(final_saveimgs)
+                
+      #           #check that the org mags make sense
+      #           print("Maximum Abs difference between org mags = ",np.max( np.abs(final_org_mags[:,0] - shreds_focus_scarlet["MAG_G"]) ))
+                
+      #           shreds_focus_scarlet["MAG_G_SCARLET"] = final_new_mags[:,0]
+      #           shreds_focus_scarlet["MAG_R_SCARLET"] = final_new_mags[:,1]
+      #           shreds_focus_scarlet["MAG_Z_SCARLET"] = final_new_mags[:,2]
+    
+      #           ## compute updated stellar mass using scarlet photometry??
+                
+      #            #then save this file!
+      #           if tgids_list is None:
+      #               if use_clean == False:
+      #                   file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_shreds_catalog_w_scarlet_mags_chunk_%d.fits"%(sample_str,chunk_i)
+      #               else:
+      #                   file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_clean_catalog_w_scarlet_mags_chunk_%d.fits"%(sample_str, chunk_i) 
+    
+                    
+      #               save_table( shreds_focus_i, file_save)   
+      #               print_stage("Saved scarlet summary files at %s!"%file_save)
+        
+
+
+       
+        # if run_scarlet:
+        #     file_template_scarlet = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_%s_catalog_w_scarlet_mags"%(sample_str, clean_flag)
+
+                # if run_scarlet:
+                # os.rename(file_template_scarlet + "_chunk_0.fits", file_template_scarlet + "%s.fits"%end_name)
+            
+        
+
+
+            # if run_scarlet:
+            #     #we need to consolidate files!  
+            #     shreds_focus_combine_scarlet = []
+            #     for ni in trange(nchunks):
+            #         shreds_focus_part = Table.read(file_template_scarlet + "_chunk_%d.fits"%ni  )
+            #         shreds_focus_combine_scarlet.append(shreds_focus_part)
+            #         #and then we delete that file!
+            #         os.remove(file_template_scarlet + "_chunk_%d.fits"%ni)
+                    
+            #     shreds_focus_combine_scarlet = vstack(shreds_focus_combine_scarlet)
+            #     print_stage("Total number of objects in consolidated scarlet file = %d"%len(shreds_focus_combine_scarlet))
+                
+            #     save_table( shreds_focus_combine_scarlet, file_template_scarlet + "%s.fits"%end_name) 
+                
+            #     print_stage("Consolidated scarlet chunk saved at %s"%(file_template_scarlet + "%s.fits"%end_name) )

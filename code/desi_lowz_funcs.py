@@ -774,6 +774,8 @@ def get_sga_norm_dists_FAST(cat, siena_path="/global/cfs/cdirs/cosmo/data/sga/20
     #given these close matches, compute how far away it is in terms of angular distance!
     #this approach, probably works fine as there are not going to be that many SGA galaxies ... 
 
+    #for the raduius, we will take the maximum of the 
+
     all_norm_dist = calc_normalized_dist(cat["RA"].data, cat["DEC"].data, 
                                          siena20_matched["RA_MOMENT"].data, siena20_matched["DEC_MOMENT"].data,
                                          siena20_matched["D26"].data * 30, cen_ba=siena20_matched["BA"].data, 

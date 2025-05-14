@@ -39,11 +39,12 @@ reduce_compare = QueryMaker.reduce_compare
 import random
 import argparse
 import concurrent.futures
-
+import pickle
 from photutils.segmentation import make_2dgaussian_kernel
 from astropy.convolution import convolve
-from aperture_cogs import get_elliptical_aperture, run_cogs
-
+from aperture_cogs import get_elliptical_aperture, find_nearest_island
+from photutils.background import StdBackgroundRMS, MADStdBackgroundRMS
+from astropy.stats import SigmaClip
 
 rootdir = '/global/u1/v/virajvm/'
 sys.path.append(os.path.join(rootdir, 'DESI2_LOWZ'))
@@ -63,22 +64,6 @@ def mask_radius_for_mag(mag):
     # This is in degrees, and is from Rongpu in the thread [decam-chatter 12099].
     return 1630./3600. * 1.396**(-mag)
 
-
-# def fetch_noise(ra, dec,size = 300):
-#     """
-#     Returns the noise matrix per pixel level. Use to compute errors!
-#     """
-#     url = url_prefix + f'cutout.fits?ra={ra}&dec={dec}&'
-    
-#     url += 'layer=ls-dr9&size=%d&subimage'%size
-#     print(url)
-#     session = requests.Session()
-#     resp = session.get(url)
-#     cutout = fits.open(BytesIO(resp.content))
-#     # ## THIS IS WORKING BUT NEED TO FIGURE OUT WHY THE ARRAY IS ALWAYS SMALLER...
-#     # noise_image = {'g'}
-#     # return noise_image
-
 def mask_circle(array, x0, y0, r,value = 0):
     '''
     This will be used to mask the circular bright star region!
@@ -88,12 +73,7 @@ def mask_circle(array, x0, y0, r,value = 0):
     mask = (x - x0)**2 + (y - y0)**2 <= r**2
     array[mask] = value
     return array
-    
-# use this random state for reproducibility
-# rng = np.random.RandomState(14)
-
-
-                
+                    
 def run_aperture_pipe(input_dict):
     '''
     Function to redo the aperture via aperture photometry
@@ -106,12 +86,10 @@ def run_aperture_pipe(input_dict):
     source_dec : float, DEC location of source
     source_redshift : float, DESI redshift of source
 
-    TO DO:
+    Need to fix running this function when I do not have tractor model and need the main segment 
 
-    1) When star is part of a different de-blended segment, do not mask the whole segment by default. Include that, but maybe just mask a certain aperture around the star?
 
     STAR LOGIC:
-
     1) If a star is not in the same island as DESI source, we do not do anything.
     2) If the star is on the main island, we mask the area within 0.5 of the star radius! If the main source is within 0.5, then it is beyond fixing!
 
@@ -137,7 +115,12 @@ def run_aperture_pipe(input_dict):
     source_cat_f = input_dict["source_cat"]
     org_mag_g = input_dict["org_mag_g"]
     overwrite = input_dict["overwrite"]
+    pcnn_val = input_dict["pcnn_val"]
+    npixels_min = input_dict["npixels_min"]
+    threshold_rms_scale = input_dict["threshold_rms_scale"]
+    
 
+    
     verbose=False
 
     if verbose:
@@ -228,10 +211,10 @@ def run_aperture_pipe(input_dict):
 
     if overwrite == False:
         try:
-            new_mags = np.load(save_path + "/new_aperture_mags.npy")
+            new_mags = np.load(save_path + "/aper_r35_mags.npy")
             org_mags = np.load(save_path + "/org_mags.npy")
 
-            return closest_star_dist, closest_star_mag, new_mags, org_mags, save_path, save_summary_png, True, img_path
+            return closest_star_dist, closest_star_mag, new_mags, org_mags, save_path, save_summary_png, img_path
         except:
             do_i_run = True
     if overwrite == True:
@@ -277,75 +260,34 @@ def run_aperture_pipe(input_dict):
 
         source_cat_f["xpix"] = sources_f_xpix
         source_cat_f["ypix"] = sources_f_ypix
-        
-        ##################
-        ##PART 4: Read information on the aperture center!
-        ##################
-        
-        # #load the aperture coordinates
-        # aper_loc = np.load(save_path + "/aperture_cen_coord.npy")
 
-        ##################
-        ##Part 5: Make the diagnostic plots for each band
-        ##################
-    
         #first estimate the background error to use in aperture photometry
         noise_dict = {}
-        bkg_dict = {}
-        bkg_median_dict = {}
-    
-        #in case background estimate fails due to precense of massive galaxy
-        #we will use this fiducial background
-        noise_dict_fidu = {'g': 0.0020144903630876956, 'r': 0.002699455063905918, 'z': 0.008366939035641905}
-        
+
+        ##SOMETHING TO CHECK IS IF THE FITS FILE I AM READING HAVE ANY INFORMATION ON THE BACKGROUND RMS LEVEL
+        rms_estimator = MADStdBackgroundRMS()
+        ##estimate the background rms in each band!
         for bii in ["g","r","z"]:        
-            ##Part 5.1: estimate the RMS in background which is useful for source detection
-    
-            ## if the background cannot be estimated then that means there is probably a very large source in the area!
-            try:
-                bkg_estimator = MedianBackground()
-                bkg = Background2D(data[bii], (box_size, box_size), filter_size=(3, 3),
-                                   bkg_estimator=bkg_estimator, exclude_percentile=10.0)
-                
-                bii_rms = np.median(bkg.background_rms)
-                noise_dict[bii] = bii_rms
-                bkg_dict[bii] = bkg.background
-                bkg_median_dict[bii] = bkg.background_median
-            except:
-                ## if background cannot be estimated, this is likely to be not a dwarf galaxy
-                # print("The background for %s band cannot be estimated. We use the fiducial noise for this band"%bii)
-                noise_dict[bii] = noise_dict_fidu[bii]
+            # Apply sigma clipping
+            sigma_clip = SigmaClip(sigma=3.0,maxiters=5)
+            clipped_data = sigma_clip(data[bii])
+            # Estimate RMS
+            background_rms = rms_estimator(clipped_data)
+            noise_dict[bii] = background_rms
 
-        tot_data = np.sum(data_arr, axis=0)
-
-        bkg_estimated = True
-
-        try:
-            bkg_estimator = MedianBackground()
-            tot_bkg = Background2D(tot_data, (box_size, box_size), filter_size=(3, 3),
-                               bkg_estimator=bkg_estimator, exclude_percentile=20.0)
-            tot_noise_rms = np.median(tot_bkg.background_rms)
-            bkg_estimated = True
-            
-        except:
-            print("-----")
-            print("could not get background TARGETID =",source_tgid)
-            print("-----")
-            tot_noise_rms = np.sqrt(  noise_dict_fidu["g"]**2 + noise_dict_fidu["r"]**2 + noise_dict_fidu["z"]**2 )
-            #this variable is returned so we know after when exaclty this happens
-            bkg_estimated = False
-            
-    
-        ## list stores the aperture size for each band
-        all_aper_rads = []
-
-        ##construct total image to identify segments
-
-        npixels_min = 20
+        #the rms in the total image will be the rms in the 3 bands added in quadrature
+        tot_rms = np.sqrt( noise_dict["g"]**2 + noise_dict["r"]**2 + noise_dict["z"]**2 )
         
-        threshold = 2 * tot_noise_rms
+        #parameters to think a bit carefully about
+        # npixels_min = 20
+        threshold = threshold_rms_scale * tot_rms
 
         kernel = make_2dgaussian_kernel(3.0, size=5)  # FWHM = 3.0
+        tot_data = np.sum(data_arr, axis=0)
+
+        if np.shape(tot_data) != (350,350):
+            raise ValueError("Dimensions of summed grz image are not (350,350)")
+        
         convolved_tot_data = convolve( tot_data, kernel )
 
         # segment_map = detect_sources(tot_data, threshold, npixels=npixels_min) 
@@ -360,50 +302,24 @@ def run_aperture_pipe(input_dict):
         ##choose the aperture radius based on the size of the main segment  
     
         #get the segment number where the main source of interest lies in
-        xpix, ypix,_ = wcs.all_world2pix(source_ra, source_dec,0,1)
-        island_num = segment_map.data[int(ypix),int(xpix)]
+        #we maintain 2 copies because one of them will be changed in case the desi fiber does not lie on a island segment
+        fiber_xpix, fiber_ypix,_ = wcs.all_world2pix(source_ra, source_dec,0,1)
+        fiber_xpix_org, fiber_ypix_org,_ = wcs.all_world2pix(source_ra, source_dec,0,1)
+        
+        island_num = segment_map.data[int(fiber_ypix),int(fiber_xpix)]
         ## note that these 2d arrays are [y-coord, x-coord]
-
+                
         #any segment not part of this main segment is considered to be a different source 
         #make a copy of the segment array
         segment_map_v2 = np.copy(segment_map.data)
 
         #is it possible that the source lies on background and not in one of the segmented islands?
-        ## HMM, FOR ELGs, we need to not do this ... 
-        
-        
+        #this is possible if the source was located in the very faint extremeties which is possible for ELGs
+        #In this case, I think just keep the aperture as is and just having fixed apertures is the way to go?
         if island_num == 0:
-            #if the source lies on pixel classified as background, we find the nearest segment
-            #we need to update island num
-
-            all_xpixs, all_ypixs = np.meshgrid( np.arange(np.shape(segment_map_v2)[0]), np.arange(np.shape(segment_map_v2)[1]) )
-            all_dists = np.sqrt ( ( all_xpixs - xpix)**2 + ( all_ypixs - ypix)**2 )
-            
-            #get all the distances to the pixels that are not background
-            all_segs_notbg = segment_map_v2[ (segment_map_v2 != 0) ]
-            all_dists_segpixs = all_dists[ (segment_map_v2 != 0)  ]
-            #find closest one
-            island_num = all_segs_notbg[ np.argmin(all_dists_segpixs) ]
-
-            #we will have to also update the xpix and ypix location then if we end up using it hte future??
-            xpix_new = all_xpixs[ (segment_map_v2 != 0) ][np.argmin(all_dists_segpixs) ]
-            ypix_new = all_ypixs[ (segment_map_v2 != 0) ][np.argmin(all_dists_segpixs) ]
-            
-            sources_f_xpix[ (source_cat_f["ra"] == source_ra) &  (source_cat_f["dec"] == source_dec) ] = xpix_new
-            sources_f_ypix[ (source_cat_f["ra"] == source_ra) &  (source_cat_f["dec"] == source_dec) ] = ypix_new
-
-            #updating the main variable for future reference
-            xpix = xpix_new
-            ypix = ypix_new
-
-
-        ##################
-        ##PART 6: Make the star mask!!
-
-        ##if the flux_ivar_grz of a star is 0, then that means it is a retained source and its broad band magnitude is taken from polynomial fits to color transformation
-        ##turns out, starting with DR9, objects appearing in Gaia catalogs are now always RETAINED in the tractor catalogs
-        ##################
-
+            print_stage(f"Following source does not lie on a segment island, TGID:{source_tgid}")
+            segment_map_v2, island_num, fiber_xpix, fiber_ypix = find_nearest_island(segment_map_v2, fiber_xpix, fiber_ypix)
+    
         #define the aperture that will be used for plotting the bright star
         #these should be in the pixel coordinates
         #converting star center ra,dec into pixels
@@ -476,7 +392,7 @@ def run_aperture_pipe(input_dict):
         deblend_ids = np.unique(segm_deblend_v2[segment_map_v2 == 2])
 
         #what is the deblend id where our main source is in?
-        deblend_island_num = segm_deblend_v2[int(ypix),int(xpix)]
+        deblend_island_num = segm_deblend_v2[int(fiber_ypix),int(fiber_xpix)]
 
         #create another deblend image where we relabel the deblend ids of the main segment
         #note the 0 pixel means background and hence we have i+1 here
@@ -502,8 +418,6 @@ def run_aperture_pipe(input_dict):
                 source_cat_f["new_deblend_id"][k] =  -99
             else:
                 source_cat_f["new_deblend_id"][k] = int(segm_deblend_v3[ int(sources_f_ypix[k]), int(sources_f_xpix[k]) ])
-
-     
 
         ## compute the colors of each deblend segment that is part of the main segment
         all_segs_grs = []
@@ -551,7 +465,6 @@ def run_aperture_pipe(input_dict):
             gband_mag_i = 22.5- 2.5*np.log10(gband_flux_i)
             rband_mag_i = 22.5- 2.5*np.log10(rband_flux_i)
             zband_mag_i = 22.5- 2.5*np.log10(zband_flux_i)
-
 
             #conver to error assuming small error
             gmag_err_i = 1.087*( gflux_err_i / gband_flux_i)
@@ -617,9 +530,6 @@ def run_aperture_pipe(input_dict):
         markers_rnd = get_random_markers(len(source_cat_inseg_signi) )
         source_cat_inseg_signi["marker"] = markers_rnd
 
-        # ax[8].scatter( source_cat_inseg_signi[is_star_inseg_signi]["xpix"],source_cat_inseg_signi[is_star_inseg_signi]["ypix"], s=20,color = "r",marker="*" ) 
-        # ax[9].scatter( source_cat_inseg_signi[is_star_inseg_signi]["xpix"],source_cat_inseg_signi[is_star_inseg_signi]["ypix"], s=20,color = "r",marker="*" ) 
-      
         #how lenient we are in defining the color-color box
         col_lenient = 0.1
       
@@ -645,13 +555,19 @@ def run_aperture_pipe(input_dict):
         #and has no nan and inf values 
         likely_other_seg_mask =  ( (all_segs_grs > (col_lenient + ref_deblend_gr)) | (all_segs_rzs > (col_lenient + ref_deblend_rz)) ) & ( ~np.isnan(all_segs_grs) ) & (~np.isnan(all_segs_rzs)) & ( ~np.isinf(all_segs_grs) ) & (~np.isinf(all_segs_rzs) )
         
-    
         new_deblend_ids_likely_other_segs = new_deblend_ids[likely_other_seg_mask]        
         #this is an array of new deblend ids of the likely other deblend segments. This maps on to segm_deblend_v3 it seems
              
         #what is the probabiltiy that these other segments agree with the color-distribution??
         #score_samples returns the log likelihood and so we do np.exp to get the normal probabilities
-   
+
+
+        ##THIS COLOR COLOR SELECTION CAN BE DONE A BIT BETTER ...
+
+        ##AM I ENFORCING THAT THE TARGETED SOURCE IS NOT BEING REMOVED?
+        ## I am imagine a case where if the entire island is the segment (no deblended segment) and if source has weird color then this can happen
+
+        
         if len(all_segs_grs[likely_other_seg_mask]) == 0:
             #that is there are no components that are candidate other segments
             #no need to put additional masking
@@ -687,14 +603,18 @@ def run_aperture_pipe(input_dict):
         ## MAKING
         ax = make_subplots(ncol = 5, nrow = 2, row_spacing = 0.5,col_spacing=0.4, label_font_size = 17,plot_size = 3,direction = "horizontal")
 
-        
         ##we have so far dealt with deblended segments being part of main galaxy segment. What about individual sources?
 
         #the counter for total flux we will be subtracting at the end!
         tot_subtract_sources_g = 0
         tot_subtract_sources_r = 0
         tot_subtract_sources_z = 0
-        
+
+        subtract_source_pos = {"x":[] , "y":[], "marker":[]  }
+
+        #we will be saving the indices of the sources that are being removed and saving them in a separate catalog!
+        source_cat_nostars_inseg_inds = []
+            
         if len(source_cat_inseg_signi) == 0:
             #nothing to do here!! That is there are no significant sources that we have to deal with in the color-color space
             pass
@@ -794,6 +714,15 @@ def run_aperture_pipe(input_dict):
 
                              #plot this source for reference on the mask plot!!
                             ax[4].scatter( [source_cat_nostars_inseg["xpix"][w]] , [source_cat_nostars_inseg["ypix"][w] ],  color = "k", marker = source_cat_nostars_inseg["marker"][w],s= 20,  zorder = 1)
+
+                            subtract_source_pos["x"].append(source_cat_nostars_inseg["xpix"][w])
+                            subtract_source_pos["y"].append(source_cat_nostars_inseg["ypix"][w])
+                            subtract_source_pos["marker"].append(source_cat_nostars_inseg["marker"][w])
+
+                            #saving the row index in the catalog corresponding to subtracted source
+                            source_cat_nostars_inseg_inds.append(w) 
+                            
+                            
                             
                             # Annotate the point
                             if use_photoz:
@@ -828,25 +757,40 @@ def run_aperture_pipe(input_dict):
         ##instead of plotting just the aperture mask, let us plot the aperture mask applied to the log log data plot!
         tot_data_plot[~aperture_mask_plot.astype(bool)] = np.nan
 
-        # np.save(save_path + "/aperture_mask_%s.npy"%bi, ~aperture_mask.astype(bool) )
-
         ##this is the magnitude at a fixed aperture
         phot_table_g = aperture_photometry(data["g"] , aperture_for_phot, mask = ~aperture_mask.astype(bool))
         phot_table_r = aperture_photometry(data["r"] , aperture_for_phot, mask = ~aperture_mask.astype(bool))
         phot_table_z = aperture_photometry(data["z"] , aperture_for_phot, mask = ~aperture_mask.astype(bool))
 
-        new_mag_g = 22.5 - 2.5*np.log10( phot_table_g["aperture_sum"].data[0] - tot_subtract_sources_g )
-        new_mag_r = 22.5 - 2.5*np.log10( phot_table_r["aperture_sum"].data[0] - tot_subtract_sources_r )
-        new_mag_z = 22.5 - 2.5*np.log10( phot_table_z["aperture_sum"].data[0] - tot_subtract_sources_z )
-        
+        fidu_aper_mag_g = 22.5 - 2.5*np.log10( phot_table_g["aperture_sum"].data[0] - tot_subtract_sources_g )
+        fidu_aper_mag_r = 22.5 - 2.5*np.log10( phot_table_r["aperture_sum"].data[0] - tot_subtract_sources_r )
+        fidu_aper_mag_z = 22.5 - 2.5*np.log10( phot_table_z["aperture_sum"].data[0] - tot_subtract_sources_z )
+
+        #these mags are extinction corrected!
         org_mags = [source_mag_g_mwc,source_mag_r_mwc,source_mag_z_mwc] 
-
-        #do the cog analysis
-        tot_subtract_sources = { "g": tot_subtract_sources_g, "r": tot_subtract_sources_r, "z": tot_subtract_sources_z }
-        fidu_mag = {"g":new_mag_g, "r": new_mag_r, "z": new_mag_z }
-        run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tot_subtract_sources, fidu_mag, source_tgid, save_path)
         
+        np.save(save_path + "/segment_map_v2.npy",  segment_map_v2)
+        np.save(save_path + "/star_mask.npy",  star_mask)
+        np.save(save_path + "/aperture_mask.npy",  aperture_mask)
+        #these mags are not extinction corrected
+        np.save(save_path + "/tractor_mags.npy", np.array([source_mag_g, source_mag_r, source_mag_z]  ))
 
+        np.save(save_path + "/fiber_pix_pos.npy", np.array([fiber_xpix, fiber_ypix]) )
+        np.save(save_path + "/fiber_pix_pos_org.npy", np.array([fiber_xpix_org, fiber_ypix_org]) )
+        
+        np.save(save_path + "/tot_noise_rms.npy", np.array([tot_rms]) )
+
+        with open(save_path + '/subtract_source_pos.pkl', 'wb') as f:
+            pickle.dump(subtract_source_pos, f)
+
+        np.save(save_path + "/source_cat_obs_transmission.npy", np.array([  source_cat_obs["mw_transmission_g"] , source_cat_obs["mw_transmission_r"], source_cat_obs["mw_transmission_z"]  ]) )
+
+        #saving the blended source catalog that needs to be subtracted
+        source_cat_nostars_inseg_inds = np.array(source_cat_nostars_inseg_inds)
+        source_cat_nostars_inseg_remove = source_cat_nostars_inseg[source_cat_nostars_inseg_inds]
+        source_cat_nostars_inseg_remove.write( save_path + "/blended_source_remove_cat.fits", overwrite=True)
+        #this catalog will be used to get the tractor model of the blended sources
+        
         ##########################################
         ### PLOTTING CODE
         ##########################################
@@ -859,8 +803,13 @@ def run_aperture_pipe(input_dict):
         ax[ax_id].text(65,325, "(%.3f,%.3f, z=%.3f)"%(source_ra,source_dec, source_redshift) ,color = "yellow",fontsize = 10)
 
         #get pixel co-ordinates of the source galaxy
-        circle = patches.Circle( (xpix, ypix),7, color='orange', fill=False, linewidth=1,ls ="-")
+        circle = patches.Circle( (fiber_xpix_org, fiber_ypix_org),3, color='orange', fill=False, linewidth=1,ls ="-")
+        #these two circles will overlap in majority of cases but in the rare case where the DESI fiber was not on top of a island segment, we will get different circles
+        circle_2 = patches.Circle( (fiber_xpix, fiber_ypix),3, color='orange', fill=False, linewidth=1,ls ="--")
+        
         ax[ax_id].add_patch(circle)
+        ax[ax_id].add_patch(circle_2)
+        
         ax[ax_id].set_xlim([0,box_size])
         ax[ax_id].set_ylim([0,box_size])
         ax[ax_id].set_xticks([])
@@ -869,7 +818,6 @@ def run_aperture_pipe(input_dict):
             aperture_for_bstar_1.plot(ax = ax[ax_id], color = "r", lw = 1.5, ls = "dotted")
             aperture_for_bstar_34.plot(ax = ax[ax_id], color = "r", lw = 1.5, ls = "dotted")
             aperture_for_bstar_12.plot(ax = ax[ax_id], color = "r", lw = 1.5, ls = "dotted")
-
 
         ##G+R+Z DATA LOG IMAGE
         ax_id = 6
@@ -901,8 +849,8 @@ def run_aperture_pipe(input_dict):
         ax[ax_id].set_title("g+r+z data segmentation",fontsize = 13)
         ax[ax_id].imshow(segment_map, origin='lower', cmap=segment_map.cmap,
                    interpolation='nearest',zorder = 0)
-        aperture_for_phot.plot(ax = ax[7], color = "r", lw = 2.5, ls = "-")
-        aperture_for_phot_noscale.plot(ax = ax[7], color = "r", lw = 1, ls = "dotted")
+        # aperture_for_phot.plot(ax = ax[7], color = "r", lw = 2.5, ls = "-")
+        # aperture_for_phot_noscale.plot(ax = ax[7], color = "r", lw = 1, ls = "dotted")
         ax[ax_id].scatter( sources_f_xpix,sources_f_ypix, s=5,color = "white",marker="^") 
         #sources that are stars!
         ax[ax_id].scatter( sources_f_xpix[is_star],sources_f_ypix[is_star], s=50,color = "white",marker="*",zorder = 3) 
@@ -936,7 +884,7 @@ def run_aperture_pipe(input_dict):
             aperture_for_bstar_12.plot(ax = ax[ax_id], color = "r", lw = 1.5, ls = "dotted")
         
 
-        aperture_for_phot.plot(ax = ax[ax_id], color = "r", lw = 2.5, ls = "-")
+        # aperture_for_phot.plot(ax = ax[ax_id], color = "r", lw = 2.5, ls = "-")
 
 
         ##ALL DEBLENDED SEGMENTS
@@ -944,8 +892,8 @@ def run_aperture_pipe(input_dict):
 
         ax[ax_id].set_title("g+r+z segmentation+deblend",fontsize = 13)
         
-        aperture_for_phot.plot(ax = ax[ax_id], color = "r", lw = 2.5, ls = "-")
-        aperture_for_phot_noscale.plot(ax = ax[ax_id], color = "r", lw = 1, ls = "dotted")
+        # aperture_for_phot.plot(ax = ax[ax_id], color = "r", lw = 2.5, ls = "-")
+        # aperture_for_phot_noscale.plot(ax = ax[ax_id], color = "r", lw = 1, ls = "dotted")
         
         ax[ax_id].imshow(segm_deblend, origin='lower', cmap=segm_deblend.cmap,
                    interpolation='nearest',zorder = 0)
@@ -1021,6 +969,7 @@ def run_aperture_pipe(input_dict):
         ax[ax_id].set_ylim([0,63])
         
         ax_id = 2
+        ax[ax_id].text(0.25,0.96,f"pCNN = {pcnn_val:.2f}",size = 12,transform=ax[ax_id].transAxes, verticalalignment='top',color = "white")
         ax[ax_id].set_title(r"IMG - S")
         ax[ax_id].imshow(rgb_resis[start:end, start:end,:])
         ax[ax_id].set_xticks([])
@@ -1063,41 +1012,38 @@ def run_aperture_pipe(input_dict):
         spacing = 0.08
         start = 0.97
         fsize = 11
-        ax[ax_id].text(0.05,start,"Org-mag g = %.2f"%source_mag_g,size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-        ax[ax_id].text(0.05,start - spacing*1,"New-mag g = %.2f"%new_mag_g,size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start,"Tractor-mag g = %.2f"%source_mag_g,size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*1,"Aper-mag-R35 g = %.2f"%fidu_aper_mag_g,size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
         ax[ax_id].text(0.05,start - spacing*2,"fracflux_g = %.2f"%(source_cat_obs["fracflux_g"]),size = 12,transform=ax[ax_id].transAxes, verticalalignment='top')
         
-        ax[ax_id].text(0.05,start - spacing*3,"Org-mag r = %.2f"%source_mag_r,size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-        ax[ax_id].text(0.05,start - spacing*4,"New-mag r = %.2f"%new_mag_r,size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*3,"Tractor-mag r = %.2f"%source_mag_r,size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*4,"Aper-mag-R35 r = %.2f"%fidu_aper_mag_r,size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
         ax[ax_id].text(0.05,start - spacing*5,"fracflux_r= %.2f"%(source_cat_obs["fracflux_r"]),size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
 
-        ax[ax_id].text(0.05,start - spacing*6,"Org-mag z = %.2f"%source_mag_z,size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-        ax[ax_id].text(0.05,start - spacing*7,"New-mag z = %.2f"%new_mag_z,size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*6,"Tractor-mag z = %.2f"%source_mag_z,size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*7,"Aper-mag-R35 z = %.2f"%fidu_aper_mag_z,size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
         ax[ax_id].text(0.05,start - spacing*8,"fracflux_z = %.2f"%(source_cat_obs["fracflux_z"]),size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
 
         ax[ax_id].text(0.05,start - spacing*9,"Closest Star fdist = %.2f"%(closest_star_norm_dist),size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
         ax[ax_id].text(0.05,start - spacing*10,"Bright star fdist = %.2f"%(bstar_fdist),size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
         ax[ax_id].text(0.05,start - spacing*11,"SGA Dist (deg), NDist = %.2f, %.2f"%(sga_dist, sga_ndist),size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
 
-
         ##saving this image :P
         plt.savefig( save_summary_png ,bbox_inches="tight")
         plt.close()
     
+        fidu_aper_mag_g = fidu_aper_mag_g + 2.5 * np.log10(source_cat_obs["mw_transmission_g"])
+        fidu_aper_mag_r = fidu_aper_mag_r + 2.5 * np.log10(source_cat_obs["mw_transmission_r"])
+        fidu_aper_mag_z = fidu_aper_mag_z + 2.5 * np.log10(source_cat_obs["mw_transmission_z"])
 
-        new_mag_g = new_mag_g + 2.5 * np.log10(source_cat_obs["mw_transmission_g"])
-        new_mag_r = new_mag_r + 2.5 * np.log10(source_cat_obs["mw_transmission_r"])
-        new_mag_z = new_mag_z + 2.5 * np.log10(source_cat_obs["mw_transmission_z"])
-
-        new_mags = [new_mag_g, new_mag_r, new_mag_z]
-
-
+        fidu_aper_mags = [fidu_aper_mag_g, fidu_aper_mag_r, fidu_aper_mag_z]
+        
         ##save these as a file for future reference
-        np.save(save_path + "/new_aperture_mags.npy", new_mags)
+        np.save(save_path + "/aper_r35_mags.npy", fidu_aper_mags)        
         np.save(save_path + "/org_mags.npy", org_mags)
 
         
-        return closest_star_dist, closest_star_mag, new_mags, org_mags, save_path, save_summary_png, bkg_estimated, img_path
+        return closest_star_dist, closest_star_mag, fidu_aper_mags, org_mags, save_path, save_summary_png, img_path
 
 
 

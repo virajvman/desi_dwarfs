@@ -57,7 +57,7 @@ def get_nearby_source_catalog(ra_k, dec_k, wcat, brick_i, save_path_k, source_ca
             source_cat_f[f"mag_{BAND}"] = 22.5 - 2.5*np.log10(good_fluxs)
 
     #filtering to ensure the source is detected at 5 sigma atleast in one band
-    source_cat_f = source_cat_f[ (source_cat_f["sigma_r"] > 5) | (source_cat_f["sigma_g"] > 5) | (source_cat_f["sigma_z"] > 5) ]
+    # source_cat_f = source_cat_f[ (source_cat_f["sigma_r"] > 3) | (source_cat_f["sigma_g"] > 3) | (source_cat_f["sigma_z"] > 3) ]
 
     ##compute some color information and errors on source of interest
     source_cat_f["g-r"] = source_cat_f["mag_g"] - source_cat_f["mag_r"]
