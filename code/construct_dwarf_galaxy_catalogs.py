@@ -564,10 +564,9 @@ if __name__ == '__main__':
 
 
 
-            ## According to Ashley Ross, the LSS catalogs contain the tile based redshift which would be slightly different than the healpix
-            ##based redshift. The below file would give us the tile based redshift. 
-      
-    
+## According to Ashley Ross, the LSS catalogs contain the tile based redshift which would be slightly different than the healpix
+##based redshift. The below file would give us the tile based redshift. 
+
 # elg_lss = fits.open("/global/cfs/cdirs/desi/survey/catalogs/dr1/LSS.dr1/iron/LSScats/v1.5/ELG_LOPnotqso_full.dat.fits")
 # elg_lss_data = elg_lss[1].data
 # elg_lss_tgids = elg_lss_data["TARGETID"].data

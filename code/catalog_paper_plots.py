@@ -11,6 +11,14 @@ from easyquery import Query, QueryMaker
 from desi_lowz_funcs import get_remove_flag, _n_or_more_lt, make_subplots, _n_or_more_lt
 from tqdm import trange
 from matplotlib.colors import LogNorm
+from astropy.io import ascii
+from astropy import units as u
+from astropy.coordinates import SkyCoord
+from scipy.stats import median_abs_deviation
+from healpy.newvisufunc import projview
+import healpy as hp
+import matplotlib.cm as cm
+import matplotlib
 
 def get_image_summary(ax,data_table , cutout_size = 40, img_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds_cutouts/", fsize = 12,label=0):
     '''
@@ -558,7 +566,263 @@ def get_delta_mag_fracflux_plot():
 
 
 
+def measure_bias_scatter(quant_1, quant_2):
+    '''
+    Meausure the median of quant_1 - quant_2 and the scatter in this difference. We restrict ourselves to objects
+    '''
 
+    quant_1f = quant_1[~np.isnan(quant_1) & ~np.isnan(quant_2) ]
+    quant_2f = quant_2[~np.isnan(quant_2) & ~np.isnan(quant_2) ]
+
+    med_val = np.median(quant_1f - quant_2f)
+    scatters = quant_1f - quant_2f - med_val
+
+    sigma =  median_abs_deviation(scatters, scale='normal')
+
+    print(med_val, sigma)
+    return med_val, sigma
+
+def make_stellar_mass_comparison_plot():
+    '''
+    This function makes the stellar mass comparison plot
+    '''
+
+    clean_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v2.fits")
+
+    print(len(clean_cat))
+    clean_cat = clean_cat[clean_cat["LOGM_SAGA"] < 9.5]
+    print(len(clean_cat))
+    
+    ##match the clean cat with other catalogs
+    gswlc_cat = ascii.read("/pscratch/sd/v/virajvm/desi2_lowz_data/catalogs/GSWLC-X2.dat")
+    iron = SkyCoord(np.array(clean_cat["RA"])*u.degree, np.array(clean_cat["DEC"])*u.degree  )
+    gswlc = SkyCoord(np.array(gswlc_cat["RA"])*u.degree, np.array(gswlc_cat["DEC"])*u.degree  )
+    idx, d2d, _ = iron.match_to_catalog_sky(gswlc)
+    clean_cat_gswlc_match = clean_cat[d2d.arcsec < 1]
+    gswlc_match = gswlc_cat[idx][d2d.arcsec < 1]
+
+    ##these are stellar masses from Hu Zhou XMPG paper. They also use CIGALE here and no AGN is used
+    hu_cat= Table.read("/global/cfs/cdirs/desi/users/dscholte/data_to_share/sample_catalog_viraj_29052024.fits")
+    iron = SkyCoord(np.array(clean_cat["RA"])*u.degree, np.array(clean_cat["DEC"])*u.degree  )
+    hu = SkyCoord(np.array(hu_cat["RA"])*u.degree, np.array(hu_cat["DEC"])*u.degree  )
+    idx, d2d, _ = iron.match_to_catalog_sky(hu)
+    clean_cat_hu_match = clean_cat[d2d.arcsec < 1]
+    hu_match = hu_cat[idx][d2d.arcsec < 1]
+
+    ###FASTSPECFIT
+    print("Reading fastspecfit!")
+    iron_vac = fits.open("/global/cfs/cdirs/desi/public/dr1/vac/dr1/fastspecfit/iron/v2.1/catalogs/fastspec-iron.fits")
+    fspec_mstar = iron_vac[1].data["LOGMSTAR"]
+    fspec_ra = iron_vac[2].data["RA"]
+    fspec_dec = iron_vac[2].data["DEC"]
+    catalog = SkyCoord(ra= fspec_ra* u.degree, dec= fspec_dec*u.degree )
+    c = SkyCoord(ra=np.array(clean_cat["RA"])*u.degree, dec=np.array(clean_cat["DEC"])*u.degree )
+    idx, d2d, d3d = c.match_to_catalog_sky(catalog)
+    fspec_mstar_f = fspec_mstar[idx][d2d.arcsec < 1]
+    clean_cat_fspec_match = clean_cat[d2d.arcsec < 1]
+    print("Finished matching fastspecfit!")
+
+    ## loading the cosmos 2020 catalog
+    cos2020_data = np.load("/pscratch/sd/v/virajvm/desi2_lowz_data/catalogs/cosmos2020_data.npy")
+    iron = SkyCoord(np.array(clean_cat["RA"])*u.degree, np.array(clean_cat["DEC"])*u.degree  )
+    cos = SkyCoord( cos2020_data[0]*u.degree, cos2020_data[1]*u.degree  )
+    idx, d2d, _ = iron.match_to_catalog_sky(cos)
+    clean_cat_cos_match = clean_cat[d2d.arcsec < 1]
+    cos2020_mstar = cos2020_data[2][idx][d2d.arcsec < 1]
+
+    ##make the plot
+
+    ax = make_subplots(ncol = 5,nrow = 1,col_spacing = 0.25)
+
+    title_size = 14
+
+    xmstar = "LOGM_SAGA"
+    cmap = "BuPu"
+    
+    vmin = 1
+    vmax = 1000
+    
+    # ax[0].set_title(r"CIGALE (no AGN)",fontsize = title_size )
+    # ax[0].hist2d(clean_cat[xmstar][cigale_mask],clean_cat["LOGM_CIGALE"][cigale_mask],range= ( (6,9.5),(6,9.5)),bins=50,norm=LogNorm(vmin=vmin,vmax=vmax),cmap=cmap )
+
+    xpos = 7.4
+    ypos = 6.67
+    fsize = 14
+
+    ax_id = 0
+    ax[ax_id].set_title(r"CIGALE (no AGN)",fontsize = title_size )
+    h, xedges, yedges, im=ax[ax_id].hist2d(clean_cat_hu_match[xmstar],hu_match["LOGMSTAR_HU"],range= ( (6,9.5),(6,9.5)),bins= 50,norm=LogNorm(vmin=vmin,vmax=vmax) ,cmap=cmap)
+
+    bias, scatter = measure_bias_scatter(clean_cat_hu_match[xmstar].data,hu_match["LOGMSTAR_HU"])
+    
+    ax[ax_id].text( xpos,ypos,rf"b = {bias:.2f}, $\sigma$ = {scatter:.2f}",fontsize = fsize)
+
+    
+     # Create a colorbar
+    cbar = plt.colorbar(im, ax=ax[ax_id], orientation='horizontal', pad=0.05)
+    cbar.ax.set_position([
+        0.295,   # Left position
+        0.62,  # Top position
+        ax[ax_id].get_position().width * 0.1,  # Width (40% of plot width)
+        0.02  # Height (thin bar)
+    ])
+    
+    ax_id = 1
+    ax[ax_id].set_title(r"COSMOS2020",fontsize = title_size )
+    ax[ax_id].scatter(clean_cat_cos_match[xmstar],cos2020_mstar,color = "purple",s=10,marker="s")
+
+    bias, scatter = measure_bias_scatter(clean_cat_cos_match[xmstar].data,cos2020_mstar) 
+
+    ax[ax_id].text( xpos,ypos,rf"b = {bias:.2f}, $\sigma$ = {scatter:.2f}",fontsize = fsize)
+
+    ax_id = 2
+    ax[ax_id].set_title(r"GSWLC",fontsize = title_size )
+    h, xedges, yedges, im=  ax[ax_id].hist2d(clean_cat_gswlc_match[xmstar],gswlc_match["LOGMSTAR"],range= ( (6,9.5),(6,9.5)),bins= 50,norm=LogNorm(vmin=1, vmax=50) ,cmap=cmap)
+
+    bias, scatter = measure_bias_scatter(clean_cat_gswlc_match[xmstar].data,gswlc_match["LOGMSTAR"].data)
+    ax[ax_id].text( xpos,ypos,rf"b = {bias:.2f}, $\sigma$ = {scatter:.2f}",fontsize = fsize)
+    
+     # Create a colorbar
+    cbar = plt.colorbar(im, ax=ax[ax_id], orientation='horizontal', pad=0.05)
+    cbar.ax.set_position([
+        0.795,   # Left position
+        0.62,  # Top position
+        ax[ax_id].get_position().width * 0.1,  # Width (40% of plot width)
+        0.02  # Height (thin bar)
+    ])    
+    
+    #######
+    ax_id = 3
+    ax[ax_id].set_title(r"Fastspecfit",fontsize = title_size )
+    h, xedges, yedges, im =  ax[ax_id].hist2d(clean_cat_fspec_match[xmstar],fspec_mstar_f,range= ( (6,9.5),(6,9.5)),bins= 50,norm=LogNorm(vmin=1, vmax=1000) ,cmap=cmap)
+
+    bias, scatter = measure_bias_scatter(clean_cat_fspec_match[xmstar].data,fspec_mstar_f)
+    ax[ax_id].text( xpos,ypos,rf"b = {bias:.2f}, $\sigma$ = {scatter:.2f}",fontsize = fsize)
+
+     # Create a colorbar
+    cbar = plt.colorbar(im, ax=ax[ax_id], orientation='horizontal', pad=0.05)
+    cbar.ax.set_position([
+        1.045,   # Left position
+        0.62,  # Top position
+        ax[ax_id].get_position().width * 0.1,  # Width (40% of plot width)
+        0.02  # Height (thin bar)
+    ])
+
+    #######
+    ax_id = 4
+    ax[ax_id].set_title(r"gr-based, de Los Reyes+(2024)",fontsize = title_size )
+    h, xedges, yedges, im =  ax[ax_id].hist2d(clean_cat[xmstar], clean_cat["LOGM_M24"] ,range= ( (6,9.5),(6,9.5)),bins= 50,norm=LogNorm(vmin=1, vmax=1000) ,cmap=cmap)
+
+    bias,scatter = measure_bias_scatter(clean_cat[xmstar],clean_cat["LOGM_M24"]) 
+    ax[ax_id].text( xpos,ypos,rf"b = {bias:.2f}, $\sigma$ = {scatter:.2f}",fontsize = fsize)
+    
+
+     # Create a colorbar
+    cbar = plt.colorbar(im, ax=ax[ax_id], orientation='horizontal', pad=0.05)
+    cbar.ax.set_position([
+        1.045,   # Left position
+        0.62,  # Top position
+        ax[ax_id].get_position().width * 0.1,  # Width (40% of plot width)
+        0.02  # Height (thin bar)
+    ])
+
+    for i,axi in enumerate(ax):
+        axi.set_xlim([6.5,9.5])
+        axi.set_ylim([6.5,9.5])
+        axi.plot([6,11],[6,11],color = "k",lw = 1)
+        axi.set_xlabel(r"gr-based $\log_{10}(M_{\star})$",size= 16)
+        ax[0].set_ylabel(r"$\log_{10}(M_{\star})$",size= 16)
+        ax[0].grid(ls = ":",color = "lightgrey",alpha = 0.5)
+    
+        if i != 0:
+            axi.set_yticklabels([])
+
+    plt.savefig("/global/homes/v/virajvm/DESI2_LOWZ/quenched_fracs_nbs/paper_plots/stellar_mass_comp.pdf",bbox_inches="tight",dpi=300)
+    plt.close()
+
+    return
+    
+
+
+def get_density_map(nside_val, ras, decs):    
+    hpix = hp.ang2pix(nside_val, ras, decs, nest=True,lonlat=True)
+    
+    #count how many objects corresponding to each pixel cell
+    hpix_idx, hpix_counts = np.unique(hpix,return_counts=True)
+
+    # reate a full map initialized with zeros
+    density_map = np.zeros(hp.nside2npix(nside_val))
+
+    #Get area of one pixel (in deg sq.)
+    pix_area_deg2 = hp.nside2pixarea(nside_val, degrees=True)
+
+    #Fill in the density (number per deg sq.)
+    density_map[hpix_idx] = hpix_counts / pix_area_deg2
+
+    return density_map
+
+
+def plot_carview(catalog, sample,cmap=None):
+    ra_min, ra_max = 180-15, 180+15
+    dec_min, dec_max = -5,3
+    nsides = 256
+    max_val = 40
+
+    catalog_bgsb = catalog[ catalog["SAMPLE"] == sample]
+    density_map_zoom = get_density_map(nsides, catalog_bgsb["RA"].data, catalog_bgsb["DEC"].data)    
+    print(np.min(density_map_zoom), np.max(density_map_zoom))
+    hp.cartview(
+    density_map_zoom,
+    lonra=[ra_min, ra_max],   # RA range in degrees, e.g. [100, 160]
+    latra=[dec_min, dec_max], # Dec range in degrees, e.g. [-10, 10]
+    nest=True,
+    cmap=cmap,
+    min=0, max=max_val,
+    title=None,
+    notext=False,
+    cbar=False)
+    
+    plt.savefig(f"/global/homes/v/virajvm/DESI2_LOWZ/quenched_fracs_nbs/paper_plots/zoomin_density_{sample}.png",
+            bbox_inches="tight",dpi = 300)
+    plt.close()
+    return
+
+    
+def make_sky_density_plot():
+    '''
+    In this function, we make a plot showing the on sky density of DESI targets with another plot zooming in on a densely observed region and showing density of each sub-sample!
+    '''
+
+    catalog = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v2.fits")
+
+    print(len(catalog))
+    catalog = catalog[catalog["LOGM_SAGA"] < 9]
+    print(len(catalog))
+    
+    density_map_64 = get_density_map(256, catalog["RA"].data, catalog["DEC"].data)
+    
+    cmap = matplotlib.colormaps['YlGn'].copy()
+    cmap.set_bad(color='white')
+
+    projview(
+        density_map_64, min=0,max = 40,rot = (120, 0, 0), graticule=True, graticule_labels=True, projection_type="mollweide",
+        nest=True,cmap = cmap,
+        rot_graticule=False,width = 7,
+        custom_xtick_labels=[r"$240^{\circ}$",r"$180^{\circ}$",r"$120^{\circ}$", r"$60^{\circ}$",r"$0^{\circ}$"],
+        title = r"DESI DR1 Dwarf Galaxy Density",
+        unit=r"Galaxy Density (deg$^{-2}$)",cbar_ticks=[10,20,30,40])
+    plt.savefig("/global/homes/v/virajvm/DESI2_LOWZ/quenched_fracs_nbs/paper_plots/dwarf_galaxy_density.png",bbox_inches="tight",dpi = 300)
+    plt.close()
+
+
+    ## now let us focus on specific sub-samples
+    plot_carview(catalog, "BGS_BRIGHT",cmap=cmap)
+    plot_carview(catalog, "BGS_FAINT",cmap=cmap)
+    plot_carview(catalog, "LOWZ",cmap=cmap)
+    plot_carview(catalog, "ELG",cmap=cmap)
+    
+    return
+        
 
 if __name__ == '__main__':
 
@@ -582,7 +846,15 @@ if __name__ == '__main__':
 
     # make_shred_frac_plot()
 
-    get_delta_mag_fracflux_plot()
+    # get_delta_mag_fracflux_plot()
+
+
+    # make_stellar_mass_comparison_plot()
+
+    make_sky_density_plot()
+    
+
+    
 
 
 
