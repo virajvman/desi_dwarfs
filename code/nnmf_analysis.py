@@ -43,7 +43,6 @@ def get_wave(wavemin=3600, wavemax=10000, dloglam=1e-4):
     return wave
 
 
-
 def _deredshift_one_spectrum(args):
     """
     Helper spectrum deredshifting function for parallel processing.
@@ -109,18 +108,15 @@ def deredshift_resample_desi_spectra(all_waves, all_fluxs, all_ivar, all_zreds,
 
 if __name__ == '__main__':
 
-    overwrite_templates = False
     
-
     rng = np.random.default_rng(42)
 
     ##################
     ##PART 1: Data preparation: Load,download the DESI spectra. Resample it!
     ##################
-    # if overwrite_templates:
     print_stage("Loading the DESI spectra")
 
-    save_dered = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_y1_dwarf_clean_deredshift.h5"
+    save_dered = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_y1_dwarf_combine_deredshift.h5"
 
     if os.path.exists(save_dered):
         
@@ -133,7 +129,7 @@ if __name__ == '__main__':
         
     else:
         #to read the data, one can do
-        with h5py.File("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_y1_dwarf_clean.h5", "r") as f:
+        with h5py.File("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_y1_dwarf_combine.h5", "r") as f:
             wave = f["WAVE"][:]
             all_flux = f["FLUX"][:] 
             all_flux_ivar = f["FLUX_IVAR"][:]  # single spectrum
@@ -145,31 +141,22 @@ if __name__ == '__main__':
         print("flux shape", all_flux.shape)
         print("flux_ivar shape", all_flux_ivar.shape)
         print("zreds shape", all_zreds.shape)
-    
-   
-        print("Shapes after sub-selecting")
         
-    
-        print("wave shape", wave.shape)
-        print("flux shape", all_flux.shape)
-        print("flux_ivar shape", all_flux_ivar.shape)
-        print("zreds shape", all_zreds.shape)
-    
         # ################
 
-        ##I should probably de-redshift this once and then save it!
+        ##I should de-redshift this once and then save it!
     
         print_stage("De-redshifting the spectra and clipping to relevant wavelength range")
     
         wave_rest, all_fluxs_out, all_flux_ivars_out = deredshift_resample_desi_spectra(wave, all_flux, all_flux_ivar, all_zreds,
-                                         wave_out=None, ncores=32,verbose=True)
+                                         wave_out=None, ncores=128,verbose=True)
 
         with h5py.File(save_dered, "w") as f:
             f.create_dataset("TARGETID", data=all_tgids, dtype='i8')
-            f.create_dataset("Z", data=all_zreds, dtype='f8')
-            f.create_dataset("WAVE_REST", data=wave_rest, dtype='f8')
-            f.create_dataset("FLUX", data=all_fluxs_out, dtype='f8')
-            f.create_dataset("FLUX_IVAR", data=all_flux_ivars_out, dtype='f8')
+            f.create_dataset("Z", data=all_zreds, dtype='f4')
+            f.create_dataset("WAVE_REST", data=wave_rest, dtype='f4')
+            f.create_dataset("FLUX", data=all_fluxs_out, dtype='f4')
+            f.create_dataset("FLUX_IVAR", data=all_flux_ivars_out, dtype='f4')
 
 
     print("wave rest shape", wave_rest.shape)
@@ -180,12 +167,11 @@ if __name__ == '__main__':
 
      ##let us get some random spectra to train the NNMF with!
 
-
     #translate them into the appropriate shape and to float32 for memory usage
     print(type(all_fluxs_out[0][0]))
-    all_fluxs_out = all_fluxs_out.T.astype(np.float32)
-    all_flux_ivars_out = all_flux_ivars_out.T.astype(np.float32)
-    wave_rest = wave_rest.astype(np.float32)
+    all_fluxs_out = all_fluxs_out.T
+    all_flux_ivars_out = all_flux_ivars_out.T
+    wave_rest = wave_rest
 
     print(np.diff(wave_rest)[0], np.diff(wave_rest)[-1])
     
@@ -203,17 +189,26 @@ if __name__ == '__main__':
     ## The coefficient of this will be the normalization factor!
     
     n_templates = 1
+
+    #select a random subset of the spectra database to get the average spectrum! Like ~25% is a good number.
+    #this array is already randomly selected and so it is fine to do this
+    all_fluxs_out_cp_subsample = all_fluxs_out_cp[ :, : 0.5*(all_fluxs_out_cp.shape[1])]
+    all_flux_ivars_out_cp_subsample = all_flux_ivars_out_cp[:, : 0.5*(all_fluxs_out_cp.shape[1])  ]
+
+    print(f"Shape of original spectra array = {all_fluxs_out_cp.shape} ")
+    print(f"Shape of sub-sampled spectra array for getting normalization spectra = {all_fluxs_out_cp_subsample.shape} ")
     
-    H_shape = (n_templates, all_fluxs_out_cp.shape[1])
-    W_shape = (all_fluxs_out_cp.shape[0], n_templates)
+    H_shape = (n_templates, all_fluxs_out_cp_subsample.shape[1])
+    W_shape = (all_fluxs_out_cp_subsample.shape[0], n_templates)
     
     H_start = cp.array( rng.uniform(0, 1, H_shape) )
     W_start = cp.array( np.ones(W_shape) )
     
     #obtain the template!
-    H_nearly, W_nearly, chi_nearly = nmf.nearly_NMF(all_fluxs_out_cp, all_flux_ivars_out_cp, H_start, W_start, n_iter=50, return_chi_2=True)
+    H_nearly, W_nearly, chi_nearly = nmf.nearly_NMF(all_fluxs_out_cp_subsample, all_flux_ivars_out_cp_subsample, H_start, W_start, n_iter=50, return_chi_2=True)
+    #W_nearly is the average spectra template
 
-    #fit the templates to the data to get the normalization factors!
+    #fit the templates to ALL the spectra data to get the normalization factors!
     V_X =  np.sqrt(all_flux_ivars_out) * all_fluxs_out
     
     H_nnls = np.zeros((W_nearly.shape[-1], V_X.shape[-1]))
@@ -247,6 +242,9 @@ if __name__ == '__main__':
     plt.savefig("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/average_nnmf.pdf",bbox_inches="tight")
     plt.close()
 
+    #saving the templates themselves
+    np.save("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/nnmf_templates/normalization_templates_dwarfs_v2.npy", W_nearly)
+
     print(np.shape(W_nearly))
     print(cp.shape(H_nearly))
 
@@ -270,10 +268,11 @@ if __name__ == '__main__':
     ##and then we split this into training and validations sets
 
     print("Randomly shuffling the array now!")
-    
+
+    #we are not using the validation array for anything. This is just one way to down-sample the spectra to save memory
     N = len(all_tgids)
     indices = np.random.permutation(N)
-    split = int(0.75 * N)
+    split = int(0.5 * N)
     
     train_inds, valid_inds = indices[:split], indices[split:]
 
@@ -283,13 +282,6 @@ if __name__ == '__main__':
     all_zreds_train = all_zreds[train_inds]
     all_tgids_train = all_tgids[train_inds]
 
-    # #validation set
-    # all_fluxs_valid = all_fluxs_scaled[:,valid_inds]
-    # all_flux_ivars_valid = all_ivars_scaled[:,valid_inds]
-    # all_zreds_valid = all_zreds[valid_inds]
-    # all_tgids_valid = all_tgids[valid_inds]
-
-
     ##################
     ##PART 2: Obtaining the spectra templates !
     ##################
@@ -297,9 +289,9 @@ if __name__ == '__main__':
     print_stage("Obtaining the NNMF templates!")
     
     ## now fit the actual templates to the data!!
-
-    n_templates = 10
     
+    n_templates = 10
+
     H_shape = (n_templates, all_fluxs_train.shape[1])
     W_shape = (all_fluxs_train.shape[0], n_templates)
     
@@ -336,23 +328,7 @@ if __name__ == '__main__':
     ##plot all these templates for reference!
 
     #saving the templates themselves
-    np.save("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/nnmf_templates/templates_dwarfs.npy", cp.asnumpy(W_nearly) )
-
-
-    # else:
-    #      with h5py.File("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_y1_dwarf_nnmf_result.h5", "r") as f:
-    #         all_tgids = f["TARGETID"][:]
-    #         all_zreds = f["Z"][:]
-    #         wave_rest = f["WAVE_REST"][:]
-    #         all_fluxs_scaled = f["FLUX_NORM"][:]
-    #         all_ivars_scaled = f["FLUX_IVAR_NORM"][:]
-    #         scaling_factors = f["NORM_FACTOR"][:]
-    #         valid_array = f["IS_VALIDATION"][:]
-             
-    #     #we are not overwriting or making the templates!
-    #     W_nearly = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/nnmf_templates/templates_dwarfs.npy")
-
-
+    np.save("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/nnmf_templates/templates_dwarfs_v2.npy", cp.asnumpy(W_nearly) )
 
     fig, ax = plt.subplots(n_templates, 1, figsize=(20, 20), layout="constrained")
     
@@ -396,7 +372,6 @@ if __name__ == '__main__':
 
     ##now we save this! We also save an array indicating whether in validation or not
 
-    # if overwrite_templates:
     valid_array = np.zeros(len(all_tgids))
     valid_array[valid_inds] = 1
 
@@ -405,7 +380,7 @@ if __name__ == '__main__':
     print(np.shape(scaling_factors))
     print(np.shape(coeffs_spectra))
     
-    save_final = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_y1_dwarf_nnmf_result.h5"
+    save_final = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_y1_dwarf_combine_nnmf_result.h5"
 
     #note that this will overwrite the file
     with h5py.File(save_final, "w") as f:

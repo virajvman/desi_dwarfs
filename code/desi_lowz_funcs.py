@@ -21,6 +21,9 @@ import glob
 url_prefix = 'https://www.legacysurvey.org/viewer/'
 import requests
 from io import BytesIO
+import desispec.io
+from desispec import coaddition  
+
 
 c_light = 299792 #km/s
 filler_sga_ind = 999999
@@ -884,7 +887,22 @@ def get_tgids_fastspec(tgids_list, columns):
     
     return temp_f, mask
 
-        
+
+
+def process_img(img_data, cutout_size = 96, org_size = 350):
+    '''
+    Function that center crops the image and returns rgb image!
+    '''
+    
+    start = (org_size - cutout_size) // 2  # assumes square images
+    end = start + cutout_size
+    img_data = img_data[:, start:end, start:end]
+    #convert to rgb
+    rgb_img = sdss_rgb([img_data[0],img_data[1], img_data[2] ], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
+    return rgb_img
+    
+
+
     
 
 
@@ -1232,7 +1250,7 @@ def get_galex_source(source_ra, source_dec, rgb_stuff, wcs, save_path):
     return
 
 
-def fetch_psf(ra, dec, session,timeout=30):
+def fetch_psf(ra, dec, session):
     """
     Returns PSFs in dictionary with keys 'g', 'r', and 'z'.
 
@@ -1240,25 +1258,22 @@ def fetch_psf(ra, dec, session,timeout=30):
     use try-except clause in addition to for-loop to try to figure this out
     """
     url_prefix = 'https://www.legacysurvey.org/viewer/'
-    all_layers = ["ls-dr9", "ls-dr9-north"]
+    layer = "ls-dr9"
 
-    for i in range(2):
-        try:
-            # url = url_prefix + f'coadd-psf/?ra={ra}&dec={dec}&layer=ls-dr9&bands=grz'
-            url = url_prefix + f'coadd-psf/?ra={ra}&dec={dec}&layer={all_layers[i]}&bands=grz'
-            
-            # session = requests.Session()
-            print(url)
-            resp = session.get(url,timeout=timeout)
-            resp.raise_for_status()  # Raise error for bad status codes
-            # resp.raise_for_status()  # Raise error for bad responses
-            hdulist = fits.open(BytesIO(resp.content))
-            psf = {'grz'[i]: hdulist[i].data for i in range(3)}
 
-            return psf
-        except:
-            print("URL failed, trying another if not already ... ")
-            
+    # url = url_prefix + f'coadd-psf/?ra={ra}&dec={dec}&layer=ls-dr9&bands=grz'
+    url = url_prefix + f'coadd-psf/?ra={ra}&dec={dec}&layer={layer}&bands=grz'
+    
+    print(url)
+    
+    resp = session.get(url)
+    resp.raise_for_status()  # Raise error for bad status codes
+    # resp.raise_for_status()  # Raise error for bad responses
+    hdulist = fits.open(BytesIO(resp.content))
+    psf = {'grz'[i]: hdulist[i].data for i in range(3)}
+
+    return psf
+        
     return None
 
 
@@ -1278,7 +1293,7 @@ def save_jpg(ra,dec,img_path,session, size=350):
     
 
 
-def save_subimage(ra, dec, sbimg_path, session, size = 350, timeout = 30):
+def save_subimage(ra, dec, sbimg_path, session, size = 350):
     """
     Returns coadds in dictionary with keys 'g', 'r', and 'z'.
     """
@@ -1288,7 +1303,7 @@ def save_subimage(ra, dec, sbimg_path, session, size = 350, timeout = 30):
     url += 'layer=ls-dr9&size=%d&pixscale=0.262&subimage'%size
     print(url)
     try:
-        resp = session.get(url, timeout=timeout)
+        resp = session.get(url)
         resp.raise_for_status()  # Raise error for bad status codes
         # Save the FITS file
         with open(sbimg_path, "wb") as f:
@@ -1450,4 +1465,19 @@ def save_cutouts(ra,dec,img_path,session, size=350, timeout = 30):
         print(url)
     
     return
+
+
+def download_few_spectra(data_cat,ncores=2):
+    data_spec = desispec.io.spectra.read_spectra_parallel(data_cat, nproc=ncores, prefix='coadd', rdspec_kwargs={ "skip_hdus" : [ "EXP_FIBERMAP", "SCORES", "EXTRA_CATALOG", "MASK", "RESOLUTION"] }, specprod="iron", match_order=True)
+
+    #we coadd the spectra!
+    spec_combined = coaddition.coadd_cameras(data_spec)
+
+    # ##save this now!
+    all_fluxs = spec_combined.flux
+    all_waves = spec_combined.wave
+    all_ivars = spec_combined.ivar
+
+    return all_waves, all_fluxs, all_ivars
+
     

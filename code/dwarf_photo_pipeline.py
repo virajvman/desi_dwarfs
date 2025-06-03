@@ -26,6 +26,7 @@ url_prefix = 'https://www.legacysurvey.org/viewer/'
 import requests
 from io import BytesIO
 import matplotlib.patches as patches
+from astropy.table import Column
 from aperture_photo import run_aperture_pipe
 from aperture_cogs import run_cog_pipe
 # from get_sga_distances import get_sga_info
@@ -512,7 +513,6 @@ if __name__ == '__main__':
     npixels_min = 10
     threshold_rms_scale = 1.5
     
-        
     c_light = 299792 #km/s
 
     ##################
@@ -524,6 +524,8 @@ if __name__ == '__main__':
 
     ##add the columns on image path and file_path to these catalogs!!
     shreds_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v3.fits"
+    # shreds_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/TEMPORARY_desi_y1_dwarf_shreds_catalog_v3.fits"
+    
     clean_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v3.fits"
 
     if use_clean == False:
@@ -849,29 +851,32 @@ if __name__ == '__main__':
                         results.append( run_aperture_pipe(all_inputs[i]) )
         
                 ### saving the results of the photometry pipeline
-                results = np.array(results)
+                # results = np.array(results)
             
                 print_stage("Done running aperture photometry!!")
-            
-                final_close_star_dists = results[:,0].astype(float)
-                final_close_star_maxmags = results[:,1].astype(float)
-                            
-                final_fidu_aper_mags = np.vstack(results[:,2])
+
+                final_close_star_dists = np.array([r["closest_star_norm_dist"] for r in results])
+                final_close_star_maxmags  = np.array([r["closest_star_mag"] for r in results])
+                final_fidu_aper_mags     = np.vstack([r["fidu_aper_mags"] for r in results])  # if same shape
+                final_org_mags           = np.vstack([r["org_mags"] for r in results])  
                 
-                final_org_mags = np.vstack(results[:,3])
-                
-                final_save_paths = results[:,4].astype(str)
-                
-        
+                final_save_paths         = [r["save_path"] for r in results]
+                final_image_paths       = [r["save_summary_png"] for r in results]
+                all_img_data_paths          = [r["img_path"] for r in results]
+
+                if chunk_i == 0:
+                    print_stage("Example outputs from aperture pipeline")
+                    print("fidu aper mags shape : ",final_fidu_aper_mags.shape)
+                    print("final close star_dists shape : ", final_close_star_dists.shape)
+                    #print some values for testing
+                    print("aper_mags : ", final_fidu_aper_mags[0])
+                    print("org_mags : ", final_org_mags[0])
+                    print("---"*5)
+                    
                 #these final image paths will be used to make a scrollable png file!
                 #this is the summary aperture photo images
-                final_image_paths = results[:,5].astype(str)
-                all_aper_saveimgs += list(final_image_paths)
+                all_aper_saveimgs += final_image_paths
 
-                #this is the fits data image
-                all_data_paths = results[:,6].astype(str)
-                
-    
                 ##what criterion to use here when showing the special objects?
                 ##if within 1.5 of the stellar radius and the star is within 45 arcsecs of ths source
                 special_plot_mask += list( (shreds_focus_i["STARFDIST"] < 1.5) & (shreds_focus_i["STARDIST_DEG"]*3600 < 45) )
@@ -880,16 +885,15 @@ if __name__ == '__main__':
                 #check that the org mags make sense
                 print("Maximum Abs difference between org mags = ",np.max( np.abs(final_org_mags[:,0] - shreds_focus_i["MAG_G"]) ))
                 
-                shreds_focus_i["NEAREST_STAR_DIST"] = final_close_star_dists
+                shreds_focus_i["NEAREST_STAR_NORM_DIST"] = final_close_star_dists
                 shreds_focus_i["NEAREST_STAR_MAX_MAG"] = final_close_star_maxmags
                 
                 shreds_focus_i["MAG_G_APERTURE_R375"] = final_fidu_aper_mags[:,0]
                 shreds_focus_i["MAG_R_APERTURE_R375"] = final_fidu_aper_mags[:,1]
                 shreds_focus_i["MAG_Z_APERTURE_R375"] = final_fidu_aper_mags[:,2]
 
-                
                 shreds_focus_i["SAVE_PATH"] = final_save_paths 
-                shreds_focus_i["FITS_PATH"] = all_data_paths
+                shreds_focus_i["IMAGE_FITS_PATH"] = all_img_data_paths
                             
                 print("Compute aperture-photometry based stellar masses now!")
 
@@ -918,13 +922,48 @@ if __name__ == '__main__':
                         results.append( run_cog_pipe(all_inputs[i]) )
         
                 ### saving the results of the photometry pipeline
-                results = np.array(results)
+        
+                # Each element of results is:
+                # [0] cog_mags             
+                # [1] final_cog_mags_err    
+                # [2] final_cog_params_g    --> list of cog fit parameters  
+                # [3] final_cog_params_r     
+                # [4] final_cog_params_z     
+                # [5] final_cog_params_g_err  
+                # [6] final_cog_params_r_err  
+                # [7] final_cog_params_z_err 
+                # [8] save_img_path   
 
-                final_cog_mags = np.vstack(results[:,0])
+                # Stack the elements appropriately
+                final_aper_mags_r4    = np.vstack([r["aper_mags_r4"] for r in results])
+                final_cog_mags        = np.vstack([r["cog_mags"] for r in results])
+                final_cog_mags_err    = np.array([r["cog_mags_err"] for r in results])
                 
-                final_cog_saveimgs = results[:,1].astype(str)
+                final_cog_params_g     = np.vstack([r["params_g"] for r in results])
+                final_cog_params_r     = np.vstack([r["params_r"] for r in results])
+                final_cog_params_z     = np.vstack([r["params_z"] for r in results])
+                
+                final_cog_params_g_err = np.vstack([r["params_g_err"] for r in results])
+                final_cog_params_r_err = np.vstack([r["params_r_err"] for r in results])
+                final_cog_params_z_err = np.vstack([r["params_z_err"] for r in results])
+                
+                final_cog_saveimgs     = np.array([r["img_path"] for r in results], dtype=str)
+
                 all_cog_saveimgs += list(final_cog_saveimgs)
-                
+
+                if chunk_i == 0:
+                    print_stage("Example outputs from cog pipeline")
+                    print("final aper mags R4 shape : ",final_aper_mags_r4.shape)
+                    print("final cog mags shape : ",final_cog_mags.shape)
+                    print("final cog params g-band shape : ",final_cog_mags.shape)
+                    #print some values for testing
+                    print("cog_mags : ", final_cog_mags[0])
+                    print("cog_mags_err : ", final_cog_mags_err[0])
+                    print("cog params g : ",final_cog_params_g[0])
+                    print("cog params g err  : ", final_cog_params_g_err[0])
+                    print("cog saveimg : ", final_cog_saveimgs[0])
+                    print("---"*5)
+                    
                 print_stage("Done running curve of growth pipeline!")
 
                 #if run_aper was not run before then we read in the files again
@@ -943,6 +982,35 @@ if __name__ == '__main__':
                 shreds_focus_i["MAG_G_APERTURE_COG"] = final_cog_mags[:,0]
                 shreds_focus_i["MAG_R_APERTURE_COG"] = final_cog_mags[:,1]
                 shreds_focus_i["MAG_Z_APERTURE_COG"] = final_cog_mags[:,2]
+
+                shreds_focus_i["MAG_G_APERTURE_R4"] = final_aper_mags_r4[:,0]
+                shreds_focus_i["MAG_R_APERTURE_R4"] = final_aper_mags_r4[:,1]
+                shreds_focus_i["MAG_Z_APERTURE_R4"] = final_aper_mags_r4[:,2]
+
+                shreds_focus_i["MAG_G_APERTURE_COG_ERR"] = final_cog_mags_err[:,0]
+                shreds_focus_i["MAG_R_APERTURE_COG_ERR"] = final_cog_mags_err[:,1]
+                shreds_focus_i["MAG_Z_APERTURE_COG_ERR"] = final_cog_mags_err[:,2]
+
+                ##adding the lists to the astropy table!
+
+                # Create an astropy Column with object dtype to hold variable-length array
+                col_cog_params_g = Column(final_cog_params_g, name='MAG_G_APERTURE_COG_PARAMS')
+                col_cog_params_r = Column(final_cog_params_r, name='MAG_R_APERTURE_COG_PARAMS')
+                col_cog_params_z = Column(final_cog_params_z, name='MAG_Z_APERTURE_COG_PARAMS')
+
+                # Add the column to the table
+                shreds_focus_i.add_column(col_cog_params_g)
+                shreds_focus_i.add_column(col_cog_params_r)
+                shreds_focus_i.add_column(col_cog_params_z)
+
+                col_cog_params_err_g = Column(final_cog_params_g_err, name='MAG_G_APERTURE_COG_PARAMS_ERR')
+                col_cog_params_err_r = Column(final_cog_params_r_err, name='MAG_R_APERTURE_COG_PARAMS_ERR')
+                col_cog_params_err_z = Column(final_cog_params_z_err, name='MAG_Z_APERTURE_COG_PARAMS_ERR')
+
+                # Add the column to the table
+                shreds_focus_i.add_column(col_cog_params_err_g)
+                shreds_focus_i.add_column(col_cog_params_err_r)
+                shreds_focus_i.add_column(col_cog_params_err_z)
 
                 #Get the cog based stellar mass
                 shreds_focus_i = compute_aperture_masses(shreds_focus_i, rband_key="MAG_R_APERTURE_COG", gband_key="MAG_G_APERTURE_COG", z_key="Z", output_key="LOGM_SAGA_APERTURE_COG")
@@ -995,14 +1063,16 @@ if __name__ == '__main__':
             
             print_stage("Consolidated aperture chunk saved at %s"%(file_template_aper + "%s.fits"%end_name) )
 
-
     ##make a scrollable pdf to view the final results!
     ##only make for some objects?
 
     if tgids_list is None and run_aper:
         make_scroll_pdf(all_aper_saveimgs, save_sample_path, summary_scroll_file_name, special_plot_mask, max_num=500, type_str="aper",all_aper_saveimgs2=None)
-        
+
     if tgids_list is None and run_cog:
+        make_scroll_pdf(all_cog_saveimgs, save_sample_path, summary_scroll_file_name, special_plot_mask, max_num=500, type_str="cog",all_aper_saveimgs2=None)
+        
+    if tgids_list is None and run_cog and run_aper:
         make_scroll_pdf(all_aper_saveimgs, save_sample_path, summary_scroll_file_name, special_plot_mask, max_num=500, type_str="apercog",all_aper_saveimgs2=all_cog_saveimgs)
 
     

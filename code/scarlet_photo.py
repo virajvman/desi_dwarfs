@@ -3,6 +3,8 @@ import scarlet
 import astropy.io.fits as fits
 import sep
 import pickle
+from concurrent.futures import ProcessPoolExecutor
+from tqdm import tqdm
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
@@ -36,33 +38,84 @@ from astropy.convolution import convolve
 from reproject import reproject_interp
 from desi_lowz_funcs import save_subimage, fetch_psf
 from desi_lowz_funcs import print_stage, check_path_existence, get_remove_flag, _n_or_more_lt, is_target_in_south, match_c_to_catalog, calc_normalized_dist, get_sweep_filename, get_random_markers, save_table, make_subplots, sdss_rgb
+from photutils.background import StdBackgroundRMS, MADStdBackgroundRMS
+from astropy.stats import SigmaClip
+from matplotlib.colors import Normalize
+from tqdm import trange
 
-def mask_star(invar_c, center, radius):
-    """
-    Masks pixels within a given radius from a center coordinate by setting them to np.inf.
+def mask_radius_for_mag(mag):
+    # Returns a masking radius in degrees for a star of the given magnitude.
+    # Used for Tycho-2 and Gaia stars.
     
+    # This is in degrees, and is from Rongpu in the thread [decam-chatter 12099].
+    return 1630./3600. * 1.396**(-mag)
+
+# def mask_star(invar_c, center, radius,mask_val = 0):
+#     """
+#     Masks pixels within a given radius from a center coordinate by setting them to np.inf.
+    
+#     Parameters:
+#     - invar: (3, H, W) NumPy array
+#     - center: (x, y) tuple specifying the pixel coordinate
+#     - radius: Radius of the region to mask
+    
+#     Returns:
+#     - Modified array with masked region
+#     """
+
+#     invar = np.copy(invar_c)
+
+#     H, W = invar.shape[1:]  # Get height and width
+#     x0, y0 = center  # Center coordinates
+
+#     # Create a distance grid
+#     y, x = np.ogrid[:H, :W]
+#     mask = (x - x0)**2 + (y - y0)**2 <= radius**2  # Boolean mask of pixels within radius
+
+#     # Apply the mask to all channels
+#     invar[:, mask] = mask_val #np.inf  # Assign np.inf
+    
+#     return invar
+
+def mask_star(arr, center, radius, mask_val=0):
+    """
+    Masks pixels within a given radius from a center coordinate.
+
     Parameters:
-    - invar: (3, H, W) NumPy array
+    - arr: NumPy array of shape (H, W) or (C, H, W)
     - center: (x, y) tuple specifying the pixel coordinate
     - radius: Radius of the region to mask
-    
+    - mask_val: Value to assign to the masked pixels (default: 0)
+
     Returns:
     - Modified array with masked region
     """
 
-    invar = np.copy(invar_c)
+    arr = np.copy(arr)
+    
+    # Determine if input is 2D or 3D
+    if arr.ndim == 2:
+        H, W = arr.shape
+        is_3d = False
+    elif arr.ndim == 3:
+        C, H, W = arr.shape
+        is_3d = True
+    else:
+        raise ValueError("Input array must be 2D or 3D with shape (C, H, W)")
 
-    H, W = invar.shape[1:]  # Get height and width
-    x0, y0 = center  # Center coordinates
+    x0, y0 = center
 
     # Create a distance grid
     y, x = np.ogrid[:H, :W]
     mask = (x - x0)**2 + (y - y0)**2 <= radius**2  # Boolean mask of pixels within radius
 
-    # Apply the mask to all channels
-    invar[:, mask] = 0 #np.inf  # Assign np.inf
-    
-    return invar
+    # Apply the mask
+    if is_3d:
+        arr[:, mask] = mask_val
+    else:
+        arr[mask] = mask_val
+
+    return arr
 
 
 def conf_interval(x, pdf, conf_level):
@@ -212,21 +265,19 @@ def run_scarlet_pipe(input_dict):
     source_ra  = input_dict["ra"] 
     source_dec  = input_dict["dec"]
     source_redshift  = input_dict["redshift"]
-    session  = input_dict["session"]
     wcs  = input_dict["wcs"]
     #data_arr is the C x N x N matrix with image data
     data_arr  = input_dict["image_data"]
     source_cat_f = input_dict["source_cat"]
-    org_mag_g = input_dict["org_mag_g"]
     overwrite = input_dict["overwrite"]
     #do we run our own peak finder, or use LS DR9 sources as peaks?
     run_own_detect = input_dict["run_own_detect"]
     box_size = input_dict["box_size"]
 
     ## load the newly computed aperture mags for plotting
-    aper_mag_g = input_dict["MAG_G_APERTURE"]
-    aper_mag_r = input_dict["MAG_R_APERTURE"]
-    aper_mag_z = input_dict["MAG_Z_APERTURE"]
+    aper_mag_g = input_dict["MAG_G_APERTURE_COG"]
+    aper_mag_r = input_dict["MAG_R_APERTURE_COG"]
+    aper_mag_z = input_dict["MAG_Z_APERTURE_COG"]
 
     verbose=True
 
@@ -239,7 +290,9 @@ def run_scarlet_pipe(input_dict):
         pass
     else:
         print("Psfs did not exixt before and are being downloaded!")
-        psf_dict = fetch_psf(source_ra,source_dec, session)
+        with requests.Session() as session:
+            psf_dict = fetch_psf(source_ra,source_dec, session)
+            
         if psf_dict is not None:
             #as psf can be of different sizes and so saving each band separately!
             np.save(save_path  + "/psf_data_g.npy",psf_dict["g"])
@@ -255,14 +308,6 @@ def run_scarlet_pipe(input_dict):
 
     old_psfs = { "g": psf_g, "r": psf_r, "z": psf_z }
     new_psfs = { "g": psf_g, "r": psf_r, "z": psf_z }
-
-    #The psf has a different size in North, but we not consider that for now
-    # for bi in "grz":
-    #     if np.shape(old_psfs[bi]) != (63,63):
-    #         if verbose:
-    #             print(bi)
-    #             print(np.shape(old_psfs[bi]))
-    #         new_psfs[bi] = embed_psf(old_psfs[bi])
             
     psf = np.array( [ new_psfs["g"], new_psfs["r"], new_psfs["z"] ] )
 
@@ -285,8 +330,9 @@ def run_scarlet_pipe(input_dict):
     else:
         print("Sub-images did not exist before and are being downloaded!")
         sbimg_path = save_path + "/grz_subimage.fits"
-
-        save_subimage(source_ra, source_dec, sbimg_path, session, size = 350,timeout = 30)
+        
+        with requests.Session() as session:
+            save_subimage(source_ra, source_dec, sbimg_path, session, size = 350)
         try:
             #hopefully the file was downloaded
             sbimg = fits.open(sbimg_path)
@@ -319,16 +365,22 @@ def run_scarlet_pipe(input_dict):
         
          ## plot these sources on an image segmentation map to find the scarlet components associated with the dwarf
         image_tot = np.sum(data_arr,axis=0)
-    
-        ##estimate background
-        # try:
-        bkg_estimator = MedianBackground()
-        bkg = Background2D(image_tot, (box_size, box_size), filter_size=(3, 3),
-                           bkg_estimator=bkg_estimator, exclude_percentile=20.0)
+
+        noise_dict = {}
+        rms_estimator = MADStdBackgroundRMS()
+        ##estimate the background rms in each band!
+        for filter_ind, bii in enumerate(["g","r","z"]):        
+            # Apply sigma clipping
+            sigma_clip = SigmaClip(sigma=3.0,maxiters=5)
+            clipped_data = sigma_clip(data_arr[filter_ind])
+            # Estimate RMS
+            background_rms = rms_estimator(clipped_data)
+            noise_dict[bii] = background_rms
+
+        #the rms in the total image will be the rms in the 3 bands added in quadrature
+        tot_rms = np.sqrt( noise_dict["g"]**2 + noise_dict["r"]**2 + noise_dict["z"]**2 )
         
-        brms = np.median(bkg.background_rms)
-        
-        threshold = 1.5 * brms
+        threshold = 1.5 * tot_rms
         
         ##do image segmentation per band image
         npixels_min = 10
@@ -355,7 +407,7 @@ def run_scarlet_pipe(input_dict):
         #any segment not part of this main segment is considered to be a different source 
         #make a copy of the segment array
         segment_map_v2 = np.copy(segment_map.data)
-                
+
         #pixels that are part of main segment island are called 2
         segment_map_v2[segment_map.data == island_num] = 2
         #all other segments that are not background are called 1
@@ -397,7 +449,7 @@ def run_scarlet_pipe(input_dict):
         # Add the rectangle to the plot
         ax.add_patch(rect)
 
-        ax.imshow(img_rgb)
+        ax.imshow(img_rgb,origin="lower")
         fig.savefig(save_path + "/bounding_box.pdf",bbox_inches="tight")
         plt.close(fig)
  
@@ -409,6 +461,8 @@ def run_scarlet_pipe(input_dict):
         data_arr = data_arr[:, y_min_new : y_max_new, x_min_new : x_max_new ]
         invar_weights = invar_weights[ :, y_min_new : y_max_new, x_min_new : x_max_new  ]
 
+        ##we will save hte bounding box co-ordinates for later use!
+        np.save(save_path + "/bounding_box_coords.npy",[y_min_new, y_max_new, x_min_new, x_max_new]  )
         
         image_tot = np.sum(data_arr,axis=0)
         segment_map_v2 = segment_map_v2[y_min_new : y_max_new, x_min_new : x_max_new]
@@ -421,6 +475,7 @@ def run_scarlet_pipe(input_dict):
         
         sources_f_xpix,sources_f_ypix,_ = wcs.all_world2pix(source_cat_f['ra'].data, source_cat_f['dec'].data, 0,1)    
         sources_f_xpix,sources_f_ypix,W,H = transform_coords(sources_f_xpix,sources_f_ypix, x_min_new, x_max_new, y_min_new, y_max_new )
+
                 
         box_mask = (sources_f_xpix >= 0) & (sources_f_xpix <= W) & (sources_f_ypix >= 0) & (sources_f_ypix <= H)
         
@@ -435,18 +490,15 @@ def run_scarlet_pipe(input_dict):
         ##these will be the stars that will be modeled as a psf source!
         #should I also include a magnitude limit as we want to specifically model the bright ones?
 
-
         gaia_max_mag = np.min(  np.array([source_cat_f["gaia_phot_bp_mean_mag"].data, source_cat_f["gaia_phot_rp_mean_mag"].data, source_cat_f["gaia_phot_g_mean_mag"].data]) ,axis=0) 
 
-        is_star = (source_cat_f["ref_cat"] == "G2") &  ( gaia_max_mag < 17 )  &  ( ( np.abs(source_cat_f["pmra"] * np.sqrt(source_cat_f["pmra_ivar"])) >= 2 ) | ( np.abs(source_cat_f["pmdec"] * np.sqrt(source_cat_f["pmdec_ivar"])) >= 2 ) )
-
-        # print("Number of sources in Gaia DR2 in scene:", len(source_cat_f[(source_cat_f["ref_cat"] == "G2")]  ) )
-        # print( source_cat_f[(source_cat_f["ref_cat"] == "G2")]["pmra"].data *  np.sqrt(source_cat_f[(source_cat_f["ref_cat"] == "G2")]["pmra_ivar"].data))
-        # print( source_cat_f[(source_cat_f["ref_cat"] == "G2")]["pmdec"].data * np.sqrt(source_cat_f[(source_cat_f["ref_cat"] == "G2")]["pmdec_ivar"].data ) )
-
-
-        # what about sources that are in Gaia but are not our main source of interest?
-
+        ##procedure for selecting a star
+        signi_pm = ( np.abs(source_cat_f["pmra"]) * np.sqrt(source_cat_f["pmra_ivar"]) > 3) | ( np.abs(source_cat_f["pmdec"]) * np.sqrt(source_cat_f["pmdec_ivar"]) > 3)
+        
+        is_star = (source_cat_f["ref_cat"] == "G2")  &  ( 
+            (source_cat_f['type'] == "PSF")  | signi_pm 
+    ) 
+        
         #what is the distance to the closest star from us?
         all_stars = source_cat_f[is_star]
 
@@ -558,6 +610,8 @@ def run_scarlet_pipe(input_dict):
             print(np.max(centers_arr,axis=0))
             print(np.max(centers_arr,axis=1))
             print(np.shape(data_arr))
+
+        
         
         if np.sum(is_star) > 0:
             #if there exists a star!!
@@ -566,9 +620,16 @@ def run_scarlet_pipe(input_dict):
             star_f_xpix = sources_f_xpix[is_star]
             star_f_ypix = sources_f_ypix[is_star]
 
-            ax[0].scatter( star_f_xpix, star_f_ypix, color = "w", marker = "*",s = 30)
+            source_cat_is_star = source_cat_f[is_star]
             
+            source_star_max_mags = np.min( (  np.array(source_cat_is_star["gaia_phot_bp_mean_mag"]), np.array(source_cat_is_star["gaia_phot_rp_mean_mag"]),np.array(source_cat_is_star["gaia_phot_g_mean_mag"])    )       ,axis = 0)
+            
+        
+            ax[0].scatter( star_f_xpix, star_f_ypix, color = "w", marker = "*",s = 30)
 
+            print("STAR_F_XPIX ", star_f_xpix)
+            print("STAR_F_YPIX ", star_f_ypix)
+            
             # print(len(sources_f_xpix), len(source_cat_f), len(centers))
             ## what should the order be here ... ?
             all_stars = np.array([star_f_ypix, star_f_xpix]).T
@@ -601,8 +662,8 @@ def run_scarlet_pipe(input_dict):
         ##I want to make a separate plot just showing the identified peaks!
         fig_detect, axd = make_subplots(ncol = 1, nrow = 1, label_font_size = fontsize,plot_size = 4, return_fig = True)
         
-        axd[0].imshow(img_rgb)
-        axd[0].contour(footprint_img, [0.5,], colors='w', linewidths=0.5)
+        axd[0].imshow(img_rgb,origin="lower")
+        axd[0].contour(footprint_img, [0.5,], colors='w', linewidths=0.5,origin="lower")
   
         for k, peak in enumerate(peaks):
             axd[0].text(peak.x, peak.y, str(k), color="w", ha='center', va='center', weight="bold", size=8)
@@ -615,8 +676,11 @@ def run_scarlet_pipe(input_dict):
             star_f_xpix = sources_f_xpix[is_star]
             star_f_ypix = sources_f_ypix[is_star]
 
-            axd[0].scatter( star_f_xpix, star_f_ypix, color = "w", marker = "*",s = 30)
+            star_f_mags = sources_f_xpix[is_star]
 
+            axd[0].scatter( star_f_xpix, star_f_ypix, color = "w", marker = "*",s = 30)
+            axd[0].scatter( star_f_xpix, star_f_ypix, edgecolor = "r", facecolor= "none", marker = "o",s = 600,lw = 2)
+            
         fig_detect.savefig(save_path + "/wavelet_source_detect.png",bbox_inches="tight")
         
         #########################################
@@ -642,9 +706,9 @@ def run_scarlet_pipe(input_dict):
 
         ##plotting the r-band inverse variance mask before doing any star masking 
         fig_invar0,ax_invar0 = make_subplots(ncol =1, nrow = 1, return_fig = True)
-        ax_invar0[0].imshow(invar_weights[1])
-        ax_invar0[0].set_xticks([])
-        ax_invar0[0].set_yticks([])
+        ax_invar0[0].imshow(invar_weights[1],origin="lower")
+        # ax_invar0[0].set_xticks([])
+        # ax_invar0[0].set_yticks([])
         fig_invar0.savefig(save_path + "/invar_rband_prestar.png",bbox_inches="tight")
         
         #if there are stars, make the pixels in some region around the stars with weights = 0
@@ -653,12 +717,20 @@ def run_scarlet_pipe(input_dict):
             
         if np.sum(is_star) > 0:
             print("Starting star masking!")
+
+            invar_weights_starmask = invar_weights.copy()
+            
             for si in range(np.sum(is_star)):
 
                 ##use rongpu stellar radius here!
-                radius = int(4/0.262)
+                star_mag = source_star_max_mags[si]
+                radius_pix = 3600*mask_radius_for_mag(star_mag)/0.262
+                # radius = int(4/0.262)
+
+                print(si, star_f_xpix[si], star_f_ypix[si], radius_pix)
+                
                 #in general, need to be very careful when copying and modifying arrays
-                invar_weights_starmask = mask_star(invar_weights, ( star_f_xpix[si], star_f_ypix[si]) , radius )
+                invar_weights_starmask = mask_star(invar_weights_starmask, ( star_f_xpix[si], star_f_ypix[si]) , radius_pix )
                 ## try to set weights/data to nan
         else:
             invar_weights_starmask = invar_weights
@@ -666,8 +738,8 @@ def run_scarlet_pipe(input_dict):
         ##plotting the r-band inverse variance mask after doing the star masking 
         fig_invar1,ax_invar1 = make_subplots(ncol =1, nrow = 1, return_fig = True)
         ax_invar1[0].imshow(invar_weights_starmask[1])
-        ax_invar1[0].set_xticks([])
-        ax_invar1[0].set_yticks([])
+        # ax_invar1[0].set_xticks([])
+        # ax_invar1[0].set_yticks([])
         fig_invar1.savefig(save_path + "/invar_rband_poststar.png",bbox_inches="tight")
 
         print("Fitting only extended sources, no stars and no lsbs")
@@ -777,6 +849,7 @@ def run_scarlet_pipe(input_dict):
         #-------
 
         if np.sum(is_star) > 0:
+        # if False:
             ##making the new observation frame with masked weights removed
             observation_wstar = scarlet.Observation(
                 data_arr,
@@ -870,7 +943,6 @@ def run_scarlet_pipe(input_dict):
             scar_comps_wlsb_wstars = scar_comps_nostars
             observation_wstar = observation_nostar
     
-
         # for k, src in enumerate(scar_comps):
         #     print (f"{k}: {src.__class__.__name__}")
             
@@ -954,7 +1026,7 @@ def run_scarlet_pipe(input_dict):
         segment_map_v3[(segment_map_v3 !=2) & (segment_map_v3 > 0)  ] = -1
         segment_map_v3[segment_map_v3 == 2 ] = 1
         
-        ax[1].imshow(segment_map_v3,cmap = "PiYG",alpha = 0.75)
+        ax[1].imshow(segment_map_v3,cmap = "PiYG",alpha = 0.75,origin="lower")
         
         
         def get_elliptical_aperture(segment_data, id_num,sigma = 3):
@@ -1005,8 +1077,7 @@ def run_scarlet_pipe(input_dict):
             else:
                 return False
 
-        
-        ## DO NOT REALLY UNDERSTAND THIS CONDITIONAL HERE, THINK MORE ...
+        ##SOMETHING CONFUSING IS HAPPENING HERE
         for i in range(len(all_segment_nums_notmain)):
             aper_notseg_i = get_elliptical_aperture(segment_data_new, all_segment_nums_notmain[i],sigma = 2)
 
@@ -1030,15 +1101,33 @@ def run_scarlet_pipe(input_dict):
         lsb_mask = np.zeros(image_tot.shape, dtype=bool)
         # Convert apertures to masks and combine them
         
-        if len(all_notmain_apers) > 0:
-            
+        if len(all_notmain_apers) > 0:            
             for api in all_notmain_apers:
                 mask_ap = api.to_mask(method='center').to_image(image_tot.shape)  # Convert to mask
                 lsb_mask |= mask_ap.astype(bool)
+
+        #I want to also mask the stars here!!
             
         #add to the mask all stuff outside the main aperture too
         mask_ap_outside = mainseg_aperture.to_mask(method='center').to_image(image_tot.shape)
         lsb_mask |= ~mask_ap_outside.astype(bool)
+
+        #I want to also mask the stars in the LSB component here!!
+
+        lsb_star_mask = np.zeros(image_tot.shape, dtype=bool)
+        
+        print(image_tot.shape)
+        print(lsb_star_mask.shape)
+        
+        for si in range(np.sum(is_star)):
+            print(f"Masking star {si}")
+            star_mag = source_star_max_mags[si]
+            radius_pix = 0.5 * 3600*mask_radius_for_mag(star_mag)/0.262
+            
+            #in general, need to be very careful when copying and modifying arrays
+            lsb_star_mask = mask_star( lsb_star_mask , ( star_f_xpix[si], star_f_ypix[si]) , radius_pix, mask_val = True )
+
+        lsb_mask |= lsb_star_mask
         
     
         #################################################
@@ -1072,12 +1161,14 @@ def run_scarlet_pipe(input_dict):
       
         # if np.min(lsb_model) > 0:
         if True:
-            
-        
             ax[2].set_title("r-band LSB model",fontsize = fontsize)
             #apply the mask
             lsb_model[1][lsb_mask] = 0
-            ax[2].imshow(lsb_model[1],norm=LogNorm())
+            #do a linear model here
+            # Linear normalization from min to max
+            # norm = Normalize(vmin=lsb_model[1].min(), vmax=lsb_model[1].max())
+            
+            ax[2].imshow(lsb_model[1],norm=LogNorm(),origin="lower")
             ax[2].set_xticks([])
             ax[2].set_yticks([])
         
@@ -1122,8 +1213,7 @@ def run_scarlet_pipe(input_dict):
         #TODO: How to deal with color gradients in galaxies?
         #########################################
 
-        # if False:
-        gmm_file_zgrid = np.arange(0.001, 0.425,0.025)
+        gmm_file_zgrid = np.arange(0.001, 0.525,0.025)
         
         ##below part is not needed everytime! Can just directly load the dictionary of conf levels
         file_index = np.where( source_redshift > gmm_file_zgrid )[0][-1]
@@ -1143,8 +1233,7 @@ def run_scarlet_pipe(input_dict):
         Z_gmm = Z_gmm/Znorm       
         # plot contours if contour levels are specified in clevs 
         lvls = []
-        # clevs = [0.16,0.50,0.841,0.977,0.998,0.99994]
-        clevs = [0.38,0.68,0.86,0.954,0.987] #,0.997]
+        clevs = [0.38,0.68,0.86,0.954,0.987]
         for cld in clevs:  
             sig = opt.brentq( conf_interval, 0., 1., args=(Z_gmm,cld) )   
             lvls.append(sig)
@@ -1183,7 +1272,7 @@ def run_scarlet_pipe(input_dict):
         all_rzs = scar_comps_inseg_mags[:,1] - scar_comps_inseg_mags[:,2]
         
         ##plot the g-r vs. r-z color contours from the redshift bin of this object        
-        # ax[3].contour(X, Y, Z_gmm, levels=sorted(lvls), cmap="viridis_r",alpha = 1,zorder = 1)
+        ax[3].contour(X, Y, Z_gmm, levels=sorted(lvls), cmap="viridis_r",alpha = 1,zorder = 1)
         
         
         ##I want to be able to see all the points even if they are outside the plotting grids. 
@@ -1235,14 +1324,14 @@ def run_scarlet_pipe(input_dict):
         #components that lie along this redshift contour are considered to be part of the galaxy!
         
         col_positions = np.vstack([ all_grs , all_rzs ])
-        # Z_likely_comps = np.exp(gmm.score_samples(col_positions.T))
+        Z_likely_comps = np.exp(gmm.score_samples(col_positions.T))
         
 
         #is in the blue box or is along the contour!
         # has to have good color and not be a star!
         ## FOR THE SCARLET PIPELINE, WE ARE AS OF NOW DECIDING NOT USE THESE COLOR CONTOURS ... 
-        # dwarf_mask = ( ((all_grs < gr_cut) & (all_rzs < rz_cut)) | (Z_likely_comps >= conf_levels["98.7"])) & (~scar_comp_inseg_isstar_bool)
-        dwarf_mask = ( ((all_grs < gr_cut) & (all_rzs < rz_cut))) & (~scar_comp_inseg_isstar_bool)
+        dwarf_mask = ( ((all_grs < gr_cut) & (all_rzs < rz_cut)) | (Z_likely_comps >= conf_levels["98.7"])) & (~scar_comp_inseg_isstar_bool)
+        # dwarf_mask = ( ((all_grs < gr_cut) & (all_rzs < rz_cut))) & (~scar_comp_inseg_isstar_bool)
         
         ##we can plot this star mask in the color-color plot
         star_mask = scar_comp_inseg_isstar_bool
@@ -1305,60 +1394,72 @@ def run_scarlet_pipe(input_dict):
     
         dwarf_model_ = observation_wstar.render(dwarf)
         nondwarf_model_ = observation_wstar.render(nondwarf_model)
+
+
+        ##save these non-dwarf models for future use
+
         
         img_rgb =  sdss_rgb([data_arr[0],data_arr[1],data_arr[2]], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
         
         total_model_rgb =  sdss_rgb([model_[0],model_[1],model_[2]], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
-        
+
+        np.save(save_path + "/total_model_rgb.npy", total_model_rgb)
+
         dwarf_model_rgb =  sdss_rgb([dwarf_model_[0],dwarf_model_[1],dwarf_model_[2]], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
+
+        np.save(save_path + "/dwarf_model_rgb.npy", dwarf_model_rgb)
+
         
         nondwarf_model_rgb =  sdss_rgb([nondwarf_model_[0],nondwarf_model_[1],nondwarf_model_[2]], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
-        
+
+        np.save(save_path + "/nondwarf_model_rgb.npy", nondwarf_model_rgb)
+
         resi_rgb =  sdss_rgb([residual[0],residual[1],residual[2]], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
-    
+
+        np.save(save_path + "/model_residual_rgb.npy", resi_rgb)
         
         ax[5].set_title("grz data",fontsize = fontsize)
         
         #draw a text box at the top that indicates, ra,dec and redshift
-        ax[5].text(0.5, 0.95,"(%.3f,%.3f, z=%.3f)"%(source_ra,source_dec, source_redshift) ,color = "yellow",fontsize = 12,
-                  transform=ax[5].transAxes, ha = "center", verticalalignment='top')
+        # ax[5].text(0.5, 0.95,"(%.3f,%.3f, z=%.3f)"%(source_ra,source_dec, source_redshift) ,color = "yellow",fontsize = 12,
+        #           transform=ax[5].transAxes, ha = "center", verticalalignment='top')
 
-        ax[5].imshow(img_rgb)
+        ax[5].imshow(img_rgb,origin="lower")
         
         ax[6].set_title("grz model",fontsize = fontsize)
-        ax[6].imshow(total_model_rgb)
+        ax[6].imshow(total_model_rgb,origin="lower")
         
         ax[7].set_title("grz dwarf model",fontsize = fontsize)
-        ax[7].imshow(dwarf_model_rgb)
+        ax[7].imshow(dwarf_model_rgb,origin="lower")
         
         ax[8].set_title("grz wo/dwarf model",fontsize = fontsize)
-        ax[8].imshow(nondwarf_model_rgb)
+        ax[8].imshow(nondwarf_model_rgb,origin="lower")
         
         ax[9].set_title("grz residuals",fontsize = fontsize)
-        ax[9].imshow(resi_rgb)
+        ax[9].imshow(resi_rgb,origin="lower")
         
         
         ax[4].set_title("summary",fontsize = fontsize)
 
         spacing = 0.08
         ax[4].text(0.05,0.95,"Org-mag g = %.2f"%source_mag_g,size =11,transform=ax[4].transAxes, verticalalignment='top')
-        ax[4].text(0.05,0.95 - spacing*1,"Aper-mag g = %.2f"%aper_mag_g,size = 11,transform=ax[4].transAxes, verticalalignment='top')
+        ax[4].text(0.05,0.95 - spacing*1,"AperCog-mag g = %.2f"%aper_mag_g,size = 11,transform=ax[4].transAxes, verticalalignment='top')
         ax[4].text(0.05,0.95 - spacing*2,"Scarlet-mag g = %.2f"%new_mag_g,size = 11,transform=ax[4].transAxes, verticalalignment='top')
         
-        ax[4].text(0.05,0.95 - spacing*3,"fracflux_g, rchisq_g = %.2f, %.2f"%(source_cat_obs["fracflux_g"], source_cat_obs["rchisq_g"]),size = 11,transform=ax[4].transAxes, verticalalignment='top')
+        # ax[4].text(0.05,0.95 - spacing*3,"fracflux_g = %.2f, %.2f"%(source_cat_obs["fracflux_g"]),size = 11,transform=ax[4].transAxes, verticalalignment='top')
         
         ax[4].text(0.05,0.95 - spacing*4,"Org-mag r = %.2f"%source_mag_r,size =11,transform=ax[4].transAxes, verticalalignment='top')
-        ax[4].text(0.05,0.95 - spacing*5,"Aper-mag r = %.2f"%aper_mag_r,size = 11,transform=ax[4].transAxes, verticalalignment='top')
+        ax[4].text(0.05,0.95 - spacing*5,"AperCog-mag r = %.2f"%aper_mag_r,size = 11,transform=ax[4].transAxes, verticalalignment='top')
         ax[4].text(0.05,0.95 - spacing*6,"Scarlet-mag r = %.2f"%new_mag_r,size = 11,transform=ax[4].transAxes, verticalalignment='top')
         
-        ax[4].text(0.05,0.95 - spacing*7,"fracflux_r, rchisq_r = %.2f, %.2f"%(source_cat_obs["fracflux_r"], source_cat_obs["rchisq_r"]),size = 11,transform=ax[4].transAxes, verticalalignment='top')
+        # ax[4].text(0.05,0.95 - spacing*7,"fracflux_r = %.2f, %.2f"%(source_cat_obs["fracflux_r"]),size = 11,transform=ax[4].transAxes, verticalalignment='top')
         
     
         ax[4].text(0.05,0.95 - spacing*8,"Org-mag z = %.2f"%source_mag_z,size =11,transform=ax[4].transAxes, verticalalignment='top')
-        ax[4].text(0.05,0.95 - spacing*9,"Aper-mag z = %.2f"%aper_mag_z,size = 11,transform=ax[4].transAxes, verticalalignment='top')
+        ax[4].text(0.05,0.95 - spacing*9,"AperCog-mag z = %.2f"%aper_mag_z,size = 11,transform=ax[4].transAxes, verticalalignment='top')
         ax[4].text(0.05,0.95 - spacing*10,"Scarlet-mag z = %.2f"%new_mag_z,size = 11,transform=ax[4].transAxes, verticalalignment='top')
         
-        ax[4].text(0.05,0.95 - spacing*11,"fracflux_z, rchisq_z = %.2f, %.2f"%(source_cat_obs["fracflux_z"], source_cat_obs["rchisq_z"]),size = 11,transform=ax[4].transAxes, verticalalignment='top')
+        # ax[4].text(0.05,0.95 - spacing*11,"fracflux_z = %.2f, %.2f"%(source_cat_obs["fracflux_z"]),size = 11,transform=ax[4].transAxes, verticalalignment='top')
     
         ax[4].set_xlim([0,1])
         ax[4].set_ylim([0,1])
@@ -1371,9 +1472,7 @@ def run_scarlet_pipe(input_dict):
                 axi.set_xticks([])
                 axi.set_yticks([])
                 
-
-
-        save_summary_png = save_path + "/grz_scarlet_tgid_%d_ra_%.3f_dec_%.3f.png"%(source_tgid, source_ra, source_dec)
+        save_summary_png = save_path + "/grz_scarlet_tgid_%d_ra_%.3f_dec_%.3f.pdf"%(source_tgid, source_ra, source_dec)
         fig_tot.savefig(save_summary_png ,bbox_inches="tight")
 
         plt.close(fig_tot)
@@ -1381,284 +1480,88 @@ def run_scarlet_pipe(input_dict):
         new_mag_g_mwc = new_mag_g + 2.5 * np.log10(source_cat_obs["mw_transmission_g"])
         new_mag_r_mwc = new_mag_r + 2.5 * np.log10(source_cat_obs["mw_transmission_r"])
         new_mag_z_mwc = new_mag_z + 2.5 * np.log10(source_cat_obs["mw_transmission_z"])
-    
+
+        #save these magnitudes for future reference!
+
         new_mags = [ new_mag_g_mwc, new_mag_r_mwc,new_mag_z_mwc ]
-        org_mags =   [ source_mag_g_mwc,source_mag_r_mwc,source_mag_z_mwc  ]
+        np.save( save_path + "/scarlet_mags.npy", new_mags )
+        # org_mags =   [ source_mag_g_mwc,source_mag_r_mwc,source_mag_z_mwc  ]
         
-        return new_mags, org_mags, save_summary_png
+        return
 
 
 
-# def get_relevant_files_scarlet(input_dict):
-#     '''
-#     Get the relevant files for a single object!
-#     '''
 
-#     tgid_k = input_dict["TARGETID"]
-#     samp_k = input_dict["SAMPLE"]
-#     ra_k = input_dict["RA"]
-#     dec_k = input_dict["DEC"]
-#     top_folder = input_dict["top_folder"]
-#     sweep_folder = input_dict["sweep_folder"]
-#     brick_i = input_dict["brick_i"]
-#     wcat = input_dict["wcat"]
-#     session = input_dict["session"]
-    
-#     top_path_k = top_folder + "/%s/"%wcat + sweep_folder + "/" + brick_i + "/%s_tgid_%d"%(samp_k, tgid_k) 
-        
-#     #check if psf already exists
-#     if os.path.exists(top_path_k + "/psf_data_z.npy"):
-#         pass
-#     else:
-#         psf_dict = fetch_psf(ra_k,dec_k, session)
-#         if psf_dict is not None:
-#             #as psf can be of different sizes and so saving each band separately!
-#             np.save(top_path_k  + "/psf_data_g.npy",psf_dict["g"])
-#             np.save(top_path_k  + "/psf_data_r.npy",psf_dict["r"])
-#             np.save(top_path_k  + "/psf_data_z.npy",psf_dict["z"])
-
-    
-#     #similarly, get the subimage!
-#     sbimg_path = top_path_k + "/grz_subimage.fits"
-#     if os.path.exists(sbimg_path):
-#         pass
-#     else:
-#         save_subimage(ra_k, dec_k, sbimg_path, session, size = 350, timeout = 30)
-
-#     ##done saving all the files!
-#     return
 
 if __name__ == '__main__':
 
-    #provide all the relevant input files!!
-    # data = Table.read('/Users/virajmanwadkar/Desktop/Stanford/Research/DESI/dwarf_photometry_pipeline/download_south_egs/download_south_temp.fits')
+    #load in the fragmented catalog
+    data = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_filter.fits")
 
-    # image_folder = "/Users/virajmanwadkar/Desktop/Stanford/Research/DESI/dwarf_photometry_pipeline/download_south_egs/cutouts"
-    # folder_path  = "/Users/virajmanwadkar/Desktop/Stanford/Research/DESI/dwarf_photometry_pipeline/download_south_egs/folders"
+    #filter for objects that would be good to do a scarlet model for
+    data_scarlet = data[(data["Z"] < 0.01) & (data["SAMPLE"] != "ELG") & (data["LOGM_SAGA_APERTURE_COG"] < 9) & (data["MASKBITS"]==0) & (data["STARFDIST"] > 2) & (data["SGA_D26_NORM_DIST"] > 4) & (data["is_south"] == 1)  ]
 
-    data = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_BGS_BRIGHT_shreds_catalog_w_new_mags.fits")
-    
-    # creating a single session!
-    session = requests.Session()
+    print(f"Number of galaxies for scarlet model = {len(data_scarlet)}")
 
-    index = np.where(data["TARGETID"] ==  39627877599152108)[0][0]
-    
-    print(index)
-    
-    tgid_i = data["TARGETID"].data[index]
-    print(tgid_i)
-    ra_i = data["RA"].data[index]
-    dec_i = data["DEC"].data[index]
-    zred_i = data["Z"].data[index]
-    org_mag_i = data["MAG_G"].data[index]
-    folder_i = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds/south/sweep-130p000-140p005/1368p037/BGS_BRIGHT_tgid_39627877599152108"
+    # Indices to skip
+    SKIP_INDICES = set([7, 22, 23, 25, 30, 45, 63, 66, 77, 82, 85, 93, 94, 95, 97, 98, 108, 119, 123, 126, 127, 128, 129, 130])
 
-    import glob
-    
-    cutout_path = glob.glob("/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds_cutouts/image_tgid_%d_*"%tgid_i)[0]
-    hdus = fits.open(cutout_path)
-    image_data = hdus[0].data
-    wcs = WCS(hdus[0])
-
-    source_cat = Table.read(folder_i + "/source_cat_f.fits")
-
-    input_dict = {}
-
-    input_dict["save_path"] = folder_i
-    input_dict["tgid"] = tgid_i
-    input_dict["ra"]  = ra_i
-    input_dict["dec"] = dec_i
-    input_dict["redshift"] = zred_i
-    input_dict["wcs"] = wcs
-    #data_arr is the C x N x N matrix with image data
-    input_dict["image_data"] = image_data
-    input_dict["source_cat"] = source_cat
-    input_dict["index"] = 0
-    input_dict["org_mag_g"] = org_mag_i
-    input_dict["overwrite"] = True
-    #do we run our own peak finder, or use LS DR9 sources as peaks?
-    input_dict["run_own_detect"] = True
-    input_dict["session"] = session
-    input_dict["box_size"] = 350
-
-    #provide this input dict to the scarlet function!
-    run_scarlet_pipe(input_dict)
-
-
-
-    #whether own peak detection will be used in the scarlet pipeline
-    run_own_detect = not run_w_source
-
-
-
-      # ##################
-      #       ##PART 4b: Run scarlet photometry for sources that remain as candidate dwarfs after aperture photometry
-      #       ##################
         
-      #       if run_scarlet == True:
+    def process_index(index):
+        if index in SKIP_INDICES:
+            return
     
-      #           if run_aper:
-      #               #if run_aper was just run then we do not need to load in the datafiles
-      #               pass
-      #           else:
-      #               #run aper was not run right before and so we have to load in the saved data files 
-      #               #note that if pipeline is being run on a single object, then we need to run_aper before to produce shreds_focus_i table as summary files are not saved in the tgids mode
-      #               if use_clean == False:
-      #                   try:
-      #                       file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_shreds_catalog_w_aper_mags_chunk_%d.fits"%(sample_str, chunk_i)
-      #                   except:
-      #                       file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_shreds_catalog_w_aper_mags.fits"%(sample_str)
-                            
-      #               else:
-      #                   try:
-      #                       file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_clean_catalog_w_aper_mags_chunk_%d.fits"%(sample_str, chunk_i) 
+        try:
+            tgid_i = data_scarlet["TARGETID"].data[index]
+            ra_i = data_scarlet["RA"].data[index]
+            dec_i = data_scarlet["DEC"].data[index]
+            zred_i = data_scarlet["Z"].data[index]
+            cutout_path = data_scarlet["IMAGE_PATH"].data[index]
+            hdus = fits.open(cutout_path)
+            image_data = hdus[0].data
+            wcs = WCS(hdus[0])
     
-      #                   except:
-      #                       file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_clean_catalog_w_aper_mags.fits"%(sample_str) 
-                            
-      #               shreds_focus_i = Table.read(file_save)
+            save_folder = data_scarlet["FILE_PATH"].data[index]
+            if isinstance(save_folder, bytes):
+                save_folder = save_folder.decode("utf-8")
     
-      #           ##We will be running scarlet photometry pipeline as a testing of the original aperture pipeline.
-      #           ##So we will focus on objects only in south (consistent psf) and low-redshift objects that are most prone to shredding
-
-      #           #we will also focus on objects that do not have any bright-saturated stars in the vicinity!
-      #           #In this case, we can optimize the LSB and other components together. We were initially doing this separate because of the presence of bright stars in the field
-                                   
+            source_file = os.path.join(save_folder, "source_cat_f_more.fits")
+            if not os.path.exists(source_file):
+                source_file = os.path.join(save_folder, "source_cat_f.fits")
+            source_cat = Table.read(source_file)
     
-      #           print("Number of objects initially (in south only) -> %d"%len(shreds_focus_i[shreds_focus_i["is_south"] == 1]))
+            input_dict = {
+                "save_path": save_folder,
+                "tgid": tgid_i,
+                "ra": ra_i,
+                "dec": dec_i,
+                "redshift": zred_i,
+                "wcs": wcs,
+                "image_data": image_data,
+                "source_cat": source_cat,
+                "overwrite": True,
+                "run_own_detect": True,
+                "box_size": 350
+            }
     
-      #           ##furthermore, right now scarlet only works on south data  ....      
-                
-      #           temp_if = shreds_focus_i[ (shreds_focus_i["LOGM_SAGA_APERTURE"] <= 9.5) & (~np.isnan(shreds_focus_i["LOGM_SAGA_APERTURE"])) & (shreds_focus_i["is_south"] == 1)   ]
-                
-      #           # temp_i_nans = shreds_focus_i[ (np.isnan(shreds_focus_i["LOGM_SAGA_APERTURE"])) & (shreds_focus_i["is_south"] == 1)  ]
+            for b in "GRZ":
+                input_dict[f"MAG_{b}_APERTURE_COG"] = data_scarlet[f"MAG_{b}_APERTURE_COG"].data[index]
     
-      #           print("Number of objects with updated Mstar <= 9.5 -> %d"%len(temp_if))
-      #           print("Number of objects with NaN photometry -> %d"%len(temp_i_nans))
-    
-      #           #the mask is that take objects from south, and if they have NaN stellar masses or stellar masses that are below 9.5 and not nans
-      #           do_scarlet_mask = (shreds_focus_i["is_south"] == 1) & ( ( (shreds_focus_i["LOGM_SAGA_APERTURE"] <= 9.5) & (~np.isnan(shreds_focus_i["LOGM_SAGA_APERTURE"])) ) |  (np.isnan(shreds_focus_i["LOGM_SAGA_APERTURE"] ) ) ) & (shreds_focus_i["Z"] < 0.02)
-
-                                                                       
-      #           #these are the objects on which we will be doing scarlet photometry!                                                                                                          
-      #           all_inputs_scarlet = all_inputs[  do_scarlet_mask ]
-      #           shreds_focus_scarlet =shreds_focus_i[  do_scarlet_mask ]
-    
-      #           #for plotting purposes, we need to input in the dictionary 3 additional keys on the aperture mags
-      #           all_inputs_scarlet_v2 = []
-    
-      #           for di, dicti in tqdm(enumerate(all_inputs_scarlet)):
-      #               dicti["MAG_G_APERTURE"] = shreds_focus_scarlet[di]["MAG_G_APERTURE"]
-      #               dicti["MAG_R_APERTURE"] = shreds_focus_scarlet[di]["MAG_R_APERTURE"]
-      #               dicti["MAG_Z_APERTURE"] = shreds_focus_scarlet[di]["MAG_Z_APERTURE"]
-      #               all_inputs_scarlet_v2.append(dicti)
-
-                
-      #           ##generate the relevant files for scarlet photometry
-      #           if make_cats== True:
-      #               print_stage("Generating relevant files for doing scarlet photometry")
-                    
-      #               print("Scarlet: Using cleaned catalogs =",use_clean==True)
-            
-      #               print(f"Scarlet: Number of objects whose scarlet files will be obtained = {len(shreds_focus_scarlet)}")
-            
-      #               if use_clean == False:
-      #                   top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds"
-      #               else:
-      #                   top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_good"
-                        
-      #               print(f'Scarlet: Number of objects in south = {len(shreds_focus_scarlet[shreds_focus_scarlet["is_south"] == 1])}')
-      #               print(f'Scarlet: Number of objects in north = {len(shreds_focus_scarlet[shreds_focus_scarlet["is_south"] == 0])}')
-                        
-      #               #list of dictionaries we will feed to get_relevant_files_scarlet function
-                    
-      #               ##this can be sped up as we are not reading files or anyting!
-    
-      #               wcats_array = np.array(["north","south"])[shreds_focus_scarlet["is_south"].data]
-    
-      #               if len(wcats_array) != len(shreds_focus_scarlet):
-      #                   raise ValueError("Error in lenghts of wcat and shreds_focus_scarlet array!")
-                    
-      #               all_input_dicts = []
-      #               for i in range(len(shreds_focus_scarlet)):
-                        
-      #                   temp = { "TARGETID": shreds_focus_scarlet["TARGETID"][i], "SAMPLE": shreds_focus_scarlet["SAMPLE"][i], "RA": shreds_focus_scarlet["RA"][i], 
-      #                           "DEC": shreds_focus_scarlet["DEC"][i],"wcat": wcats_array[i] , "brick_i":shreds_focus_scarlet["BRICKNAME"][i], "sweep_folder": shreds_focus_scarlet["SWEEP"][i].replace("-pz.fits","") , "top_folder":top_folder, "session":session }
-    
-      #                   all_input_dicts.append(temp)
-    
-                    
-      #               ## get the relevant files like psfs and subimages for doing scarlet photometry! 
-      #               with mp.Pool(processes=ncores) as pool:
-      #                   results = list(tqdm(pool.imap(get_relevant_files_scarlet, all_input_dicts), total = len(all_input_dicts)  ))
-                        
-      #           print_stage("Beginning to run scarlet photometry!!")
-    
-      #           if run_parr:
-      #               with mp.Pool(processes= ncores ) as pool:
-      #                   results = list(tqdm(pool.imap(run_scarlet_pipe, all_inputs_scarlet_v2), total = len(all_inputs_scarlet_v2)  ))
-      #           else:
-      #               results = []
-      #               for i in trange(len(all_inputs_scarlet)):
-      #                   results.append( run_scarlet_pipe(all_inputs_scarlet[i]) )
-                        
-      #           ### saving the results of the photometry pipeline
-      #           results = np.array(results)
-                
-      #           print_stage("Done running all the scarlet photometry!!")
+            print(f"Processing: {index}, RA={ra_i}, DEC={dec_i}, Folder={save_folder}")
+            run_scarlet_pipe(input_dict)
         
-      #           final_new_mags = np.vstack(results[:,0])
-      #           final_org_mags = np.vstack(results[:,1])
-                
-      #           final_saveimgs = np.vstack(results[:,2])
+        except Exception as e:
+            print(f"Error processing index {index}: {e}")
+
+    ##index = 26 is an interesting case to study as the tractor model was not perfect but the scarlet model is better. We can discuss this as an interestin case!
+
+    # indices_to_process = [i for i in range(len(data_scarlet)) if i not in SKIP_INDICES]
+
+    # with ProcessPoolExecutor(max_workers=16) as executor:
+    #     list(tqdm(executor.map(process_index, indices_to_process), total=len(indices_to_process)))
+    index = 6
+    process_index(index)
+   
+
     
-      #           final_saveimgs = final_saveimgs[final_saveimgs != ""]
-      #           all_scarlet_saveimgs += list(final_saveimgs)
-                
-      #           #check that the org mags make sense
-      #           print("Maximum Abs difference between org mags = ",np.max( np.abs(final_org_mags[:,0] - shreds_focus_scarlet["MAG_G"]) ))
-                
-      #           shreds_focus_scarlet["MAG_G_SCARLET"] = final_new_mags[:,0]
-      #           shreds_focus_scarlet["MAG_R_SCARLET"] = final_new_mags[:,1]
-      #           shreds_focus_scarlet["MAG_Z_SCARLET"] = final_new_mags[:,2]
-    
-      #           ## compute updated stellar mass using scarlet photometry??
-                
-      #            #then save this file!
-      #           if tgids_list is None:
-      #               if use_clean == False:
-      #                   file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_shreds_catalog_w_scarlet_mags_chunk_%d.fits"%(sample_str,chunk_i)
-      #               else:
-      #                   file_save = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_clean_catalog_w_scarlet_mags_chunk_%d.fits"%(sample_str, chunk_i) 
-    
-                    
-      #               save_table( shreds_focus_i, file_save)   
-      #               print_stage("Saved scarlet summary files at %s!"%file_save)
-        
 
-
-       
-        # if run_scarlet:
-        #     file_template_scarlet = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_%s_catalog_w_scarlet_mags"%(sample_str, clean_flag)
-
-                # if run_scarlet:
-                # os.rename(file_template_scarlet + "_chunk_0.fits", file_template_scarlet + "%s.fits"%end_name)
-            
-        
-
-
-            # if run_scarlet:
-            #     #we need to consolidate files!  
-            #     shreds_focus_combine_scarlet = []
-            #     for ni in trange(nchunks):
-            #         shreds_focus_part = Table.read(file_template_scarlet + "_chunk_%d.fits"%ni  )
-            #         shreds_focus_combine_scarlet.append(shreds_focus_part)
-            #         #and then we delete that file!
-            #         os.remove(file_template_scarlet + "_chunk_%d.fits"%ni)
-                    
-            #     shreds_focus_combine_scarlet = vstack(shreds_focus_combine_scarlet)
-            #     print_stage("Total number of objects in consolidated scarlet file = %d"%len(shreds_focus_combine_scarlet))
-                
-            #     save_table( shreds_focus_combine_scarlet, file_template_scarlet + "%s.fits"%end_name) 
-                
-            #     print_stage("Consolidated scarlet chunk saved at %s"%(file_template_scarlet + "%s.fits"%end_name) )

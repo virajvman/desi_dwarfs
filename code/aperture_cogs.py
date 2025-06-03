@@ -7,7 +7,6 @@ Basic steps are following what SGA catalog did:
 1) Identify the range of apertures within which we will do our photometry
 2) Mask relevant pixels (if star or residuals after subtracting model image are very large?)
 3) If we have identified sources within aperture that we want to subtract, we can create an image with all the masked pixels and subtracted sources for reference?
-
 '''
 
 from scipy.ndimage import gaussian_filter
@@ -139,7 +138,7 @@ def get_elliptical_aperture(segment_data, stellar_mask, id_num,sigma = 3):
 
     return aperture
 
-def build_residual_mask(data_images, model_images, sigma_threshold=5, smooth_sigma=2):
+def build_residual_mask(data_images, model_images, main_seg_mask, sigma_threshold=5, smooth_sigma=2):
     """
     Build a residual mask flagging pixels with >5-sigma residuals in any band.
     
@@ -149,6 +148,8 @@ def build_residual_mask(data_images, model_images, sigma_threshold=5, smooth_sig
         List of data images (e.g., [data_g, data_r, data_z]).
     model_images : list of 2D np.ndarray
         List of corresponding model images (e.g., [model_g, model_r, model_z]).
+    main_seg_mask : 2d np.ndarray
+        Mask corresponding to pixels in the main segment. They are not included in the background model and so might skew the residual mask!
     sigma_threshold : float
         Threshold in sigma units for flagging pixels.
     smooth_sigma : float
@@ -161,7 +162,7 @@ def build_residual_mask(data_images, model_images, sigma_threshold=5, smooth_sig
 
     Notes:
     ---------
-    This tractor model image will have to be for sources that are not in the main segment. That would require us to rerun the tractor pipeline
+    This tractor model image will have to be for sources that are not in the main segment. That would require us to rerun the tractor pipeline. We will have to thus mask pixels that are in the main segment!
 
     
     """
@@ -169,11 +170,16 @@ def build_residual_mask(data_images, model_images, sigma_threshold=5, smooth_sig
     
     # Initialize mask
     mask = np.zeros_like(data_images[0], dtype=bool)
+
+    bkg_sigmas = []
+    bkg_meds = []
     
     for data, model in zip(data_images, model_images):
         # Compute residual image
+        #setting the pixels in the main segment to zero so they dont mess up the residual mask generation!
+        data[main_seg_mask] = 0
         residual = data - model
-        
+
         # Smooth the residual
         smoothed_residual = gaussian_filter(residual, sigma=smooth_sigma)
         
@@ -185,9 +191,16 @@ def build_residual_mask(data_images, model_images, sigma_threshold=5, smooth_sig
         band_mask = np.abs(smoothed_residual) > (sigma_threshold * sigma_estimate)
         
         # Combine mask across bands (OR logic: mask if flagged in any band)
+        
+        bkg_sigmas.append(np.std(residual[~band_mask]))
+        bkg_meds.append(np.median(residual[~band_mask]))
+        
+        
         mask |= band_mask
+
+        #compute the std in each background for each filter
     
-    return mask
+    return mask, bkg_sigmas, bkg_meds
 
 
 
@@ -212,7 +225,7 @@ def fit_cog(r_data, m_data, p0, bounds=None, maxfev=1200, filler=np.nan):
     # If too few points, return filler
     if len(r_clean) < len(p0):
         print("Not enough valid data points. Returning filler values.")
-        return np.full(len(p0), filler)
+        return np.full(len(p0), filler), np.full(len(p0), filler)
 
     try:
         popt, pcov = curve_fit(
@@ -220,11 +233,15 @@ def fit_cog(r_data, m_data, p0, bounds=None, maxfev=1200, filler=np.nan):
             bounds=bounds or (-np.inf, np.inf),
             maxfev=maxfev
         )
-        return popt
+
+        #convert the covariance matrix into parameter uncertainties
+        perr = np.sqrt(np.diag(pcov))
+        
+        return popt, perr
         
     except RuntimeError:
         print("Fit failed. Returning filler values.")
-        return np.full(len(p0), filler)
+        return np.full(len(p0), filler), np.full(len(p0), filler)
 
 
 def get_new_segment(data_no_blend, fiber_xpix, fiber_ypix, tot_noise_rms,  npixels_min, threshold_rms_scale, box_size = 350):
@@ -276,6 +293,8 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_m
     #we loading the original position of the fiber
     fiber_xpix, fiber_ypix = np.load( save_path + "/fiber_pix_pos_org.npy" )
     tot_noise_rms = np.load(save_path + "/tot_noise_rms.npy")
+    #this is the estimated background rms in the image!
+    noise_rms_perband = np.load(save_path + "/noise_per_band_rms.npy")
 
     #when computing the residual mask, we will be setting the pixels in the main segment to zero
     #another approach is to set pixels within the aperture to zero, but that seems a bit more arbitrary
@@ -284,7 +303,9 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_m
     data_arr_copy[:, main_seg_pix_locs] = 0
 
     #this is a mask where True means it is a masked pixel
-    resid_5sig_mask = build_residual_mask(data_arr_copy, tractor_bkg_model, sigma_threshold=5, smooth_sigma=2)
+    #we need to mask the main segment when doing this! segm_deblend_v3 will not be nan in the main segment pixels!
+    main_seg_mask = (segm_deblend_v3 != np.nan)
+    resid_5sig_mask, _, _ = build_residual_mask(data_arr_copy, tractor_bkg_model, main_seg_mask, sigma_threshold=5, smooth_sigma=2)
 
     #we will apply this mask to our data when computing the curve of growth analysis!
     #we need to combine this mask with our existing aperture mask
@@ -299,11 +320,21 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_m
     # data_no_bkg = {"g": data_arr_no_bkg[0], "r": data_arr_no_bkg[1] , "z": data_arr_no_bkg[2] }
     data_no_bkg_no_blend = {"g": data_arr_no_bkg_no_blend[0], "r": data_arr_no_bkg_no_blend[1] , "z": data_arr_no_bkg_no_blend[2] }
 
+    #it is possible that the subtracted sources resulted in a very negative value and that will mess up with the aperture mags
+    #so we mask pixels that have pixel values that are 5 sigma below the background value!
+    # aperture_mask_2 = (data_arr_no_bkg_no_blend < -5 * noise_rms_perband[:, None, None]).any(axis=0)
+    aperture_mask_2 = (data_arr_no_bkg_no_blend[0] < -5 * noise_rms_perband[0]) | (data_arr_no_bkg_no_blend[1] < -5 * noise_rms_perband[1])  | (data_arr_no_bkg_no_blend[2] < -5 * noise_rms_perband[2]) 
+    
+    aperture_mask |= aperture_mask_2
+
     #note that we will re-estimate the aperture based on the subtracted blend model! This will re-center the aperture better as the original segment 
     #map will probably include other blended objects
     segment_map_v2_new = get_new_segment(data_arr_no_bkg_no_blend, fiber_xpix, fiber_ypix, tot_noise_rms, npixels_min, threshold_rms_scale)
-    
-    radii_scale = np.arange(1.75,4.25,0.25)
+
+    np.save(save_path + "/segment_map_final_cog.npy", segment_map_v2_new)
+    np.save(save_path + "/final_mask_cog.npy", star_mask | aperture_mask)
+
+    radii_scale = np.arange(1.25,4.25,0.25)
             
     cog_mags = {"g":[], "r": [], "z": []}
 
@@ -327,7 +358,9 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_m
 
     
     ##fit the parametric form to these data points
-    final_fits = {}
+    final_cog_params = {}
+    final_cog_params_err = {}
+    
     for bi in "grz":
         #for the initial guess, mtot, m0, alpha_1, r_0, alpha_2
         if np.isnan(cog_mags[bi][-1]):
@@ -343,27 +376,32 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_m
         
         bounds = ([guess_low, 0, 0, 0.1, 0], [guess_high, 10, 10, 10, 10])
 
-        popt = fit_cog(radii_scale, np.array(cog_mags[bi]), p0, bounds=bounds, maxfev=1200, filler=np.nan)
-        # popt, pcov = curve_fit(cog_function, radii_scale, cog_mags[bi], p0=p0, bounds=bounds)
-        
-        final_fits[bi] = popt
+        popt, perr = fit_cog(radii_scale, np.array(cog_mags[bi]), p0, bounds=bounds, maxfev=1200, filler=np.nan)
 
-    
+        #note that popt returns the all the parameter values!
+        #we will separately save the final mags too
+        
+        final_cog_params[bi] = popt
+        final_cog_params_err[bi] = perr
+        
+
     #this list contains the final magnitudes!
     #if the cog optimization did not work, we just look at the magnitude in the largest aperture radius
-    final_cog_fits = []
-    for bi in "grz":
-        if np.isnan(final_fits[bi][0]):
-            #the cog optimization did not work
-            final_cog_fits.append( cog_mags[bi][-1] )
-        else:
-            final_cog_fits.append( final_fits[bi][0] )
+    final_cog_mtot = []
+    final_cog_mtot_err = []
     
-
+    for bi in "grz":
+        if np.isnan(final_cog_params[bi][0]):
+            #the cog optimization did not work
+            final_cog_mtot.append( cog_mags[bi][-1] )
+            final_cog_mtot_err.append( np.nan )
+        else:
+            final_cog_mtot.append( final_cog_params[bi][0] )
+            final_cog_mtot_err.append( final_cog_params_err[bi][0] )
+            
     ##if the optimal fits were not found, 
     
     box_size = 350 
-
 
     ##plot the rgb image of actual data 
     ax_id = 4
@@ -417,10 +455,10 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_m
     combine_img = data_arr_no_bkg_no_blend[0] + data_arr_no_bkg_no_blend[1] + data_arr_no_bkg_no_blend[2]
     #setting the masked pixels to nans
     combine_img[aperture_mask] = np.nan
-
+    
     #instead of lognorm, let us do linear scaling
     # norm_obj = LogNorm()
-    norm_obj = Normalize(vmin=np.nanmin(combine_img), vmax=np.nanmax(combine_img)/10) 
+    norm_obj = Normalize(vmin=np.nanmin(combine_img), vmax=np.nanmax(combine_img)) 
     ax[ax_id].imshow(combine_img,origin="lower",norm=norm_obj,cmap = "viridis",zorder = 0)
 
     ##overplot the sources that we will be subtracting
@@ -443,18 +481,18 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_m
 
     if len(all_cogs) > 0:
         ax[ax_id].scatter(radii_scale, cog_mags["g"],color = "#1E88E5",zorder = 1)
-        if ~np.isnan(final_fits["g"][0]):
-            ax[ax_id].plot(rgrid, cog_function(rgrid, *final_fits["g"]), color = "#1E88E5",lw =1,zorder = 1  )
+        if ~np.isnan(final_cog_params["g"][0]):
+            ax[ax_id].plot(rgrid, cog_function(rgrid, *final_cog_params["g"]), color = "#1E88E5",lw =1,zorder = 1  )
 
         ax[ax_id].scatter(radii_scale, cog_mags["r"],color = "#FFC107",zorder = 1)
         
-        if ~np.isnan(final_fits["r"][0]):
-            ax[ax_id].plot(rgrid, cog_function(rgrid, *final_fits["r"]), color = "#FFC107",lw =1,zorder = 1  )
+        if ~np.isnan(final_cog_params["r"][0]):
+            ax[ax_id].plot(rgrid, cog_function(rgrid, *final_cog_params["r"]), color = "#FFC107",lw =1,zorder = 1  )
         
         ax[ax_id].scatter(radii_scale, cog_mags["z"],color = "#D81B60",zorder = 1)
         
-        if ~np.isnan(final_fits["z"][0]):
-            ax[ax_id].plot(rgrid, cog_function(rgrid, *final_fits["z"]), color = "#D81B60",lw =1 ,zorder = 1 )
+        if ~np.isnan(final_cog_params["z"][0]):
+            ax[ax_id].plot(rgrid, cog_function(rgrid, *final_cog_params["z"]), color = "#D81B60",lw =1 ,zorder = 1 )
 
         spacing = 0.3
         ypos = np.min(all_cogs) - 0.125 + 0.1
@@ -480,27 +518,27 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_m
     fsize = 12
     ax[ax_id].text(0.05,start,f"Tractor-mag g = {tractor_mags['g']:.2f}",size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
     ax[ax_id].text(0.05,start - spacing*1,f"Aper-mag (R4) g = {cog_mags['g'][-1]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-    ax[ax_id].text(0.05,start - spacing*2,f"COG-mag g = {final_fits['g'][0]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+    ax[ax_id].text(0.05,start - spacing*2,f"COG-mag g = {final_cog_params['g'][0]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
     
     ax[ax_id].text(0.05,start - spacing*3,f"Tractor-mag r = {tractor_mags['r']:.2f}",size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
     ax[ax_id].text(0.05,start - spacing*4,f"Aper-mag (R4) r = {cog_mags['r'][-1]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-    ax[ax_id].text(0.05,start - spacing*5,f"COG-mag r= {final_fits['r'][0]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+    ax[ax_id].text(0.05,start - spacing*5,f"COG-mag r= {final_cog_params['r'][0]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
 
     ax[ax_id].text(0.05,start - spacing*6,f"Tractor-mag z = {tractor_mags['z']:.2f}",size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
     ax[ax_id].text(0.05,start - spacing*7,f"Aper-mag (R4) z = {cog_mags['z'][-1]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-    ax[ax_id].text(0.05,start - spacing*8,f"COG-mag z = {final_fits['z'][0]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+    ax[ax_id].text(0.05,start - spacing*8,f"COG-mag z = {final_cog_params['z'][0]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
     ax[ax_id].text(0.05,start - spacing*9,f"pCNN = {pcnn_val:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
 
     ##saving this image :0
     save_img_path = save_path + "/cog_summary.png"
     plt.savefig( save_img_path ,bbox_inches="tight")
     # plt.savefig(f"/pscratch/sd/v/virajvm/temp_cog_plots/cog_{tgid}.png" ,bbox_inches="tight")
-    
     plt.close()
 
-    #this is a list the updated cog magnitudes
-    return final_cog_fits, save_img_path
+    aper_mags_r4 = [ cog_mags["g"][-1], cog_mags["r"][-1], cog_mags["z"][-1] ] 
 
+    #we are returning dictionaries here
+    return aper_mags_r4, final_cog_mtot, final_cog_mtot_err, final_cog_params, final_cog_params_err, save_img_path
 
 
 def run_cog_pipe(input_dict):
@@ -528,18 +566,42 @@ def run_cog_pipe(input_dict):
 
     #feeding it to the cog function!
     ## MAYBE THIS RUN COGS FUNCTION IS NOT NEDED!
-    final_cog_mags, save_img_path = run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, source_tgid, tractor_mags, save_path, subtract_source_pos, pcnn_val, npixels_min, threshold_rms_scale)
+    aper_mags_r4, final_cog_mags, final_cog_mags_err, final_cog_params, final_cog_params_err, save_img_path = run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, source_tgid, tractor_mags, save_path, subtract_source_pos, pcnn_val, npixels_min, threshold_rms_scale)
 
     #mw extinction correcting the magnitudes!
     cog_mag_g = final_cog_mags[0] + 2.5 * np.log10(mw_trans[0])
     cog_mag_r = final_cog_mags[1] + 2.5 * np.log10(mw_trans[1])
     cog_mag_z = final_cog_mags[2] + 2.5 * np.log10(mw_trans[2])
 
+    all_aper_mags_r4 = []
+    for i in range(3):
+        aper_mag_i = aper_mags_r4[i] + 2.5 * np.log10(mw_trans[i])
+        all_aper_mags_r4.append(aper_mag_i)
+
     #saving the magnitudes locally in folder
     cog_mags = [cog_mag_g, cog_mag_r, cog_mag_z]
     np.save(save_path + "/new_cog_mags.npy", cog_mags)
 
+    np.save(save_path + "/aperture_mags_R4.npy", all_aper_mags_r4)
+    
     #we return these final cog mags and append them to the catalog
-    return cog_mags, save_img_path
+    #we are expanding out the dictionaries as we do not want to returns dicts
+    return {
+    "aper_mags_r4": all_aper_mags_r4,
+    "cog_mags": cog_mags,
+    "cog_mags_err": final_cog_mags_err,
+    "params_g": final_cog_params["g"],
+    "params_r": final_cog_params["r"],
+    "params_z": final_cog_params["z"],
+    "params_g_err": final_cog_params_err["g"],
+    "params_r_err": final_cog_params_err["r"],
+    "params_z_err": final_cog_params_err["z"],
+    "img_path": save_img_path,
+}
+    
+    # return cog_mags, final_cog_mags_err, final_cog_params["g"], final_cog_params["r"],final_cog_params["z"], final_cog_params_err["g"], final_cog_params_err["r"],final_cog_params_err["z"], save_img_path
+
+
+    
     
 

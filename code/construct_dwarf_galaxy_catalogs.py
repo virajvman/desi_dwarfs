@@ -226,6 +226,9 @@ def get_final_catalogs(vac_data_lowz, zpix_lowz, plot=False):
 
     vac_data_lowz_table["MASKBITS"] = zpix_lowz["MASKBITS"]
 
+    vac_data_lowz_table["NOBS_G"] = zpix_lowz["NOBS_G"]
+    vac_data_lowz_table["NOBS_R"] = zpix_lowz["NOBS_R"] 
+    vac_data_lowz_table["NOBS_Z"] = zpix_lowz["NOBS_Z"] 
     
     return vac_data_lowz_table, zpix_lowz
     
@@ -357,7 +360,7 @@ if __name__ == '__main__':
     apply_zsucc_cut = True
     #should I apply some redshift cut to make sure I am dealing with potential dwarf objects only?
     apply_zred_cut = True
-    cross_match_w_cigale = True
+    cross_match_w_cigale = False
     get_color_mstar = True
     #we will remove objects that are within twice the half-light radius of SGA galaxies
 
@@ -534,8 +537,16 @@ if __name__ == '__main__':
         ##add information on bright star stuff!!
         vac_data_cat_f = bright_star_filter(vac_data_cat_f)
 
+        #we filter to make sure at least one observation in each filter for every source!!
+        nobs_mask = (vac_data_cat_f["NOBS_G"] > 0) & (vac_data_cat_f["NOBS_R"] > 0) & (vac_data_cat_f["NOBS_Z"] > 0)
+        print(f"Number before NOBS filter = {len(vac_data_cat_f)}")
+        vac_data_cat_f = vac_data_cat_f[nobs_mask]
+        print(f"Number after NOBS filter = {len(vac_data_cat_f)}")
+
         ## save this catalog 
         save_table(vac_data_cat_f,  save_folder + "/" + save_filename,comment=comment)
+
+
 
 
 #### OLD CODE

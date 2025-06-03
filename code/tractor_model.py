@@ -96,6 +96,7 @@ def srcs2image(cat, wcs, band='r', allbands='grz', pixelized_psf=None, psf_sigma
         shape = wcs.wcs.shape
     else:
         shape = wcs.shape
+        
     model = np.zeros(shape)
     invvar = np.ones(shape)
 
@@ -116,8 +117,18 @@ def srcs2image(cat, wcs, band='r', allbands='grz', pixelized_psf=None, psf_sigma
     else:
         srcs = cat
 
-    tr = tractor.Tractor([tim], srcs)
-    mod = tr.getModelImage(0)
+    try:
+        tr = tractor.Tractor([tim], srcs)
+        mod = tr.getModelImage(0)
+    except:
+        ##this error can happen if one of the psfsizes is zero if there is missing data!!
+        print("SOME ERROR HAS HAPPENED!!")
+        print(cat.get("psfsize_g"), cat.get("psfsize_r"), cat.get("psfsize_z") )
+        print("--"*10)
+        print(psf)
+        print("--"*10)
+        print(srcs)
+        raise
 
     return mod
 
@@ -156,18 +167,22 @@ def make_custom_wcs(ra, dec, width, pixscale):
     return ConstantFitsWcs(targetwcs)
 
 
-def compute_psf_sigma(tractor_subset, band,mean=False):
-    if mean:
-        fwhm = np.mean(tractor_subset.get(f"psfsize_{band}"))
+def compute_psf_sigma(tractor_subset, band, average_psfsize, mean=True):
+    if len(tractor_subset.get(f"psfsize_{band}")) == 1 and tractor_subset.get(f"psfsize_{band}") == 0:
+        #if we are only reading a single source and it has no psfsize, we take the average value that inputted to function
+        fwhm = average_psfsize
     else:
-        fwhm = tractor_subset.get(f"psfsize_{band}")[0]
+        if mean:
+            fwhm = np.mean(tractor_subset.get(f"psfsize_{band}"))
+        else:
+            fwhm = tractor_subset.get(f"psfsize_{band}")[0]
         
     return (fwhm / 2.3548) / 0.262
 
 
-def build_model_image(tractor_subset, wcs,mean_psf=False):
+def build_model_image(tractor_subset, wcs, average_psfsize, mean_psf=False):
     return np.array([
-        srcs2image(tractor_subset, wcs, band=band, allbands='grz', pixelized_psf=None, psf_sigma=compute_psf_sigma(tractor_subset, band,mean=mean_psf))
+        srcs2image(tractor_subset, wcs, band=band, allbands='grz', pixelized_psf=None, psf_sigma=compute_psf_sigma(tractor_subset, band, average_psfsize[band], mean=mean_psf))
         for band in "grz"
     ])
     
@@ -220,8 +235,11 @@ def get_img_source(i, ra, dec, tgid, file_path, img_path, pixscale=0.262, width=
         print(f"Ambiguity for index {i} and coords ({ra}, {dec})")
         raise ValueError("Tractor source match not unique.")
 
+    #if this source has a missing psfsize then we assume an average psfsize from the catalog
+    ave_psfsize_dict = { "g": np.mean(tractor.get("psfsize_g")), "r": np.mean(tractor.get("psfsize_r")),  "z": np.mean(tractor.get("psfsize_z"))    }
+
     wcs = make_custom_wcs(ra, dec, width, pixscale)
-    mod = build_model_image(tractor_source, wcs)
+    mod = build_model_image(tractor_source, wcs, ave_psfsize_dict)
     np.save(f"{file_path}/tractor_source_model.npy", mod)
 
     img_data = fits.open(img_path)[0].data
@@ -249,8 +267,11 @@ def get_bkg_sources(i, ra, dec, tgid, file_path, img_path, pixscale=0.262, width
     bkg_sources = tractor[~on_main]
 
     wcs = make_custom_wcs(ra, dec, width, pixscale)
+
+    #if this source has a missing psfsize then we assume an average psfsize from the catalog
+    ave_psfsize_dict = { "g": np.mean(tractor.get("psfsize_g")), "r": np.mean(tractor.get("psfsize_r")),  "z": np.mean(tractor.get("psfsize_z"))    }
     
-    mod = build_model_image(bkg_sources, wcs, mean_psf=True)
+    mod = build_model_image(bkg_sources, wcs, ave_psfsize_dict, mean_psf=True)
     
     np.save(f"{file_path}/tractor_background_model.npy", mod)
 
@@ -271,37 +292,45 @@ def get_blended_remove_sources(i, ra, dec, tgid, file_path, img_path, pixscale=0
 
     #load the source catalog that we are removing
     blend_remove_cat = Table.read(file_path + "/blended_source_remove_cat.fits")
-    br_ras = blend_remove_cat["ra"]
-    br_decs = blend_remove_cat["dec"]
 
-    #we need to get all the pixel locations of these sources given the wcs and see which ones lie on the main segment
-    #sources not on the main segment will be on a zero!
-    ra_all = tractor.get("ra")
-    dec_all = tractor.get("dec")
-
-    #find all the sources that match the blend_remove_cat objects!
-    c = SkyCoord(ra= br_ras* u.degree, dec= br_decs*u.degree )
-    catalog = SkyCoord(ra=ra_all*u.degree, dec=dec_all*u.degree )
-    idx, d2d, d3d = c.match_to_catalog_sky(catalog)
-
-    #get the indices of objects in the ra_all catalog that match and have zero separation!
-    blend_remove_inds = idx[d2d.arcsec == 0]
-
-    tractor_blend_re = tractor[blend_remove_inds]
-
-    if len(tractor_blend_re) != 0:
-            
-        wcs = make_custom_wcs(ra, dec, width, pixscale)
-        
-        mod = build_model_image(tractor_blend_re, wcs, mean_psf=True)
-        
-        np.save(f"{file_path}/tractor_blend_remove_model.npy", mod)
-    
-        img_data = fits.open(img_path)[0].data
-        save_rgb_tripanel(mod, img_data, file_path, tgid, testing,use_center_only=False)
-    else:
+    if len(blend_remove_cat) == 0:
         #there were no sources to subtract and so we can save an empty array!
         np.save(f"{file_path}/tractor_blend_remove_model.npy", np.zeros((3, 350, 350))  )
+    else: 
+        br_ras = blend_remove_cat["ra"]
+        br_decs = blend_remove_cat["dec"]
+    
+        #we need to get all the pixel locations of these sources given the wcs and see which ones lie on the main segment
+        #sources not on the main segment will be on a zero!
+        ra_all = tractor.get("ra")
+        dec_all = tractor.get("dec")
+    
+        #find all the sources that match the blend_remove_cat objects!
+        c = SkyCoord(ra= br_ras* u.degree, dec= br_decs*u.degree )
+        catalog = SkyCoord(ra=ra_all*u.degree, dec=dec_all*u.degree )
+        idx, d2d, d3d = c.match_to_catalog_sky(catalog)
+    
+        #get the indices of objects in the ra_all catalog that match and have zero separation!
+        blend_remove_inds = idx[d2d.arcsec == 0]
+    
+        tractor_blend_re = tractor[blend_remove_inds]
+
+        #if this source has a missing psfsize then we assume an average psfsize from the catalog
+        ave_psfsize_dict = { "g": np.mean(tractor.get("psfsize_g")), "r": np.mean(tractor.get("psfsize_r")),  "z": np.mean(tractor.get("psfsize_z"))    }
+        
+        if len(tractor_blend_re) != 0 or ():
+                
+            wcs = make_custom_wcs(ra, dec, width, pixscale)
+            
+            mod = build_model_image(tractor_blend_re, wcs, ave_psfsize_dict, mean_psf=True)
+            
+            np.save(f"{file_path}/tractor_blend_remove_model.npy", mod)
+        
+            img_data = fits.open(img_path)[0].data
+            save_rgb_tripanel(mod, img_data, file_path, tgid, testing,use_center_only=False)
+        else:
+            #there were no sources to subtract and so we can save an empty array!
+            np.save(f"{file_path}/tractor_blend_remove_model.npy", np.zeros((3, 350, 350))  )
         
     
     return
@@ -360,11 +389,21 @@ if __name__ == '__main__':
     # ###########################################
     
     # pool = mp.Pool(128)
-
-    # worker_func = make_worker(get_bkg_sources)
     
     # completed = 0
-    # for _ in pool.imap_unordered(worker_background, [(i, dwarf_cat) for i in range(total)], chunksize = 500 ):
+    # for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_bkg_sources ) for i in range(total)], chunksize = 500 ):
+    #     completed += 1
+    #     simple_progress_bar(completed, total-1)
+
+    # pool.close()
+    # pool.join()
+
+    ############################################
+    
+    # pool = mp.Pool(128)
+    
+    # completed = 0
+    # for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_blended_remove_sources) for i in range(total)], chunksize = 500 ):
     #     completed += 1
     #     simple_progress_bar(completed, total-1)
 
@@ -374,35 +413,55 @@ if __name__ == '__main__':
     ###########################################
 
     #### load for shredded cat
-    dwarf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v3.fits")
-    dwarf_cat = dwarf_cat[(dwarf_cat["PCNN_FRAGMENT"] >= 0.4) & (dwarf_cat["SAMPLE"] != "ELG")]
+    # dwarf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v3.fits")
+    # dwarf_cat = dwarf_cat[(dwarf_cat["PCNN_FRAGMENT"] >= 0.4) & (dwarf_cat["SAMPLE"] == "ELG")]
 
-    print(len(dwarf_cat))
+    # print(len(dwarf_cat))
 
-    total = len(dwarf_cat)
+    # total = len(dwarf_cat)
 
-    pool = mp.Pool(128)
+    # pool = mp.Pool(128)
     
-    completed = 0
-    for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_bkg_sources ) for i in range(total)], chunksize = 500 ):
-        completed += 1
-        simple_progress_bar(completed, total-1)
+    # completed = 0
+    # for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_bkg_sources ) for i in range(total)], chunksize = 500 ):
+    #     completed += 1
+    #     simple_progress_bar(completed, total-1)
 
-    pool.close()
-    pool.join()
+    # pool.close()
+    # pool.join()
 
 
     ###########################################
 
-    pool = mp.Pool(128)
+    # pool = mp.Pool(128)
 
-    completed = 0
-    for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_blended_remove_sources) for i in range(total)], chunksize = 500 ):
-        completed += 1
-        simple_progress_bar(completed, total-1)
+    # completed = 0
+    # for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_blended_remove_sources) for i in range(total)], chunksize = 500 ):
+    #     completed += 1
+    #     simple_progress_bar(completed, total-1)
 
-    pool.close()
-    pool.join()
+    # pool.close()
+    # pool.join()
+
+    ###########################################
+    ##getting the model for the temporary source!
+
+    dwarf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/TEMPORARY_desi_y1_dwarf_shreds_catalog_v3.fits")
+    
+    ra = dwarf_cat["RA"][-1]
+    dec = dwarf_cat["DEC"][-1]
+    tgid = dwarf_cat["TARGETID"][-1]
+    file_path = dwarf_cat["FILE_PATH"][-1]
+    img_path = dwarf_cat["IMAGE_PATH"][-1]
+
+    print(ra,dec,tgid)
+    print(file_path)
+    i = 0
+    
+    # get_img_source(i, ra, dec, tgid, file_path, img_path, pixscale=0.262, width=350, testing=False)
+    get_blended_remove_sources(i, ra, dec, tgid, file_path, img_path, pixscale=0.262, width=350, testing=False)
+    get_bkg_sources(i, ra, dec, tgid, file_path, img_path, pixscale=0.262, width=350, testing=False)
+    
 
 
     

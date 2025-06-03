@@ -24,6 +24,7 @@ from astropy.io import fits
 from astropy.wcs import WCS
 from photutils.aperture import aperture_photometry, SkyEllipticalAperture, CircularAperture, EllipticalAperture
 import matplotlib.patches as patches
+from matplotlib.patches import Circle
 from photutils.segmentation import detect_sources, deblend_sources
 import matplotlib.cm as cm
 url_prefix = 'https://www.legacysurvey.org/viewer/'
@@ -32,7 +33,6 @@ import requests
 from io import BytesIO
 from astropy.io import fits
 import matplotlib.colors as mcolors
-from matplotlib.patches import Circle
 from matplotlib.collections import PatchCollection
 from easyquery import Query, QueryMaker
 reduce_compare = QueryMaker.reduce_compare
@@ -86,19 +86,12 @@ def run_aperture_pipe(input_dict):
     source_dec : float, DEC location of source
     source_redshift : float, DESI redshift of source
 
-    Need to fix running this function when I do not have tractor model and need the main segment 
-
-
-    STAR LOGIC:
-    1) If a star is not in the same island as DESI source, we do not do anything.
-    2) If the star is on the main island, we mask the area within 0.5 of the star radius! If the main source is within 0.5, then it is beyond fixing!
 
     KNOWN ISSUES:
-    1) I am not dealing with situations where an external source is split half way between aper rad. This happens if it accidentally connects
-    with this external source making the whole main segment larger than aper rad and then if the external source has flux subtracted then whoops
-    solution is to insist that aper_rad is larger than the main segment at all times
+    NEED TO DEBUG THE CASE WHEN ISLAND_NUM = 99999, E.G. ELG_tgid_39627809651429142
+    /pscratch/sd/v/virajvm/redo_photometry_plots/all_good/south/sweep-040p000-050p005/0456p010/ELG_tgid_39627809651429142/
 
-    3) Make sure the case where a source is in the star segment and thus it will be masked is star is in its own deblended segment. However, do not want to be over-substrating in that case
+    
     '''
 
     ## DONE: I THINK SELECTION CUT IS THAT MORE THAN 2 ABOVE 0.2
@@ -118,9 +111,7 @@ def run_aperture_pipe(input_dict):
     pcnn_val = input_dict["pcnn_val"]
     npixels_min = input_dict["npixels_min"]
     threshold_rms_scale = input_dict["threshold_rms_scale"]
-    
-
-    
+        
     verbose=False
 
     if verbose:
@@ -214,7 +205,17 @@ def run_aperture_pipe(input_dict):
             new_mags = np.load(save_path + "/aper_r35_mags.npy")
             org_mags = np.load(save_path + "/org_mags.npy")
 
-            return closest_star_dist, closest_star_mag, new_mags, org_mags, save_path, save_summary_png, img_path
+            return {
+                    "closest_star_dist": closest_star_dist,
+                    "closest_star_mag": closest_star_mag,
+                    "fidu_aper_mags": new_mags,
+                    "org_mags": org_mags,
+                    "save_path": save_path,
+                    "save_summary_png": save_summary_png,
+                    "img_path": img_path,
+                }
+            # return closest_star_dist, closest_star_mag, new_mags, org_mags, save_path, save_summary_png, img_path
+            
         except:
             do_i_run = True
     if overwrite == True:
@@ -283,6 +284,7 @@ def run_aperture_pipe(input_dict):
         threshold = threshold_rms_scale * tot_rms
 
         kernel = make_2dgaussian_kernel(3.0, size=5)  # FWHM = 3.0
+        
         tot_data = np.sum(data_arr, axis=0)
 
         if np.shape(tot_data) != (350,350):
@@ -370,11 +372,15 @@ def run_aperture_pipe(input_dict):
         star_mask = star_mask.astype(bool)
         ## the star mask is ready!!!
 
+        #note that in the below case, if the segment_map_v2 has been updated to be 99999, we will need to use the 
+        #updated segment_map_v2 and not segment_map.data
+        #when the island_num == 0 condition is not triggered, then this is the same and does not matter
+        segment_map_v2_copy = np.copy(segment_map_v2)
         
         #pixels that are part of main segment island are called 2
-        segment_map_v2[segment_map.data == island_num] = 2
+        segment_map_v2[segment_map_v2_copy == island_num] = 2
         #all other segments that are not background are called 1
-        segment_map_v2[(segment_map.data != island_num) & (segment_map.data > 0)] = 1
+        segment_map_v2[(segment_map_v2_copy != island_num) & (segment_map_v2_copy > 0)] = 1
         #rest all remains 0
 
         #constructing the fiducial aperture for doing photometry
@@ -405,10 +411,9 @@ def run_aperture_pipe(input_dict):
 
         ## let us save the main segment map for tractor model use later!
         np.save(save_path + "/main_segment_map.npy",segm_deblend_v3 )
-  
-        #this is the new id of the deblend segment that contains our source
-        new_deblend_island_num = int(new_deblend_ids[deblend_ids == deblend_island_num])
 
+        new_deblend_island_num = int(new_deblend_ids[deblend_ids == deblend_island_num])
+ 
         source_cat_f["new_deblend_id"] = -99*np.ones_like(sources_f_xpix)
 
         #what are the deblend segment ids of our DR9 sources in our region?
@@ -614,14 +619,15 @@ def run_aperture_pipe(input_dict):
 
         #we will be saving the indices of the sources that are being removed and saving them in a separate catalog!
         source_cat_nostars_inseg_inds = []
+
+        source_cat_nostars_inseg = source_cat_inseg_signi[~is_star_inseg_signi]
             
         if len(source_cat_inseg_signi) == 0:
             #nothing to do here!! That is there are no significant sources that we have to deal with in the color-color space
             pass
         else:
             ##We deal with the other non-stellar sources by looking at their DR9 photo-zs!!    
-            source_cat_nostars_inseg = source_cat_inseg_signi[~is_star_inseg_signi]
-
+            
             #remove the very object that we are targeting from this!
             source_cat_nostars_inseg = source_cat_nostars_inseg [ source_cat_nostars_inseg["separations"] > 0]
 
@@ -779,6 +785,8 @@ def run_aperture_pipe(input_dict):
         np.save(save_path + "/fiber_pix_pos_org.npy", np.array([fiber_xpix_org, fiber_ypix_org]) )
         
         np.save(save_path + "/tot_noise_rms.npy", np.array([tot_rms]) )
+
+        np.save(save_path + "/noise_per_band_rms.npy", np.array([ noise_dict["g"], noise_dict["r"],  noise_dict["z"] ]) )
 
         with open(save_path + '/subtract_source_pos.pkl', 'wb') as f:
             pickle.dump(subtract_source_pos, f)
@@ -1002,7 +1010,7 @@ def run_aperture_pipe(input_dict):
         
         ### SUMMARY PLOT WITH INITIAL MAGNITUDE
         ax_id = 3
-        ax[ax_id].set_title("summary",fontsize = 13)
+        ax[ax_id].set_title(f"summary, {source_tgid}",fontsize = 11)
 
         ax[ax_id].set_xlim([0,1])
         ax[ax_id].set_ylim([0,1])
@@ -1042,8 +1050,19 @@ def run_aperture_pipe(input_dict):
         np.save(save_path + "/aper_r35_mags.npy", fidu_aper_mags)        
         np.save(save_path + "/org_mags.npy", org_mags)
 
+
+        return {
+                "closest_star_dist": closest_star_dist,
+                "closest_star_mag": closest_star_mag,
+                "fidu_aper_mags": fidu_aper_mags,
+                "org_mags": org_mags,
+                "save_path": save_path,
+                "save_summary_png": save_summary_png,
+                "img_path": img_path,
+                "closest_star_norm_dist": closest_star_norm_dist
+            }
         
-        return closest_star_dist, closest_star_mag, fidu_aper_mags, org_mags, save_path, save_summary_png, img_path
+        # return closest_star_dist, closest_star_mag, fidu_aper_mags, org_mags, save_path, save_summary_png, img_path
 
 
 

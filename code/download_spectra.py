@@ -1,3 +1,7 @@
+'''
+python3 desi_dwarfs/code/download_spectra.py -random -nchunks 50 -save_name desi_y1_dwarf_combine > download_spectra.log 2>&1
+
+'''
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -18,9 +22,9 @@ def argument_parser():
     '''
     result = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     # this is the catalog file we are using to load the spectra!
-    result.add_argument('-catalog', dest='catalog', type=str, default = "") 
+    # result.add_argument('-catalog', dest='catalog', type=str, default = "") 
     result.add_argument('-min', dest='min', type=int,default = 0)
-    result.add_argument('-max', dest='max', type=int,default = 100000) 
+    result.add_argument('-max', dest='max', type=int,default = 500000) 
     result.add_argument('-ncores', dest='ncores', type=int,default = 64) 
     result.add_argument('-tgids',dest="tgids_list", type=parse_tgids) 
     result.add_argument('-run_parr', dest='run_parr',  action='store_true') 
@@ -38,7 +42,7 @@ if __name__ == '__main__':
     args = argument_parser().parse_args()
 
     #sample_str could also be multiple samples together!
-    cat_path = args.catalog
+    # cat_path = args.catalog
     min_ind = args.min
     max_ind = args.max
     ncores = args.ncores
@@ -54,10 +58,14 @@ if __name__ == '__main__':
 
     print_stage("Loading the DESI catalogs")
 
+    cat_path = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_combine_catalog.fits"
+
     data_cat = Table.read(cat_path)
 
-    ##add what ever filter you want to apply
-    data_cat = data_cat[ data_cat["LOGM_SAGA"] < 9 ]
+    print(f"Number of galaxies for which spectra is being downloaded = {len(data_cat)}")
+
+    # ##add what ever filter you want to apply
+    # data_cat = data_cat[ data_cat["LOGM_SAGA"] < 9.25 ]
 
     ##if there exists a column named TARGETID_1 in the file we rename it!
     cat_cols = data_cat.colnames
@@ -78,19 +86,17 @@ if __name__ == '__main__':
         data_cat = data_cat[arr_inds]
     
     #apply the max_ind cut if relevant
-    max_ind = np.minimum( max_ind, len(data_cat) )
-    data_cat = data_cat[min_ind:max_ind]
+    # max_ind = np.minimum( max_ind, len(data_cat) )
+    # data_cat = data_cat[min_ind:max_ind]
 
     print("Total number of spectra to download = %d"%len(data_cat))
 
     #only load the necessary columns
     temp = data_cat["TARGETID","SURVEY","PROGRAM","HEALPIX","Z"]
     
-
     ##run in chunks so less memory intensive!
     print_stage("Starting to read the spectra in parallel!")
 
-    
     all_ks = np.arange(len(temp))
     print(len(temp))
     
@@ -127,10 +133,10 @@ if __name__ == '__main__':
     
         with h5py.File(save_path, "w") as f:
             f.create_dataset("TARGETID", data=all_tgids, dtype='i8')
-            f.create_dataset("Z", data=all_zreds, dtype='f8')
-            f.create_dataset("WAVE", data=all_waves["brz"], dtype='f8')  # shared
-            f.create_dataset("FLUX", data=all_fluxs["brz"], dtype='f8')
-            f.create_dataset("FLUX_IVAR", data=all_ivars["brz"], dtype='f8')
+            f.create_dataset("Z", data=all_zreds, dtype='f4')
+            f.create_dataset("WAVE", data=all_waves["brz"], dtype='f4')  # shared
+            f.create_dataset("FLUX", data=all_fluxs["brz"], dtype='f4')
+            f.create_dataset("FLUX_IVAR", data=all_ivars["brz"], dtype='f4')
 
 
     #once we save all the chunks do we try to consolidate all the chunks?
@@ -176,17 +182,14 @@ if __name__ == '__main__':
         # Save to a new HDF5 file
         with h5py.File(file_template + ".h5", "w") as f:
             f.create_dataset("TARGETID", data=all_targetids, dtype='i8')
-            f.create_dataset("Z", data=all_zreds, dtype='f8')
-            f.create_dataset("WAVE", data=shared_wave, dtype='f8')
-            f.create_dataset("FLUX", data=all_fluxs, dtype='f8')
-            f.create_dataset("FLUX_IVAR", data=all_ivars, dtype='f8')
+            f.create_dataset("Z", data=all_zreds, dtype='f4')
+            f.create_dataset("WAVE", data=shared_wave, dtype='f4')
+            f.create_dataset("FLUX", data=all_fluxs, dtype='f4')
+            f.create_dataset("FLUX_IVAR", data=all_ivars, dtype='f4')
 
-        print_stage("Consolidated aperture chunk saved at %s"%(file_template + ".h5") )
+        print_stage("Consolidated spectra chunk saved at %s"%(file_template + ".h5") )
         
       
-
-
-
     #to read the data, one can do
     # with h5py.File("spectra.h5", "r") as f:
     #     wave = f["wave"][:]
