@@ -872,33 +872,101 @@ def make_sky_density_plot():
     In this function, we make a plot showing the on sky density of DESI targets with another plot zooming in on a densely observed region and showing density of each sub-sample!
     '''
 
-    catalog = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v2.fits")
+    # catalog = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v2.fits")
+    catalog = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_combine_catalog.fits")
 
-    print(len(catalog))
-    catalog = catalog[catalog["LOGM_SAGA"] < 9]
+    ##let us compute the target sample specific target densities
+
+    area = 100*10
+
+    area_mask = (catalog["RA"] < 230) & (catalog["RA"] > 130) & (catalog["DEC"] < 5) & (catalog["DEC"] > -5)
+    
+    bgsb_tgts = len( catalog[(catalog["SAMPLE"] == "BGS_BRIGHT") & area_mask ] )
+    bgsf_tgts = len( catalog[(catalog["SAMPLE"] == "BGS_FAINT") & area_mask] )
+    lowz_tgts = len( catalog[(catalog["SAMPLE"] == "LOWZ") & area_mask] )
+    elg_tgts = len( catalog[(catalog["SAMPLE"] == "ELG") & area_mask] )
+
+    print(f"BGS Bright density = {bgsb_tgts/area:.2f}")
+    print(f"BGS Faint density = {bgsf_tgts/area:.2f}")
+    print(f"LOWZ density = {lowz_tgts/area:.2f}")
+    print(f"ELG density = {elg_tgts/area:.2f}")
+    
     print(len(catalog))
     
-    density_map_64 = get_density_map(256, catalog["RA"].data, catalog["DEC"].data)
+    density_map_64 = get_density_map(64, catalog["RA"].data, catalog["DEC"].data)
     
-    cmap = matplotlib.colormaps['YlGn'].copy()
+    cmap = matplotlib.colormaps['Greys'].copy()
     cmap.set_bad(color='white')
 
-    projview(
-        density_map_64, min=0,max = 40,rot = (120, 0, 0), graticule=True, graticule_labels=True, projection_type="mollweide",
+    fig = plt.figure(figsize=(8, 4))
+    
+    ax = projview(
+        density_map_64, min=0,max = 60,rot = (120, 0, 0), graticule=True, graticule_labels=True, projection_type="mollweide",
         nest=True,cmap = cmap,
         rot_graticule=False,width = 7,
         custom_xtick_labels=[r"$240^{\circ}$",r"$180^{\circ}$",r"$120^{\circ}$", r"$60^{\circ}$",r"$0^{\circ}$"],
-        title = r"DESI DR1 Dwarf Galaxy Density",
-        unit=r"Galaxy Density (deg$^{-2}$)",cbar_ticks=[10,20,30,40])
-    plt.savefig("/global/homes/v/virajvm/DESI2_LOWZ/quenched_fracs_nbs/paper_plots/dwarf_galaxy_density.png",bbox_inches="tight",dpi = 300)
+        title = r"DESI Extragalactic Dwarf Galaxy Density",
+        unit=r"Galaxy Density (deg$^{-2}$)",cbar_ticks=[0,25,50])
+
+
+    ##adding the rectangle 
+
+    # Define rectangle corners in RA/Dec
+    ra1, ra2 = 130 + 120, 230 + 120  # degrees
+    dec1, dec2 = -5, 5  # degrees
+    
+    # Convert RA from [0,360] -> [-180,180] and then to radians
+    def ra_to_mollweide_radians(ra_deg):
+        ra_wrapped = ((ra_deg + 180) % 360) - 180  # wrap into [-180, 180]
+        return np.deg2rad(ra_wrapped)
+    
+    # Convert Dec to radians directly
+    def dec_to_radians(dec_deg):
+        return np.deg2rad(dec_deg)
+    
+    # Get rectangle edges
+    ra_edges = [ra1, ra2, ra2, ra1, ra1]
+    dec_edges = [dec1, dec1, dec2, dec2, dec1]
+    
+    x = ra_to_mollweide_radians(np.array(ra_edges))
+    y = dec_to_radians(np.array(dec_edges))
+    
+    # Plot on the current axes (projview uses gca)
+    ax = plt.gca()
+    ax.plot(x, y, color='r', lw=1.5,ls = "--")
+
+    yref = -20
+    shift = 12
+    
+    x = ra_to_mollweide_radians(np.array([130+120]))
+    y = dec_to_radians(np.array([yref]))
+    ax.text(x,y, fr"BGS Bright: {bgsb_tgts/area:.0f} deg$^{{-2}}$",fontsize = 10,color = "firebrick")
+
+    x = ra_to_mollweide_radians(np.array([130+120]))
+    y = dec_to_radians(np.array([yref - shift]))
+    ax.text(x,y, fr"BGS Faint: {bgsf_tgts/area:.0f} deg$^{{-2}}$",fontsize = 10,color = "firebrick")
+
+    x = ra_to_mollweide_radians(np.array([130+120]))
+    y = dec_to_radians(np.array([yref - shift*2]))
+    ax.text(x,y, fr"LOWZ: {lowz_tgts/area:.0f} deg$^{{-2}}$",fontsize = 10,color = "firebrick")
+
+    x = ra_to_mollweide_radians(np.array([130+120]))
+    y = dec_to_radians(np.array([yref - shift*3]))
+    ax.text(x,y, fr"ELG: {elg_tgts/area:.0f} deg$^{{-2}}$",fontsize = 10,color = "firebrick")
+
+    ####################
+    
+    plt.savefig("/global/homes/v/virajvm/DESI2_LOWZ/quenched_fracs_nbs/paper_plots/dwarf_galaxy_density.pdf",bbox_inches="tight")
     plt.close()
+
+    
 
 
     ## now let us focus on specific sub-samples
-    plot_carview(catalog, "BGS_BRIGHT",cmap=cmap)
-    plot_carview(catalog, "BGS_FAINT",cmap=cmap)
-    plot_carview(catalog, "LOWZ",cmap=cmap)
-    plot_carview(catalog, "ELG",cmap=cmap)
+    # plot_carview(catalog, "BGS_BRIGHT",cmap=cmap)
+    # plot_carview(catalog, "BGS_FAINT",cmap=cmap)
+    # plot_carview(catalog, "LOWZ",cmap=cmap)
+    # plot_carview(catalog, "ELG",cmap=cmap)
     
     return
 
@@ -1557,7 +1625,7 @@ if __name__ == '__main__':
 
     # scarlet_aper_comp()
 
-    make_summary_stats()
+    # make_summary_stats()
 
     
     # get_delta_mag_fracflux_plot(resample_bins=False)
@@ -1570,8 +1638,8 @@ if __name__ == '__main__':
     
     # make_stellar_mass_comparison_plot()
 
-    # make_sky_density_plot()
-    
+    make_sky_density_plot()
+    # 
 
     
 

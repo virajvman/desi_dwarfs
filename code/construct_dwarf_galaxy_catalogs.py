@@ -231,7 +231,32 @@ def get_final_catalogs(vac_data_lowz, zpix_lowz, plot=False):
     vac_data_lowz_table["NOBS_Z"] = zpix_lowz["NOBS_Z"] 
     
     return vac_data_lowz_table, zpix_lowz
+
+
+def get_zpix_catalog(specprod = 'iron'):
+    '''
+    Function that returns the zpix catalog with some useful info
+    '''
+    # Open the fits file
     
+    all_cols = ["TARGETID", "TARGET_RA","TARGET_DEC", "ZERR", "OBSCONDITIONS", "COADD_NUMEXP", "MIN_MJD", "MAX_MJD", "MEAN_MJD", "ZCAT_PRIMARY", "DESINAME"]
+    
+    temp = {}
+
+    specprod_dir = f'/global/cfs/cdirs/desi/spectro/redux/{specprod}/'
+    
+    with fits.open(f'{specprod_dir}zcatalog/v1/zall-pix-{specprod}.fits') as hdul:
+        # Select the specific HDU, e.g., HDU index 1 or by name
+        hdu = hdul[1]  # or hdul['HDU_NAME']
+    
+        # Access the data (as a FITS_rec object)
+        data = hdu.data
+    
+        for coli in all_cols:
+            temp[coli] = data[coli]
+
+    return Table(temp)
+        
 
 def bright_star_filter(cat):
     '''
@@ -368,7 +393,7 @@ if __name__ == '__main__':
     
     zred_cuts = [0.2, 0.3, 0.3, 0.5]
     #either BGS_BRIGHT, ELG or BGS_FAINT
-    gal_types = ["BGS_BRIGHT", "BGS_FAINT", "LOWZ", "ELG"]
+    gal_types = ["BGS_BRIGHT"] #, "BGS_FAINT", "LOWZ", "ELG"]
     
     save_filenames = ["iron_bgs_bright_filter_zsucc_zrr02_allfracflux.fits", "iron_bgs_faint_filter_zsucc_zrr03_allfracflux.fits", "iron_lowz_filter_zsucc_zrr03.fits", "iron_elg_filter_zsucc_zrr05_allfracflux.fits"]
     
@@ -400,7 +425,12 @@ if __name__ == '__main__':
         else:
             if gal_type == "BGS_BRIGHT":
                 vac_data_bgs_tgid = vac_data_good["BGS_TARGET"]
-                gal_mask = (vac_data_bgs_tgid & bgs_mask["BGS_BRIGHT"]) != 0
+                gal_mask = ( (vac_data_bgs_tgid & bgs_mask["BGS_BRIGHT"]) != 0 ) | (  )
+
+                #look at cell 17 ish to select SV objs. Above is only selecting main survey pbjs.
+                # https://github.com/astro-datalab/notebooks-latest/blob/master/03_ScienceExamples/DESI/01_Intro_to_DESI_EDR.ipynb
+                # https://github.com/Ragadeepika-Pucha/DESI_Functions/blob/main/py/desi_bits.py
+                # code to select dwarf galaxy from the different subsets
             
             if gal_type == "BGS_FAINT":
                 vac_data_bgs_tgid = vac_data_good["BGS_TARGET"]
@@ -412,195 +442,205 @@ if __name__ == '__main__':
                
             ## EXTRACTING THE DATA 
             vac_data_cat = vac_data_good[gal_mask]
+
+      
+            print(vac_data_cat[vac_data_cat["TARGETID"] == 39628433277322059])
+
+            print(vac_data_cat[vac_data_cat["TARGETID"] == 39628427883450778])
+
+            print(vac_data_good[vac_data_good["TARGETID"] == 39628433277322059])
+
+            print(vac_data_good[vac_data_good["TARGETID"] == 39628427883450778])
+
             
-            allmask_grz = [f"ALLMASK_{b}" for b in "GRZ"]
-            sigma_grz = [f"SIGMA_GOOD_{b}" for b in "GRZ"]
-            sigma_wise = [f"SIGMA_GOOD_W{b}" for b in range(1, 5)]
-            fracflux_grz = [f"FRACFLUX_{b}" for b in "GRZ"]
-            rchisq_grz = [f"RCHISQ_{b}" for b in "GRZ"]
-            fracmasked_grz = [f"FRACMASKED_{b}" for b in "GRZ"]
+#             allmask_grz = [f"ALLMASK_{b}" for b in "GRZ"]
+#             sigma_grz = [f"SIGMA_GOOD_{b}" for b in "GRZ"]
+#             sigma_wise = [f"SIGMA_GOOD_W{b}" for b in range(1, 5)]
+#             fracflux_grz = [f"FRACFLUX_{b}" for b in "GRZ"]
+#             rchisq_grz = [f"RCHISQ_{b}" for b in "GRZ"]
+#             fracmasked_grz = [f"FRACMASKED_{b}" for b in "GRZ"]
         
-            #number of bands we need 5 sigma detection in
-            nsigma_bands = 2
-            if gal_type == "ELG":
-                nsigma_bands = 2
-            ##we had initially set nsigma_bands = 3 for ELG
-            ##that would mean if no filters have sigma>5, we remove. So even if one is above, we are good.
-            ##if we wanted to ensure that at least 2 are above 5, we need to remove objects that have at least 2 below 5.
-            ##so we would set nsigm_bands = 2.
+#             #number of bands we need 5 sigma detection in
+#             nsigma_bands = 2
+#             if gal_type == "ELG":
+#                 nsigma_bands = 2
+#             ##we had initially set nsigma_bands = 3 for ELG
+#             ##that would mean if no filters have sigma>5, we remove. So even if one is above, we are good.
+#             ##if we wanted to ensure that at least 2 are above 5, we need to remove objects that have at least 2 below 5.
+#             ##so we would set nsigm_bands = 2.
         
-            ##apply the filtering now
-            remove_queries = [
-            "(MASKBITS >> 1) % 2 > 0",  # 1
-            "(MASKBITS >> 5) % 2 > 0",  # 2
-            "(MASKBITS >> 6) % 2 > 0",  # 3
-            "(MASKBITS >> 7) % 2 > 0",  # 4
-            "(MASKBITS >> 12) % 2 > 0",  # 5
-            "(MASKBITS >> 13) % 2 > 0",  # 6
-            _n_or_more_lt(sigma_grz, nsigma_bands, 5),  # 7
-            ]
+#             ##apply the filtering now
+#             remove_queries = [
+#             "(MASKBITS >> 1) % 2 > 0",  # 1
+#             "(MASKBITS >> 5) % 2 > 0",  # 2
+#             "(MASKBITS >> 6) % 2 > 0",  # 3
+#             "(MASKBITS >> 7) % 2 > 0",  # 4
+#             "(MASKBITS >> 12) % 2 > 0",  # 5
+#             "(MASKBITS >> 13) % 2 > 0",  # 6
+#             _n_or_more_lt(sigma_grz, nsigma_bands, 5),  # 7
+#             ]
                                 
-            ## read tractor phot
-            zpix_cat = read_tractorphot(vac_data_cat, verbose=True)
-            zpix_cat = get_useful_cat_colms(zpix_cat)
+#             ## read tractor phot
+#             zpix_cat = read_tractorphot(vac_data_cat, verbose=True)
+#             zpix_cat = get_useful_cat_colms(zpix_cat)
         
-            #do some of the processing on catalo
-            vac_data_cat, zpix_cat = get_final_catalogs(vac_data_cat, zpix_cat, plot=False)
+#             #do some of the processing on catalo
+#             vac_data_cat, zpix_cat = get_final_catalogs(vac_data_cat, zpix_cat, plot=False)
         
-            print("Maximum RA difference is =", np.max(np.abs(zpix_cat["RA"] - vac_data_cat["RA"] ) ) )
+#             print("Maximum RA difference is =", np.max(np.abs(zpix_cat["RA"] - vac_data_cat["RA"] ) ) )
             
-            mask = get_remove_flag(zpix_cat, remove_queries) == 0
-            mask2 = (zpix_cat["is_galaxy"] == True)
-            tot_mask = mask&mask2
-            ### this is the mask that will keep good objects and remove bad
-            print("Fraction that pass cleaning cuts: ", np.sum(tot_mask)/len(tot_mask) )
+#             mask = get_remove_flag(zpix_cat, remove_queries) == 0
+#             mask2 = (zpix_cat["is_galaxy"] == True)
+#             tot_mask = mask&mask2
+#             ### this is the mask that will keep good objects and remove bad
+#             print("Fraction that pass cleaning cuts: ", np.sum(tot_mask)/len(tot_mask) )
             
-            vac_data_cat_f = vac_data_cat[tot_mask]
+#             vac_data_cat_f = vac_data_cat[tot_mask]
         
         
-        print(len(vac_data_cat_f))
+#         print(len(vac_data_cat_f))
      
-        if apply_zsucc_cut:
-            ## note for ELGs, the spectroscopic cleaning cut relies on OII doublet SNR as well
-            if gal_type == "ELG":
+#         if apply_zsucc_cut:
+#             ## note for ELGs, the spectroscopic cleaning cut relies on OII doublet SNR as well
+#             if gal_type == "ELG":
     
-                #we need to match the above targetids to our target ids 
-                vac_data_cat_f = vac_data_cat_f[ (vac_data_cat_f["Z"] < 1) & (vac_data_cat_f["ZWARN"] == 0)  & (vac_data_cat_f["SPECTYPE"]== "GALAXY") ]
+#                 #we need to match the above targetids to our target ids 
+#                 vac_data_cat_f = vac_data_cat_f[ (vac_data_cat_f["Z"] < 1) & (vac_data_cat_f["ZWARN"] == 0)  & (vac_data_cat_f["SPECTYPE"]== "GALAXY") ]
                 
-                vac_data_tgids = vac_data_cat_f["TARGETID"].data
+#                 vac_data_tgids = vac_data_cat_f["TARGETID"].data
     
-                oii_flux = -99 * np.ones( len(vac_data_cat_f)  )
-                oii_flux_ivar = -99* np.ones( len(vac_data_cat_f)  )
-                z_hpx = -99* np.ones( len(vac_data_cat_f)  )
-                tgid_2 = -99* np.ones( len(vac_data_cat_f)  )
+#                 oii_flux = -99 * np.ones( len(vac_data_cat_f)  )
+#                 oii_flux_ivar = -99* np.ones( len(vac_data_cat_f)  )
+#                 z_hpx = -99* np.ones( len(vac_data_cat_f)  )
+#                 tgid_2 = -99* np.ones( len(vac_data_cat_f)  )
                 
-                all_elg_data = Table.read( "/pscratch/sd/v/virajvm/catalog/all_elg_healpix_catalogs.fits")
+#                 all_elg_data = Table.read( "/pscratch/sd/v/virajvm/catalog/all_elg_healpix_catalogs.fits")
                     
-                ## then we cross-match 
-                idx, d2d,_ = match_c_to_catalog(c_cat = vac_data_cat_f, catalog_cat = all_elg_data, c_ra = "RA", c_dec = "DEC" )
+#                 ## then we cross-match 
+#                 idx, d2d,_ = match_c_to_catalog(c_cat = vac_data_cat_f, catalog_cat = all_elg_data, c_ra = "RA", c_dec = "DEC" )
     
-                all_elg_data_f = all_elg_data[idx]
-                all_elg_data_f = all_elg_data_f[d2d.arcsec < 1]
+#                 all_elg_data_f = all_elg_data[idx]
+#                 all_elg_data_f = all_elg_data_f[d2d.arcsec < 1]
     
-                oii_flux[d2d.arcsec < 1] = all_elg_data_f["OII_FLUX"].data
-                oii_flux_ivar[d2d.arcsec < 1] = all_elg_data_f["OII_FLUX_IVAR"].data
-                z_hpx[d2d.arcsec < 1] = all_elg_data_f["Z"].data
-                tgid_2[d2d.arcsec < 1] = all_elg_data_f["TARGETID"].data
+#                 oii_flux[d2d.arcsec < 1] = all_elg_data_f["OII_FLUX"].data
+#                 oii_flux_ivar[d2d.arcsec < 1] = all_elg_data_f["OII_FLUX_IVAR"].data
+#                 z_hpx[d2d.arcsec < 1] = all_elg_data_f["Z"].data
+#                 tgid_2[d2d.arcsec < 1] = all_elg_data_f["TARGETID"].data
                 
-                ## using this apply the filter cut!
-                vac_data_cat_f["OII_FLUX"] = oii_flux
-                vac_data_cat_f["OII_FLUX_IVAR"] = oii_flux_ivar
-                vac_data_cat_f["Z_HPX"] = z_hpx
-                vac_data_cat_f["TARGETID_2"] = tgid_2
+#                 ## using this apply the filter cut!
+#                 vac_data_cat_f["OII_FLUX"] = oii_flux
+#                 vac_data_cat_f["OII_FLUX_IVAR"] = oii_flux_ivar
+#                 vac_data_cat_f["Z_HPX"] = z_hpx
+#                 vac_data_cat_f["TARGETID_2"] = tgid_2
                 
-                vac_data_cat_f["OII_SNR"] = vac_data_cat_f["OII_FLUX"] * np.sqrt(vac_data_cat_f["OII_FLUX_IVAR"])
-                vac_data_cat_f["ZSUCC"] = (( 0.2 * np.log10(vac_data_cat_f["DELTACHI2"]) + np.log10(vac_data_cat_f["OII_SNR"]) ) > 0.9 )  
+#                 vac_data_cat_f["OII_SNR"] = vac_data_cat_f["OII_FLUX"] * np.sqrt(vac_data_cat_f["OII_FLUX_IVAR"])
+#                 vac_data_cat_f["ZSUCC"] = (( 0.2 * np.log10(vac_data_cat_f["DELTACHI2"]) + np.log10(vac_data_cat_f["OII_SNR"]) ) > 0.9 )  
     
-                save_table(vac_data_cat_f,  save_folder + "/" + save_filename,comment=comment)
+#                 save_table(vac_data_cat_f,  save_folder + "/" + save_filename,comment=comment)
                 
-                #applying the cleaning cuts!
-                vac_data_cat_f = vac_data_cat_f[(vac_data_cat_f["ZSUCC"] == 1) & (vac_data_cat_f["DELTACHI2"] > 25)]
+#                 #applying the cleaning cuts!
+#                 vac_data_cat_f = vac_data_cat_f[(vac_data_cat_f["ZSUCC"] == 1) & (vac_data_cat_f["DELTACHI2"] > 25)]
                 
-            else:
-                ## if not ELGs, but BGS etc.
-                good_mask =(vac_data_cat_f["ZWARN"] == 0) & (vac_data_cat_f["SPECTYPE"] == "GALAXY") & (vac_data_cat_f["DELTACHI2"] > 40) & (vac_data_cat_f["Z"] < 0.5)
-                vac_data_cat_f = vac_data_cat_f[good_mask]
+#             else:
+#                 ## if not ELGs, but BGS etc.
+#                 good_mask =(vac_data_cat_f["ZWARN"] == 0) & (vac_data_cat_f["SPECTYPE"] == "GALAXY") & (vac_data_cat_f["DELTACHI2"] > 40) & (vac_data_cat_f["Z"] < 0.5)
+#                 vac_data_cat_f = vac_data_cat_f[good_mask]
     
-        if apply_zred_cut:
-            vac_data_cat_f = vac_data_cat_f[ (vac_data_cat_f["Z"] < zred_cut)]
+#         if apply_zred_cut:
+#             vac_data_cat_f = vac_data_cat_f[ (vac_data_cat_f["Z"] < zred_cut)]
         
-        if cross_match_w_cigale:
-            vac_data_cat_f = cross_match_with_cigale(vac_data_cat_f)
+#         if cross_match_w_cigale:
+#             vac_data_cat_f = cross_match_with_cigale(vac_data_cat_f)
     
-        if get_color_mstar:
-            ## these color based prescriptions only work for Z < 0.5 galaxies though
-            gr_colors = vac_data_cat_f["MAG_G"] - vac_data_cat_f["MAG_R"]
+#         if get_color_mstar:
+#             ## these color based prescriptions only work for Z < 0.5 galaxies though
+#             gr_colors = vac_data_cat_f["MAG_G"] - vac_data_cat_f["MAG_R"]
             
-            zred_mask = (vac_data_cat_f["Z"] < 0.5)
+#             zred_mask = (vac_data_cat_f["Z"] < 0.5)
     
-            #uses r band magnitude
-            mstars_SAGA = get_stellar_mass(gr_colors[zred_mask].data, vac_data_cat_f["MAG_R"][zred_mask].data ,vac_data_cat_f["Z"][zred_mask].data )
-            #uses g band magnitude
-            mstars_M24 = get_stellar_mass_mia(gr_colors[zred_mask].data, vac_data_cat_f["MAG_G"][zred_mask].data ,vac_data_cat_f["Z"][zred_mask].data)
+#             #uses r band magnitude
+#             mstars_SAGA = get_stellar_mass(gr_colors[zred_mask].data, vac_data_cat_f["MAG_R"][zred_mask].data ,vac_data_cat_f["Z"][zred_mask].data )
+#             #uses g band magnitude
+#             mstars_M24 = get_stellar_mass_mia(gr_colors[zred_mask].data, vac_data_cat_f["MAG_G"][zred_mask].data ,vac_data_cat_f["Z"][zred_mask].data)
     
-            vac_data_cat_f["LOGM_SAGA"] = -99*np.ones(len(vac_data_cat_f))
-            vac_data_cat_f["LOGM_M24"] = -99*np.ones(len(vac_data_cat_f))
+#             vac_data_cat_f["LOGM_SAGA"] = -99*np.ones(len(vac_data_cat_f))
+#             vac_data_cat_f["LOGM_M24"] = -99*np.ones(len(vac_data_cat_f))
     
-            #add the stellar masses
-            vac_data_cat_f["LOGM_M24"][zred_mask] = mstars_M24
-            vac_data_cat_f["LOGM_SAGA"][zred_mask] = mstars_SAGA
+#             #add the stellar masses
+#             vac_data_cat_f["LOGM_M24"][zred_mask] = mstars_M24
+#             vac_data_cat_f["LOGM_SAGA"][zred_mask] = mstars_SAGA
     
     
-        ## for the final catalog, add info on the sweep file!
-        vac_data_cat_f = add_sweeps_column(vac_data_cat_f)
+#         ## for the final catalog, add info on the sweep file!
+#         vac_data_cat_f = add_sweeps_column(vac_data_cat_f)
 
-        ##add information on bright star stuff!!
-        vac_data_cat_f = bright_star_filter(vac_data_cat_f)
+#         ##add information on bright star stuff!!
+#         vac_data_cat_f = bright_star_filter(vac_data_cat_f)
 
-        #we filter to make sure at least one observation in each filter for every source!!
-        nobs_mask = (vac_data_cat_f["NOBS_G"] > 0) & (vac_data_cat_f["NOBS_R"] > 0) & (vac_data_cat_f["NOBS_Z"] > 0)
-        print(f"Number before NOBS filter = {len(vac_data_cat_f)}")
-        vac_data_cat_f = vac_data_cat_f[nobs_mask]
-        print(f"Number after NOBS filter = {len(vac_data_cat_f)}")
+#         #we filter to make sure at least one observation in each filter for every source!!
+#         nobs_mask = (vac_data_cat_f["NOBS_G"] > 0) & (vac_data_cat_f["NOBS_R"] > 0) & (vac_data_cat_f["NOBS_Z"] > 0)
+#         print(f"Number before NOBS filter = {len(vac_data_cat_f)}")
+#         vac_data_cat_f = vac_data_cat_f[nobs_mask]
+#         print(f"Number after NOBS filter = {len(vac_data_cat_f)}")
 
-        ## save this catalog 
-        save_table(vac_data_cat_f,  save_folder + "/" + save_filename,comment=comment)
-
-
-
-
-#### OLD CODE
-
-
-##Read all the ELG hpx files
-# hpi_0 = all_healpix[0]
-# elg_data_0 = Table.read(f"/global/cfs/cdirs/desi/spectro/redux/iron/healpix/main/dark/{hpi_0//100}/{hpi_0}/emline-main-dark-{hpi_0}.fits".format(hpi_0) )
-# elg_data_0 = elg_data_0["TARGET_RA", "TARGET_DEC" , "TARGETID", "OII_FLUX", "OII_FLUX_IVAR","Z"]
-# all_elg_data = [ elg_data_0 ]
-
-# for i in trange(1,len(all_healpix)):
-#     try:
-#         hpi = all_healpix[i]
-#         #read the relevant file
-#         elg_data_i = Table.read(f"/global/cfs/cdirs/desi/spectro/redux/iron/healpix/main/dark/{hpi//100}/{hpi}/emline-main-dark-{hpi}.fits".format(hpi) )
-#         elg_data_i = elg_data_i["TARGET_RA", "TARGET_DEC" , "TARGETID", "OII_FLUX", "OII_FLUX_IVAR","Z"]
-#         all_elg_data.append(elg_data_i)
-#     except:
-#         print(hpi, "this healpix not found")
-
-# ## now stack all
-# all_elg_data = vstack(all_elg_data)
-#we can save this for future reference
-# save_table(all_elg_data, "/pscratch/sd/v/virajvm/catalog/all_elg_healpix_catalogs.fits")
+#         ## save this catalog 
+#         save_table(vac_data_cat_f,  save_folder + "/" + save_filename,comment=comment)
 
 
 
-## According to Ashley Ross, the LSS catalogs contain the tile based redshift which would be slightly different than the healpix
-##based redshift. The below file would give us the tile based redshift. 
 
-# elg_lss = fits.open("/global/cfs/cdirs/desi/survey/catalogs/dr1/LSS.dr1/iron/LSScats/v1.5/ELG_LOPnotqso_full.dat.fits")
-# elg_lss_data = elg_lss[1].data
-# elg_lss_tgids = elg_lss_data["TARGETID"].data
-# print(len(vac_data_tgids), len(elg_lss_data))
+# #### OLD CODE
 
-# Find the common values and their indices in arr1
-# common_values, idx1, _ = np.intersect1d(vac_data_tgids, elg_lss_tgids, return_indices=True)
 
-# # Find the indices of these values in arr2
-# match_inds = np.nonzero(np.isin(elg_lss_tgids, common_values))[0]
+# ##Read all the ELG hpx files
+# # hpi_0 = all_healpix[0]
+# # elg_data_0 = Table.read(f"/global/cfs/cdirs/desi/spectro/redux/iron/healpix/main/dark/{hpi_0//100}/{hpi_0}/emline-main-dark-{hpi_0}.fits".format(hpi_0) )
+# # elg_data_0 = elg_data_0["TARGET_RA", "TARGET_DEC" , "TARGETID", "OII_FLUX", "OII_FLUX_IVAR","Z"]
+# # all_elg_data = [ elg_data_0 ]
 
-# # arr1 is now filtered to only contain values in arr2
-# vac_data_cat_f = vac_data_cat_f[idx1]
+# # for i in trange(1,len(all_healpix)):
+# #     try:
+# #         hpi = all_healpix[i]
+# #         #read the relevant file
+# #         elg_data_i = Table.read(f"/global/cfs/cdirs/desi/spectro/redux/iron/healpix/main/dark/{hpi//100}/{hpi}/emline-main-dark-{hpi}.fits".format(hpi) )
+# #         elg_data_i = elg_data_i["TARGET_RA", "TARGET_DEC" , "TARGETID", "OII_FLUX", "OII_FLUX_IVAR","Z"]
+# #         all_elg_data.append(elg_data_i)
+# #     except:
+# #         print(hpi, "this healpix not found")
 
-# print(len(match_inds), len(vac_data_cat_f))
+# # ## now stack all
+# # all_elg_data = vstack(all_elg_data)
+# #we can save this for future reference
+# # save_table(all_elg_data, "/pscratch/sd/v/virajvm/catalog/all_elg_healpix_catalogs.fits")
 
-# vac_data_cat_f["OII_FLUX"] = elg_lss_data["OII_FLUX"][match_inds]
-# vac_data_cat_f["OII_FLUX_IVAR"] = elg_lss_data["OII_FLUX_IVAR"][match_inds]
-# vac_data_cat_f["WEIGHT_ZFAIL"] = elg_lss_data["WEIGHT_ZFAIL"][match_inds]
-# vac_data_cat_f["mod_success_rate"] = elg_lss_data["mod_success_rate"][match_inds]
-# vac_data_cat_f["TARGETID_2"] = elg_lss_data["TARGETID"][match_inds]
-# vac_data_cat_f["DELTACHI2_2"] = elg_lss_data["DELTACHI2"][match_inds]
-# vac_data_cat_f["Z_not4clus"] = elg_lss_data["Z_not4clus"][match_inds]
+
+
+# ## According to Ashley Ross, the LSS catalogs contain the tile based redshift which would be slightly different than the healpix
+# ##based redshift. The below file would give us the tile based redshift. 
+
+# # elg_lss = fits.open("/global/cfs/cdirs/desi/survey/catalogs/dr1/LSS.dr1/iron/LSScats/v1.5/ELG_LOPnotqso_full.dat.fits")
+# # elg_lss_data = elg_lss[1].data
+# # elg_lss_tgids = elg_lss_data["TARGETID"].data
+# # print(len(vac_data_tgids), len(elg_lss_data))
+
+# # Find the common values and their indices in arr1
+# # common_values, idx1, _ = np.intersect1d(vac_data_tgids, elg_lss_tgids, return_indices=True)
+
+# # # Find the indices of these values in arr2
+# # match_inds = np.nonzero(np.isin(elg_lss_tgids, common_values))[0]
+
+# # # arr1 is now filtered to only contain values in arr2
+# # vac_data_cat_f = vac_data_cat_f[idx1]
+
+# # print(len(match_inds), len(vac_data_cat_f))
+
+# # vac_data_cat_f["OII_FLUX"] = elg_lss_data["OII_FLUX"][match_inds]
+# # vac_data_cat_f["OII_FLUX_IVAR"] = elg_lss_data["OII_FLUX_IVAR"][match_inds]
+# # vac_data_cat_f["WEIGHT_ZFAIL"] = elg_lss_data["WEIGHT_ZFAIL"][match_inds]
+# # vac_data_cat_f["mod_success_rate"] = elg_lss_data["mod_success_rate"][match_inds]
+# # vac_data_cat_f["TARGETID_2"] = elg_lss_data["TARGETID"][match_inds]
+# # vac_data_cat_f["DELTACHI2_2"] = elg_lss_data["DELTACHI2"][match_inds]
+# # vac_data_cat_f["Z_not4clus"] = elg_lss_data["Z_not4clus"][match_inds]
 
 # vac_data_cat_f =  vac_data_cat_f[vac_data_cat_f["OII_FLUX"] > 0]
 # vac_data_cat_f["OII_SNR"] = vac_data_cat_f["OII_FLUX"] * np.sqrt(vac_data_cat_f["OII_FLUX_IVAR"])

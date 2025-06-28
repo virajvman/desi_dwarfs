@@ -55,7 +55,7 @@ def generate_random_string(length):
     characters = string.ascii_letters + string.digits  # Includes A-Z, a-z, 0-9
     return ''.join(random.choices(characters, k=length))
 
-def sdss_rgb(imgs, bands, scales=None,m = 0.02):
+def sdss_rgb(imgs, bands=["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)),m = 0.03):
     rgbscales = {'u': (2,1.5), #1.0,
                  'g': (2,2.5),
                  'r': (1,1.5),
