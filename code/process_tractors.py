@@ -15,7 +15,7 @@ import fitsio
 from desi_lowz_funcs import print_stage, check_path_existence, is_target_in_south, match_c_to_catalog, get_sweep_filename
 
 
-def get_nearby_source_catalog(ra_k, dec_k, wcat, brick_i, save_path_k, source_cat, source_pzs=None,save=True,primary=True):
+def get_nearby_source_catalog(ra_k, dec_k, objid_k, brickid_k, box_size, wcat, brick_i, save_path_k, source_cat, source_pzs=None,save=True,primary=True):
     '''
     Function that gets source catalog within 45 arcsec radius of object
     primary = True if ra_k,dec_k are the main source. If False, then this function is just being used to get the relevant files!
@@ -28,10 +28,13 @@ def get_nearby_source_catalog(ra_k, dec_k, wcat, brick_i, save_path_k, source_ca
                              dec=source_cat["dec"] * u.deg)
     # Compute angular separation
     separation = source_coords.separation(center)
-    # Select sources within 45 arcsec
-    within_45arcsec = separation < 45 * u.arcsec
+    # Select sources within 45 arcsec. This was originally only for the 1.5 armin area, but now we will larger areas!
+    # the 1.05 is just an extra boost to make sure we are capturing the any bright things along the edges.
+    # this is especially true for stars as they can bleed along the pixels in vertical and horizontal direction
+    radius_search = int(box_size*0.262/2)
+    within_45arcsec = separation < radius_search * u.arcsec
     source_cat_f = source_cat[within_45arcsec]
-    
+
     if primary == False and len(source_cat_f) == 0:
         #we have to do this because is it not possible to join empty tables
         #if no sources are find, then we just return None. So we know that no sources are supposed to be added!
@@ -73,7 +76,6 @@ def get_nearby_source_catalog(ra_k, dec_k, wcat, brick_i, save_path_k, source_ca
         #we are converting the inverse variance into sigma here
         source_cat_f[f"mag_{BAND}_err"] = 1.087*(np.sqrt(1/good_flux_ivars) / good_fluxs ) 
     
-    
     source_cat_f["g-r_err"] = np.sqrt(  source_cat_f["mag_g_err"]**2 + source_cat_f["mag_r_err"]**2)
     source_cat_f["r-z_err"] = np.sqrt(  source_cat_f["mag_r_err"]**2 + source_cat_f["mag_z_err"]**2)
 
@@ -93,16 +95,14 @@ def get_nearby_source_catalog(ra_k, dec_k, wcat, brick_i, save_path_k, source_ca
         
         source_cat_obs = source_cat_f[np.argmin(separations)]
         
-        if np.min(separations) != 0:
-            #the source we pointed at has been removed
-            tgt_source = source_cat[ (source_cat["ra"] == ra_k) & (source_cat["dec"] == dec_k) ]
-            if len(tgt_source) == 0:
-                #hmm no target source found?
-                print(ra_k, dec_k)
-                print("Hmm. The target source was not found.")
-            source_cat_f = vstack( [source_cat_f,  tgt_source ] )
+        #sometimes there are significant separations ~1 arcsec, due to the differences between the north and south targeting catalogs
+        if source_cat_obs["OBJID"] != objid_k and source_cat_obs["BRICKID"] !=  brickid_k:
+            if np.min(separations) < 0.1:
+                print(f"The target source was not matching, but is within 0.1 arcsec. RA = {ra_k}, DEC = {dec_k}.")                
+            else:
+                print(f"The target source was not matching. Separations is {np.min(separations)}. RA = {ra_k}, DEC = {dec_k}")     
         else:
-            pass    
+            pass   
     else:
         pass
     
@@ -171,7 +171,7 @@ def are_more_bricks_needed(ra,dec,radius_arcsec = 45):
     return neigh_bricks, neigh_wcats, neigh_sweeps
 
 
-def get_neighboring_bricks(ra, dec, neigh_bricks ,neigh_wcats, neigh_sweeps,use_pz = False):
+def get_neighboring_bricks(ra, dec, objid, brickid, box_size, neigh_bricks ,neigh_wcats, neigh_sweeps,use_pz = False):
     '''
     In this function, we check if a given source and the region of interest around it is fully contained in one brick or not.
     size is the radius of the circular region of interest in arcseconds
@@ -193,7 +193,7 @@ def get_neighboring_bricks(ra, dec, neigh_bricks ,neigh_wcats, neigh_sweeps,use_
         else:
             source_pzs_i = None
 
-        source_cat_i = get_nearby_source_catalog(ra, dec, neigh_wcats[i], nbi, None, source_cat_i, source_pzs_i, save=False,primary=False)
+        source_cat_i = get_nearby_source_catalog(ra, dec, objid, brickid, box_size, neigh_wcats[i], nbi, None, source_cat_i, source_pzs_i, save=False,primary=False)
         # print("%d objects read from the one of the neighboring bricks"%len(source_cat_i))
         if source_cat_i is not None:
             new_sources.append(source_cat_i)
@@ -207,7 +207,7 @@ def get_neighboring_bricks(ra, dec, neigh_bricks ,neigh_wcats, neigh_sweeps,use_
         return new_sources
 
 
-def return_sources_wneigh_bricks(save_path, ra, dec, more_bricks, more_wcats, more_sweeps,use_pz = False):
+def return_sources_wneigh_bricks(save_path, ra, dec, objid, brickid, box_size, more_bricks, more_wcats, more_sweeps,use_pz = False):
     '''
     Function that saves the final source cat file that consolidates sources from the other bricks
     '''
@@ -219,7 +219,7 @@ def return_sources_wneigh_bricks(save_path, ra, dec, more_bricks, more_wcats, mo
     #     source_cat_f = Table.read( save_path_k + "/source_cat_f_more.fits"  )
     # else:
     #the combined brick file is being made!
-    source_cat_more = get_neighboring_bricks(ra, dec, more_bricks,more_wcats, more_sweeps,use_pz=use_pz)
+    source_cat_more = get_neighboring_bricks(ra, dec, objid, brickid, box_size, more_bricks,more_wcats, more_sweeps,use_pz=use_pz)
 
     if source_cat_more is not None:
         source_cat_f = vstack([source_cat_f, source_cat_more])

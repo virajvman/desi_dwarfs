@@ -23,6 +23,10 @@ import requests
 from io import BytesIO
 import desispec.io
 from desispec import coaddition  
+from matplotlib.colors import LogNorm
+
+import requests
+import json
 
 
 c_light = 299792 #km/s
@@ -160,7 +164,7 @@ def is_target_in_south(ras,decs):
     # south_targs_mask = ((south_targs["GALB"] < 0) | ((south_targs["GALB"] > 0) & (south_targs["DEC"] < 32.375) ))
     # north_targs_mask = (north_targs["GALB"] > 0) & (north_targs["DEC"] > 32.375) & (np.abs(north_targs["GALB"]) > 15)
 
-    c_cord = SkyCoord(ras * u.degree, decs * u.degree, frame='icrs')
+    c_cord = SkyCoord( np.array(ras) * u.degree, np.array(decs) * u.degree, frame='icrs')
     
     galbs = c_cord.galactic.b.value
 
@@ -200,7 +204,7 @@ def check_path_existence(all_paths=None):
     return
 
 
-def match_c_to_catalog(c_cat = None, catalog_cat = None, c_ra = "TARGET_RA", c_dec = "TARGET_DEC", catalog_ra = "TARGET_RA", catalog_dec = "TARGET_DEC"):
+def match_c_to_catalog(c_cat = None, catalog_cat = None, c_ra = "RA", c_dec = "DEC", catalog_ra = "RA", catalog_dec = "DEC"):
     '''
     Function that matches two catalogs and returns the idx, d2d, d3d
     '''
@@ -381,7 +385,7 @@ def get_stellar_mass_mia( gr_col, gmag, zred):
     
     return log_mstar
 
-def get_stellar_mass(gr,rmag,zred):
+def get_stellar_mass(gr,rmag,zred,input_zred=True):
     '''
     Computes the stellar mass of object using the SAGA 2 conversion
     
@@ -390,20 +394,25 @@ def get_stellar_mass(gr,rmag,zred):
     We would need to get the absolute r band mag above. We will also have to a K correction to the absolute magnitude .. 
     
     '''
-    from astropy.cosmology import Planck18
 
-    #convert the zred to the luminosity distance 
-    d = Planck18.luminosity_distance(zred)
-    d_in_pc = d.value * 1e6
-    
-    #M = m + 5 - 5*log10(d/pc) - Kcor
-    kr = r_kcorr(gr,zred)
+    if input_zred:
+        #convert the zred to the luminosity distance 
+        d = Planck18.luminosity_distance(zred)
+        d_in_pc = d.value * 1e6
+        #M = m + 5 - 5*log10(d/pc) - Kcor
+        kr = r_kcorr(gr,zred)
+    else:
+        #the input is in distance! We ignore the k-correction term for this
+        d_in_pc = zred * 1e6
+        kr = 0
+        
     M_r = rmag + 5 - 5*np.log10(d_in_pc) - kr
-    
+
     log_star = 1.254 + 1.098*gr - 0.4*M_r
     
     return log_star
 
+    
 def get_mag_from_stellar_mass(gr,mstar,zred):
     '''
     Computes the stellar mass of object using the SAGA 2 conversion
@@ -606,7 +615,7 @@ def filter_out_siena(ra_list,dec_list,Nmax = 500,print_distance=False,which_rad 
     
     return good_mask, indices_overlap
 
-def calc_normalized_dist_broadcast(ra_list, dec_list, redshift_list, s20_ra, s20_dec, s20_zred, s20_d26, s20_ba, s20_phi,verbose):
+def calc_normalized_dist_broadcast(ra_list, dec_list, redshift_list, s20_ra, s20_dec, s20_zred, s20_d26, s20_ba, s20_phi,verbose,use_redshift=True):
     '''
     Function that computes the distance normalized to D26 units in a vectorized manner. This function can be passed to a multiprocessor as well
     '''
@@ -614,12 +623,12 @@ def calc_normalized_dist_broadcast(ra_list, dec_list, redshift_list, s20_ra, s20
     #expanding the ra,dec arrays for broad-casting
     ra_i = ra_list[:,np.newaxis]
     dec_i = dec_list[:,np.newaxis]
-    redshift_i = redshift_list[:, np.newaxis]
+    if use_redshift:
+        redshift_i = redshift_list[:, np.newaxis]
+        redshift_mask = (np.abs(redshift_i - s20_zred) * c_light < 1000 )  # Shape: (N, M)
 
-    redshift_mask = (np.abs(redshift_i - s20_zred) * c_light < 1000 )  # Shape: (N, M)
-
-    if verbose:
-        print(np.shape(redshift_mask))
+        if verbose:
+            print(np.shape(redshift_mask))
 
     all_norm_dist = calc_normalized_dist(ra_i, dec_i, s20_ra, s20_dec, s20_d26, 
                         cen_ba=s20_ba, cen_phi=s20_phi, multiplier=1)
@@ -627,8 +636,9 @@ def calc_normalized_dist_broadcast(ra_list, dec_list, redshift_list, s20_ra, s20
     ##for each ra,dec in ra_i,dec_i lists, we have computed the distances to all the SGA galaxies. 
     ##for each, we need to filter them by their redshifts. 
 
-    # Mask out distances for galaxies that are outside the redshift range
-    all_norm_dist[~redshift_mask] = np.inf 
+    if use_redshift:
+        # Mask out distances for galaxies that are outside the redshift range
+        all_norm_dist[~redshift_mask] = np.inf 
 
     nearest_inds = np.argmin(all_norm_dist,axis = 1)
     nearest_norm_dist = np.min( all_norm_dist, axis = 1 )
@@ -638,15 +648,14 @@ def calc_normalized_dist_broadcast(ra_list, dec_list, redshift_list, s20_ra, s20
 
     # If all values in a row were masked 
     # that is, if there are no sga galaxies in the relevant redshift range
-    no_match_mask = np.all(~redshift_mask, axis=1)
+    if use_redshift:
+        no_match_mask = np.all(~redshift_mask, axis=1)
+        if verbose:
+            print(np.shape(no_match_mask))
+        nearest_inds[no_match_mask] = filler_sga_ind
+        #where there does not exist a valid match, we assign np.inf value    
+        nearest_norm_dist[no_match_mask] = np.inf
 
-    if verbose:
-        print(np.shape(no_match_mask))
-
-    nearest_inds[no_match_mask] = filler_sga_ind
-    #where there does not exist a valid match, we assign np.inf value
-    
-    nearest_norm_dist[no_match_mask] = np.inf
 
     return nearest_inds, nearest_norm_dist
 
@@ -889,17 +898,23 @@ def get_tgids_fastspec(tgids_list, columns):
 
 
 
-def process_img(img_data, cutout_size = 96, org_size = 350):
+def process_img(img_data, cutout_size = 96, org_size = 350,return_shift = False):
     '''
     Function that center crops the image and returns rgb image!
     '''
-    
-    start = (org_size - cutout_size) // 2  # assumes square images
-    end = start + cutout_size
-    img_data = img_data[:, start:end, start:end]
+
+    if cutout_size is not None:
+        start = (org_size - cutout_size) // 2  # assumes square images
+        end = start + cutout_size
+        img_data = img_data[:, start:end, start:end]
+        
     #convert to rgb
     rgb_img = sdss_rgb([img_data[0],img_data[1], img_data[2] ], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
-    return rgb_img
+
+    if return_shift:
+        return rgb_img, start
+    else:
+        return rgb_img
     
 
 
@@ -1321,13 +1336,17 @@ def save_subimage(ra, dec, sbimg_path, session, size = 350):
 
 img_good_path = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_good_cutouts"
 img_shred_path = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds_cutouts"
+img_sga_path = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_sga_cutouts"
+
 
 # NOTE: requests.Session() is not picklable, so we'll initialize it inside the subprocess.
-def init_session(good_files, shred_files):
-    global session, good_dict, shred_dict
+def init_session(good_files, shred_files, sga_files):
+    global session, good_dict, shred_dict, sga_dict
     session = requests.Session()
     good_dict = good_files
     shred_dict = shred_files
+    sga_dict = sga_files
+    
 
 
 ## construct the dictionary
@@ -1336,7 +1355,7 @@ def preload_file_dict(directory):
     Load all filenames in a directory and map tgid -> filepath.
     Assumes filenames contain 'tgid_1234567890' or similar.
     """
-    file_paths = glob.glob(os.path.join(directory, "image_tgid_*"))
+    file_paths = glob.glob(os.path.join(directory, "image_tgid_*ra*dec*"))
     file_dict = {}
     for path in tqdm(file_paths):
         base = os.path.basename(path)
@@ -1350,20 +1369,22 @@ def preload_file_dict(directory):
 
 
 def get_image_path(args):
-    tgid, ra, dec = args
-    top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_good"
+    top_folder, tgid, ra, dec, size = args
+    # top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_good"
 
     if tgid in good_dict:
         return good_dict[tgid]
     elif tgid in shred_dict:
         return shred_dict[tgid]
+    elif tgid in sga_dict:
+        return sga_dict[tgid]
     else:
-        image_path = f"{top_folder}_cutouts/image_tgid_{tgid}_ra_{ra:.6f}_dec_{dec:.6f}.fits"
-        save_cutouts(ra, dec, image_path, session, size=350, timeout=30)
-        if os.path.exists(image_path):
-            return image_path
-        else:
-            return None
+        image_path = f"{top_folder}_cutouts/image_tgid_{tgid}_ra_{ra:.3f}_dec_{dec:.3f}.fits"
+        save_cutouts(ra, dec, image_path, session, size=size, timeout=30)
+        # if os.path.exists(image_path):
+        #     return image_path
+        # else:
+        return image_path
 
 def parallel_run(target_list, n_processes=None):
     """
@@ -1377,8 +1398,9 @@ def parallel_run(target_list, n_processes=None):
 
     good_dict = preload_file_dict(img_good_path)
     shred_dict = preload_file_dict(img_shred_path)
-
-    with mp.Pool(processes=n_processes or cpu_count(), initializer=init_session, initargs=(good_dict, shred_dict) ) as pool:
+    sga_dict = preload_file_dict(img_sga_path)
+    
+    with mp.Pool(processes=n_processes or cpu_count(), initializer=init_session, initargs=(good_dict, shred_dict, sga_dict) ) as pool:
         results = list(tqdm(pool.imap(get_image_path, target_list), total=len(target_list)))
 
     ##this is then added to the catalog and saved!
@@ -1395,17 +1417,17 @@ def add_paths_to_catalog(org_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/d
 
     dwarf_cat = Table.read(org_file)
 
-
     print("Adding image paths!")
     target_list = []
     all_tgids  = dwarf_cat["TARGETID"].data
     all_ras  = dwarf_cat["RA"].data
     all_decs  = dwarf_cat["DEC"].data
+    all_sizes  = dwarf_cat["IMAGE_SIZE_PIX"].data
     
     for i in trange(len(dwarf_cat)):
-        target_list.append( ( all_tgids[i], all_ras[i], all_decs[i] )  )
+        target_list.append( ( top_folder, all_tgids[i], all_ras[i], all_decs[i], all_sizes[i] )  )
 
-    all_image_paths = parallel_run(target_list, n_processes=64)
+    all_image_paths = parallel_run(target_list, n_processes=8)
 
     print(len(all_image_paths), len(target_list), len(dwarf_cat))
 
@@ -1445,9 +1467,11 @@ def add_paths_to_catalog(org_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/d
 
 
 def save_cutouts(ra,dec,img_path,session, size=350, timeout = 30):
+    url_prefix = 'https://www.legacysurvey.org/viewer-dev/'
+    
     url = url_prefix + f'cutout.fits?ra={ra}&dec={dec}&size=%s&'%size
 
-    url += 'layer=ls-dr9&pixscale=0.262&bands=grz'
+    url += 'layer=ls-dr9&pixscale=0.262&bands=grz&invvar&maskbits'
 
     try:
         resp = session.get(url, timeout=timeout)
@@ -1480,4 +1504,137 @@ def download_few_spectra(data_cat,ncores=2):
 
     return all_waves, all_fluxs, all_ivars
 
+
+
+import scipy.optimize as opt
+
+def conf_interval(x, pdf, conf_level):
+    return np.sum(pdf[pdf > x])-conf_level
+
+def plot_2d_dist(x,y, nxbins, nybins, 
+                cmin=1.e-4, cmax=1.0, smooth=None, clevs=None,ax=None, bounds=None,plot_pcol=False,
+                color = "k",filled=False,label="1"):
+    """
+    construct and plot a binned, 2d distribution in the x-y plane 
+    using nxbins and nybins in x- and y- direction, respectively
     
+    log = specifies whether logged quantities are passed to be plotted on log-scale outside this routine
+    """
+    
+    weights = np.ones_like(x)
+    H, xbins, ybins = np.histogram2d(x, y, weights=weights, bins=(np.linspace(bounds[0], bounds[1], nxbins),np.linspace(bounds[2], bounds[3], nybins)))
+    
+    H = np.rot90(H); H = np.flipud(H); 
+             
+    X,Y = np.meshgrid(xbins[:-1],ybins[:-1]) 
+
+    if smooth != None:
+        from scipy.signal import wiener
+        H = wiener(H, mysize=smooth)
+        
+    H = H/np.sum(H)        
+    Hmask = np.ma.masked_where(H==0,H)
+
+    if plot_pcol:
+        pcol = ax.pcolormesh(X, Y,(Hmask),cmap=plt.cm.BuPu, norm = LogNorm(vmin=cmin*np.max(Hmask), vmax=cmax*np.max(Hmask) ), linewidth=0., rasterized=True)
+        pcol.set_edgecolor('face')
+        
+    # plot contours if contour levels are specified in clevs 
+    contour_paths = []
+    if clevs is not None:
+        lvls = []
+        for cld in clevs:  
+            sig = opt.brentq( conf_interval, 0., 1., args=(H,cld) )   
+            lvls.append(sig)
+
+        if filled:
+            cs = ax.contourf(X, Y, H, linewidths=np.array([1.0,0.75, 0.5, 0.25])[::-1], cmap=color, levels = sorted(lvls), 
+                    norm = LogNorm(), extent = [xbins[0], xbins[-1], ybins[0], ybins[-1]])
+        else:
+            cs = ax.contour(X, Y, H, linewidths=3*np.array([1.0,0.75, 0.5, 0.25])[::-1], colors=color, levels = sorted(lvls), 
+                    norm = LogNorm(), extent = [xbins[0], xbins[-1], ybins[0], ybins[-1]])
+
+        # Save contour paths
+        contour_paths = [c for c in cs.collections]
+
+     # At end of function
+    if not filled:
+        ax.plot([-5,-10], [-5,-10], color=color, linewidth=2.5, label=label)
+    else:
+        from matplotlib.patches import Patch
+        ax.plot([-5,-10], [-5,-10], color=color(0.6), linewidth=8, label=label)  # proxy line
+
+    return contour_paths
+    
+
+
+def DVcalculator_list(alpha_lst, delta_lst, system='supergalactic', 
+                      parameter='distance', values=[20], calculator='NAM'):
+    
+    """
+    Function taken from http://edd.ifa.hawaii.edu/
+    
+    Inputs: 
+        alpha: [array] (float) [deg]
+            first coordinate parameter  (RA,  Glon, SGL)
+        delta: [array] (float) [deg]
+            second coordinate parameter (Dec, Glat, SGB)  
+        system: (string)
+            coordinate system: 
+            Options are:
+                "equatorial"
+                "galactic"
+                "supergalactic"
+        parameter: (string)
+            the quantity whose value is provided
+            Options are:
+                "distance"
+                "velocity"
+        value: [array] (float)
+            the value of the input quantity
+            distance in [Mpc] and velocity in [km/s]
+            
+        calculator: desired Cosmicflows caluclator
+            Options are:
+                "NAM" to query the calculator at http://edd.ifa.hawaii.edu/NAMcalculator
+                "CF3" to query the calculator at http://edd.ifa.hawaii.edu/CF3calculator
+                "CF4" to query the calculator at http://edd.ifa.hawaii.edu/CF3calculator
+        
+    Output:
+        A python dictionary which contains the distance and velocity of the 
+        given object and the coordinate of the object in different systems
+
+    """
+    
+    if len(alpha_lst)!=len(delta_lst) or len(delta_lst)!=len(values):
+        return {"message": "Inconsistent sizes of the input arrays !"}
+    
+    payload = {}
+    payload["galaxies"] = []
+    
+    for i in range(len(alpha_lst)):
+        
+        coordinate = [float(alpha_lst[i]), float(delta_lst[i])]
+        galDict  = {
+                  'coordinate': coordinate,
+                  'system': system,
+                  'parameter': parameter,
+                  'value': float(values[i])
+                 }
+        
+        payload["galaxies"].append(galDict)
+    
+    
+    headers = {'Content-type': 'application/json'}
+    
+    API_url = 'http://edd.ifa.hawaii.edu/'+calculator+'calculator/api.php'
+    
+    try:
+        r = requests.get(API_url, data=json.dumps(payload), headers=headers)
+        output = json.loads(r.text) # a python dictionary
+    except:
+        print("Something went wrong!")  
+        print("Please check your intput parameters ...")
+        output = None
+
+    return output

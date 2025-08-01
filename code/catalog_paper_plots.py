@@ -22,6 +22,7 @@ import matplotlib
 import matplotlib.colors as mcolors
 from astropy.cosmology import Planck18
 
+
 sample_colors = {"BGS_BRIGHT" : "#882255", "BGS_FAINT": "#CC6677", "LOWZ":"#DDCC77", "ELG": "#88CCEE" }
 
 
@@ -128,7 +129,7 @@ def make_pcnn_completeness():
     '''
 
     #this is the entire shredded catalog that also includes PCNN_FRAGMENT COLUMN
-    data_main = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v3.fits")
+    data_main = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v4.fits")
     
     frag_comp = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/fragment_completeness.npy")
     good_impure = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/good_impurity.npy")
@@ -166,12 +167,12 @@ def make_pcnn_completeness():
     ax_plot.set_ylim([0,1])
     ax_plot.set_xlabel(r"Threshold $p_{\rm CNN}$",fontsize = 15)
 
-    ax_plot.axvline(0.4, color = "k", ls = "--", lw = 1,alpha = 0.4)
+    ax_plot.axvline(0.5, color = "k", ls = "--", lw = 1,alpha = 0.4)
     
-    ax_plot.text(0.325,0.225,r"$\frac{N( > p_{\rm CNN}, \text{Not Fragment}  ) }{N( > p_{\rm CNN}  )}$",fontsize = 15,
+    ax_plot.text(0.35,0.22,r"$\frac{N( > p_{\rm CNN}, \text{Not Fragment}  ) }{N( > p_{\rm CNN}  )}$",fontsize = 15,
                  color = color_good)
     
-    ax_plot.text(0.225,0.825,r"$\frac{N( > p_{\rm CNN}, \text{ Fragment}  ) }{N( \text{Fragment}  )}$",fontsize = 15,
+    ax_plot.text(0.075,0.86,r"$\frac{N( > p_{\rm CNN}, \text{ Fragment}  ) }{N( \text{Fragment}  )}$",fontsize = 15,
                  color = color_frag)
     
     plt.savefig("/global/homes/v/virajvm/DESI2_LOWZ/quenched_fracs_nbs/paper_plots/pcnn_threshold.pdf",bbox_inches="tight")
@@ -181,121 +182,7 @@ def make_pcnn_completeness():
     return
 
 
-def get_plotting_inds(main_cat):
-    '''
-    Function that randomly selects rows from a given galaxy sample in a catalo
-    '''
 
-    # Get unique samples
-    samples = ['BGS_BRIGHT', 'BGS_FAINT', 'ELG'][::-1]
-    
-    # Dictionary to hold random indices
-    random_indices = []
-    
-    for samp in samples:
-        # Find the row indices where sample matches
-        mask = main_cat['SAMPLE'] == samp
-        matching_indices = np.where(mask)[0]
-        # Randomly pick one index
-        rand_idx = np.random.choice(matching_indices)
-        random_indices.append(rand_idx)
-    
-    print(random_indices)
-
-    return np.array(random_indices)
-
-def make_img_s_pcnn_panels():
-    '''
-    This function makes the pCNN IMG and IMG-S panel image
-    '''
-    
-    #this is the entire shredded catalog that also includes PCNN_FRAGMENT COLUMN
-    data_main = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v3.fits")
-
-    print(len(data_main))
-    
-    data_cnn_shred = data_main[data_main["PCNN_FRAGMENT"] >= 0.3]
-    data_cnn_clean = data_main[data_main["PCNN_FRAGMENT"] < 0.3]
-
-    print(len(data_cnn_clean))
-    
-    #choosing the random plot inds
-    clean_inds = np.array([32495, 13180, 1629]) #get_plotting_inds(data_cnn_clean)
-    shred_inds = np.array([19400, 12444, 715]) # get_plotting_inds(data_cnn_shred)
-
-    ### making the fragment source panels
-    fig, ax = make_subplots(ncol =2, nrow = 3, col_spacing = 0.05, row_spacing = 0.35,plot_size = 2, return_fig=True )
-        
-    fig.text(0.175, 0.425, r'$p_{\rm CNN} \geq 0.4$', ha='center', va='top', fontsize=20)
-    
-    ax[4].set_title(r"IMG",fontsize = 16)
-    ax[5].set_title(r"IMG - S",fontsize = 16)
-    
-    shred_tgids = data_cnn_shred[shred_inds]["TARGETID"].data
-    
-    for j in range(3):
-        temp = np.load(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/shred_classifier_input_images/image_{shred_tgids[j]}.npy")
-        #we crop to the center 64
-        size = 64
-        start = (96 - size) // 2
-        end = start + size
-        temp = temp[:, start:end, start:end]
-        #make the rgb image!
-        rgb1 = temp[:3]
-        #make the sdss rgb image of this!
-        rgb1 = sdss_rgb([rgb1[0],rgb1[1],rgb1[2]], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
-        rgb2 = temp[3:6]
-        rgb2 = sdss_rgb([rgb2[0],rgb2[1],rgb2[2]], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
-        ax[2*j].imshow(rgb1)
-        ax[2*j+1].imshow(rgb2)
-        ax[2*j].scatter( 32, 32,facecolor="none",edgecolor = "r",lw =1,s=400, ls = "--" )
-        ax[2*j+1].scatter( 32, 32,facecolor="none",edgecolor = "r",lw =1,s=400, ls = "--" )    
-    for axi in ax:
-        axi.set_yticks([])
-        axi.set_xticks([])
-    plt.savefig("/global/homes/v/virajvm/DESI2_LOWZ/quenched_fracs_nbs/paper_plots/shred_egs_pcnn.pdf",dpi=300,bbox_inches="tight")
-    plt.close()
-
-    ##making the clean source panels
-
-    fig, ax = make_subplots(ncol =2, nrow = 3, col_spacing = 0.05, row_spacing = 0.35,plot_size = 2, return_fig=True )
-    fig.text(0.175, 0.425, r'$p_{\rm CNN} < 0.3$', ha='center', va='top', fontsize=20)
-    
-    ax[4].set_title(r"IMG",fontsize = 16)
-    ax[5].set_title(r"IMG - S",fontsize = 16)
-
-    # clean_tgids = data_cnn_clean[clean_inds]["TARGETID"].data
-    clean_tgids = data_main[clean_inds]["TARGETID"].data
-
-    print( data_main[clean_inds]["PCNN_FRAGMENT"].data )
-    
-    
-    for j in range(3):
-        temp = np.load(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/shred_classifier_input_images/image_{clean_tgids[j]}.npy")
-    
-        #we crop to the center 64
-        size = 64
-        start = (96 - size) // 2
-        end = start + size
-        temp = temp[:, start:end, start:end]
-    
-        #make the rgb image!
-        rgb1 = temp[:3]
-        #make the sdss rgb image of this!
-        rgb1 = sdss_rgb([rgb1[0],rgb1[1],rgb1[2]], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
-     
-        rgb2 = temp[3:6]
-        rgb2 = sdss_rgb([rgb2[0],rgb2[1],rgb2[2]], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
-    
-        ax[2*j].imshow(rgb1)
-        ax[2*j+1].imshow(rgb2)
-        ax[2*j].scatter( 32, 32,facecolor="none",edgecolor = "r",lw =1,s=400, ls = "--" )
-        ax[2*j+1].scatter( 32, 32,facecolor="none",edgecolor = "r",lw =1,s=400, ls = "--" )
-    for axi in ax:
-        axi.set_yticks([])
-        axi.set_xticks([])
-    plt.savefig("/global/homes/v/virajvm/DESI2_LOWZ/quenched_fracs_nbs/paper_plots/TEMP_clean_egs_pcnn.pdf",dpi=300,bbox_inches="tight")
-    plt.close()
 
 
 def make_shred_frac_plot():
@@ -308,10 +195,10 @@ def make_shred_frac_plot():
     elg_list = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_elg_filter_zsucc_zrr05_allfracflux.fits")
     lowz_list = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_lowz_filter_zsucc_zrr03.fits")
 
-    dwarf_mask_bgsb = (bgsb_list["LOGM_SAGA"] < 9.5) 
-    dwarf_mask_bgsf = (bgsf_list["LOGM_SAGA"] < 9.5) 
-    dwarf_mask_lowz = (lowz_list["LOGM_SAGA"] < 9.5) 
-    dwarf_mask_elg = (elg_list["LOGM_SAGA"] < 9.5)   
+    dwarf_mask_bgsb = (bgsb_list["LOGM_SAGA"] < 9.25) 
+    dwarf_mask_bgsf = (bgsf_list["LOGM_SAGA"] < 9.25) 
+    dwarf_mask_lowz = (lowz_list["LOGM_SAGA"] < 9.25) 
+    dwarf_mask_elg = (elg_list["LOGM_SAGA"] < 9.25)   
 
     bgsb_dwarfs = bgsb_list[dwarf_mask_bgsb]
     bgsf_dwarfs = bgsf_list[dwarf_mask_bgsf]
@@ -332,10 +219,19 @@ def make_shred_frac_plot():
     shred_lowz_mask = get_remove_flag(lowz_dwarfs, remove_queries) == 0
     
     ## PLOTTING THE FRACTION OF GALAXIES THAT ARE LIKELY SHREDS/BAD PHOTOMETRY
-    zgrid = np.arange(0.00,0.125,0.005)
+    zgrid = np.arange(0.00,0.125,0.0075)
     #the stellar mass bins of 0.5 dex
-    mstar_grid = np.arange(5.75, 9.5,0.25)
+    mstar_grid = np.arange(5.5, 9.5,0.5)
+    magr_grid = np.arange(17.5, 23,0.5)
 
+        
+    zcens = 0.5*(zgrid[1:] + zgrid[:-1])
+    ms_cens = 0.5*(mstar_grid[1:] + mstar_grid[:-1])
+    mr_cens = 0.5*(magr_grid[1:] + magr_grid[:-1])
+    
+
+
+    
     def get_shred_frac(tot_cat, subset_mask,  low, hi, rel_col="Z"):
         '''
         Given the total catalog and mask of objects to look at, computes the fraction in an interval of the relevant column (e.g., redshift or stellar mass)
@@ -349,7 +245,7 @@ def make_shred_frac_plot():
         if tot_count_bin > 10:
             return subset_count_bin / tot_count_bin
         else:
-            return None
+            return np.nan
 
     #these are the fraction of objects as a function of redshift that are classified as likely fragments by just the FRACFLUX cut!
     shred_frac_bgsb_1 = []
@@ -369,48 +265,43 @@ def make_shred_frac_plot():
     ## now we look at the fraction of objects that are classified as fragments by the fracflux cut AND the PCNN!
     #load the shredded cat and check these numbers add up ... 
     
-    shred_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v3.fits")
+    # shred_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v3.fits")
     
-    print(f"In shredded cat, BGS_BRIGHT={len(shred_cat[shred_cat['SAMPLE'] == 'BGS_BRIGHT'  ])}, BGS_FAINT={len(shred_cat[shred_cat['SAMPLE'] == 'BGS_FAINT'  ])}, ELG={len(shred_cat[shred_cat['SAMPLE'] == 'ELG'  ])}, LOWZ={len(shred_cat[shred_cat['SAMPLE'] == 'LOWZ'  ])}")
+    # print(f"In shredded cat, BGS_BRIGHT={len(shred_cat[shred_cat['SAMPLE'] == 'BGS_BRIGHT'  ])}, BGS_FAINT={len(shred_cat[shred_cat['SAMPLE'] == 'BGS_FAINT'  ])}, ELG={len(shred_cat[shred_cat['SAMPLE'] == 'ELG'  ])}, LOWZ={len(shred_cat[shred_cat['SAMPLE'] == 'LOWZ'  ])}")
     
-    print(f"In plotting catalog, BGS_BRIGHT={len(bgsb_dwarfs[shred_bgsb_mask])}, BGS_FAINT={len(bgsf_dwarfs[shred_bgsf_mask])}, ELG={len(elg_dwarfs[shred_elg_mask])}, LOWZ={len(lowz_dwarfs[shred_lowz_mask])} ")
+    # print(f"In plotting catalog, BGS_BRIGHT={len(bgsb_dwarfs[shred_bgsb_mask])}, BGS_FAINT={len(bgsf_dwarfs[shred_bgsf_mask])}, ELG={len(elg_dwarfs[shred_elg_mask])}, LOWZ={len(lowz_dwarfs[shred_lowz_mask])} ")
 
-    #let us confirm that they are in the same order!
-    print(  np.max(  np.abs( shred_cat[shred_cat['SAMPLE'] == 'BGS_BRIGHT']["TARGETID"].data - bgsb_dwarfs[shred_bgsb_mask]["TARGETID"].data ) ))
-    print(  np.max(  np.abs( shred_cat[shred_cat['SAMPLE'] == 'BGS_FAINT']["TARGETID"].data - bgsf_dwarfs[shred_bgsf_mask]["TARGETID"].data ) )) 
-    print(  np.max(  np.abs( shred_cat[shred_cat['SAMPLE'] == 'ELG']["TARGETID"].data - elg_dwarfs[shred_elg_mask]["TARGETID"].data ) )) 
-    print(  np.max(  np.abs( shred_cat[shred_cat['SAMPLE'] == 'LOWZ']["TARGETID"].data - lowz_dwarfs[shred_lowz_mask]["TARGETID"].data ) )) 
+    # #let us confirm that they are in the same order!
+    # print(  np.max(  np.abs( shred_cat[shred_cat['SAMPLE'] == 'BGS_BRIGHT']["TARGETID"].data - bgsb_dwarfs[shred_bgsb_mask]["TARGETID"].data ) ))
+    # print(  np.max(  np.abs( shred_cat[shred_cat['SAMPLE'] == 'BGS_FAINT']["TARGETID"].data - bgsf_dwarfs[shred_bgsf_mask]["TARGETID"].data ) )) 
+    # print(  np.max(  np.abs( shred_cat[shred_cat['SAMPLE'] == 'ELG']["TARGETID"].data - elg_dwarfs[shred_elg_mask]["TARGETID"].data ) )) 
+    # print(  np.max(  np.abs( shred_cat[shred_cat['SAMPLE'] == 'LOWZ']["TARGETID"].data - lowz_dwarfs[shred_lowz_mask]["TARGETID"].data ) )) 
     
-    # #we need the mask to include the pcnn cut, let us just initialize an array of zeros
-    bgsb_dwarfs_pcnn = np.zeros(len(bgsb_dwarfs))
-    bgsf_dwarfs_pcnn = np.zeros(len(bgsf_dwarfs))
-    elg_dwarfs_pcnn = np.zeros(len(elg_dwarfs))
-    lowz_dwarfs_pcnn = np.zeros(len(lowz_dwarfs))
+    # # #we need the mask to include the pcnn cut, let us just initialize an array of zeros
+    # bgsb_dwarfs_pcnn = np.zeros(len(bgsb_dwarfs))
+    # bgsf_dwarfs_pcnn = np.zeros(len(bgsf_dwarfs))
+    # elg_dwarfs_pcnn = np.zeros(len(elg_dwarfs))
+    # lowz_dwarfs_pcnn = np.zeros(len(lowz_dwarfs))
 
-    #now we fill this with pcnn values for just shredded objects
-    bgsb_dwarfs_pcnn[ shred_bgsb_mask ] = shred_cat[shred_cat['SAMPLE'] == 'BGS_BRIGHT']["PCNN_FRAGMENT"].data
-    bgsf_dwarfs_pcnn[ shred_bgsf_mask ] = shred_cat[shred_cat['SAMPLE'] == 'BGS_FAINT']["PCNN_FRAGMENT"].data
-    elg_dwarfs_pcnn[ shred_elg_mask ] = shred_cat[shred_cat['SAMPLE'] == 'ELG']["PCNN_FRAGMENT"].data
-    lowz_dwarfs_pcnn[ shred_lowz_mask ] = shred_cat[shred_cat['SAMPLE'] == 'LOWZ']["PCNN_FRAGMENT"].data
+    # #now we fill this with pcnn values for just shredded objects
+    # bgsb_dwarfs_pcnn[ shred_bgsb_mask ] = shred_cat[shred_cat['SAMPLE'] == 'BGS_BRIGHT']["PCNN_FRAGMENT"].data
+    # bgsf_dwarfs_pcnn[ shred_bgsf_mask ] = shred_cat[shred_cat['SAMPLE'] == 'BGS_FAINT']["PCNN_FRAGMENT"].data
+    # elg_dwarfs_pcnn[ shred_elg_mask ] = shred_cat[shred_cat['SAMPLE'] == 'ELG']["PCNN_FRAGMENT"].data
+    # lowz_dwarfs_pcnn[ shred_lowz_mask ] = shred_cat[shred_cat['SAMPLE'] == 'LOWZ']["PCNN_FRAGMENT"].data
 
-    PCNN_CUT = 0.4
+    # PCNN_CUT = 0.4
 
-    # #and now we can use this in the mask!
-    print( len(bgsb_dwarfs[shred_bgsb_mask]), len(bgsb_dwarfs[shred_bgsb_mask & (bgsb_dwarfs_pcnn >= PCNN_CUT)] )  )
-    print( len(bgsf_dwarfs[shred_bgsf_mask]), len(bgsf_dwarfs[shred_bgsf_mask&(bgsf_dwarfs_pcnn >= PCNN_CUT)]  ) )
-    print( len(elg_dwarfs[shred_elg_mask]), len(elg_dwarfs[shred_elg_mask&(elg_dwarfs_pcnn >= PCNN_CUT)]   ) )
-    print( len(lowz_dwarfs[shred_lowz_mask]), len(lowz_dwarfs[shred_lowz_mask&(lowz_dwarfs_pcnn >= PCNN_CUT)] ) )
+    # # #and now we can use this in the mask!
+    # print( len(bgsb_dwarfs[shred_bgsb_mask]), len(bgsb_dwarfs[shred_bgsb_mask & (bgsb_dwarfs_pcnn >= PCNN_CUT)] )  )
+    # print( len(bgsf_dwarfs[shred_bgsf_mask]), len(bgsf_dwarfs[shred_bgsf_mask&(bgsf_dwarfs_pcnn >= PCNN_CUT)]  ) )
+    # print( len(elg_dwarfs[shred_elg_mask]), len(elg_dwarfs[shred_elg_mask&(elg_dwarfs_pcnn >= PCNN_CUT)]   ) )
+    # print( len(lowz_dwarfs[shred_lowz_mask]), len(lowz_dwarfs[shred_lowz_mask&(lowz_dwarfs_pcnn >= PCNN_CUT)] ) )
     
 
     shred_frac_bgsb_ms = []
     shred_frac_bgsf_ms = []
     shred_frac_elg_ms = []
     shred_frac_lowz_ms = []
-
-    shred_frac_bgsb_ms_cnn = []
-    shred_frac_bgsf_ms_cnn = []
-    shred_frac_elg_ms_cnn = []
-    shred_frac_lowz_ms_cnn = []
 
     for i in trange(len(mstar_grid)-1):
         mlow = mstar_grid[i]
@@ -420,77 +311,74 @@ def make_shred_frac_plot():
         shred_frac_bgsf_ms.append(   get_shred_frac(bgsf_dwarfs, shred_bgsf_mask, mlow, mhi, rel_col = "LOGM_SAGA")  ) 
         shred_frac_elg_ms.append(   get_shred_frac(elg_dwarfs, shred_elg_mask , mlow, mhi, rel_col = "LOGM_SAGA")  ) 
         shred_frac_lowz_ms.append(   get_shred_frac(lowz_dwarfs, shred_lowz_mask, mlow, mhi, rel_col = "LOGM_SAGA")  ) 
-        
-        shred_frac_bgsb_ms_cnn.append(   get_shred_frac(bgsb_dwarfs, shred_bgsb_mask & (bgsb_dwarfs_pcnn >= PCNN_CUT) ,mlow, mhi, rel_col = "LOGM_SAGA" )  ) 
-        shred_frac_bgsf_ms_cnn.append(   get_shred_frac(bgsf_dwarfs, shred_bgsf_mask & (bgsf_dwarfs_pcnn >= PCNN_CUT), mlow, mhi, rel_col = "LOGM_SAGA")  ) 
-        shred_frac_elg_ms_cnn.append(   get_shred_frac(elg_dwarfs, shred_elg_mask & (elg_dwarfs_pcnn >= PCNN_CUT), mlow, mhi, rel_col = "LOGM_SAGA")  ) 
-        shred_frac_lowz_ms_cnn.append(   get_shred_frac(lowz_dwarfs, shred_lowz_mask & (lowz_dwarfs_pcnn >= PCNN_CUT), mlow, mhi, rel_col = "LOGM_SAGA")  ) 
 
 
-        ## let us make an additional cut of SGA DIST > 2
+    shred_frac_bgsb_magr = []
+    shred_frac_bgsf_magr = []
+    shred_frac_elg_magr = []
+    shred_frac_lowz_magr = []
 
-    # bgs_col = "#648FFF" #DC267F
-    # lowz_col = "#DC267F"
-    # elg_col = "#FFB000"
-    
-    zcens = 0.5*(zgrid[1:] + zgrid[:-1])
-    ms_cens = 0.5*(mstar_grid[1:] + mstar_grid[:-1])
+    for i in trange(len(magr_grid)-1):
+        rlow = magr_grid[i]
+        rhi = magr_grid[i+1]
 
-    print(shred_frac_bgsb_ms)
+        shred_frac_bgsb_magr.append(   get_shred_frac(bgsb_dwarfs, shred_bgsb_mask ,rlow, rhi, rel_col = "MAG_R" )  ) 
+        shred_frac_bgsf_magr.append(   get_shred_frac(bgsf_dwarfs, shred_bgsf_mask, rlow, rhi, rel_col = "MAG_R")  ) 
+        shred_frac_elg_magr.append(   get_shred_frac(elg_dwarfs, shred_elg_mask , rlow, rhi, rel_col = "MAG_R"  ) ) 
+        shred_frac_lowz_magr.append(   get_shred_frac(lowz_dwarfs, shred_lowz_mask, rlow, rhi, rel_col = "MAG_R")  ) 
 
-    # ##this is going to be a 2 panel subplot 
-    # ## first panel is the fraction of sources identified as likely fragments in dwarf galaxy catalog
-    # ## second panel is going to be fraction of sources that are identified as likely fragments and have further confirmed to be shreds by pcnn>0.3, we will show this per sample as well
-    # ##the third panel shows the fration of shred as a function of stellar mass for each sample (a simple color-based stellar mass)
+
 
     from desi_lowz_funcs import make_subplots
 
-    fig,ax = make_subplots(ncol = 1, nrow = 2,return_fig=True,row_spacing=0.75)
+    fig,ax = make_subplots(ncol = 3, nrow = 1,return_fig=True,col_spacing=1.25)
 
-    ax[1].plot(zcens, shred_frac_bgsb_1,label = "BGS Bright",lw = 3,color = sample_colors["BGS_BRIGHT"],ls = "-",alpha = 0.75)
-    ax[1].plot(zcens, shred_frac_bgsf_1,label = "BGS Faint",lw = 3,color = sample_colors["BGS_FAINT"],ls = "-",alpha = 0.75)
-    ax[1].plot(zcens, shred_frac_lowz_1,label = "LOWZ",lw = 3,color = sample_colors["LOWZ"],ls = "-",alpha = 0.75)
-    ax[1].plot(zcens, shred_frac_elg_1,label = "ELG",lw = 3,color = sample_colors["ELG"],ls = "-",alpha = 0.75)
+    ax[0].plot(zcens, shred_frac_bgsb_1,label = "BGS Bright",lw = 3,color = sample_colors["BGS_BRIGHT"],ls = "-")
+    ax[0].plot(zcens, shred_frac_bgsf_1,label = "BGS Faint",lw = 3,color = sample_colors["BGS_FAINT"],ls = "-")
+    ax[0].plot(zcens, shred_frac_lowz_1,label = "LOWZ",lw = 3,color = sample_colors["LOWZ"],ls = "-")
+    ax[0].plot(zcens, shred_frac_elg_1,label = "ELG",lw = 3,color = sample_colors["ELG"],ls = "-")
 
     ls = "-"
     lw = 3
     
-    ax[0].plot(ms_cens, shred_frac_bgsb_ms,ls= ls,lw = lw,color = sample_colors["BGS_BRIGHT"],alpha = 0.75)
-    ax[0].plot(ms_cens, shred_frac_bgsf_ms,ls= ls,lw = lw,color = sample_colors["BGS_FAINT"],alpha = 0.75)
-    ax[0].plot(ms_cens, shred_frac_lowz_ms,ls= ls,lw = lw,color = sample_colors["LOWZ"],alpha = 0.75)
-    ax[0].plot(ms_cens, shred_frac_elg_ms,ls= ls,lw = lw,color = sample_colors["ELG"],alpha = 0.75)
-    ax[0].plot([0,1],[0,1],ls=ls, lw = lw, color = "k", label = r"FRACFLUX cut")
+    ax[1].plot(ms_cens, shred_frac_bgsb_ms,ls= ls,lw = lw,color = sample_colors["BGS_BRIGHT"])
+    ax[1].plot(ms_cens, shred_frac_bgsf_ms,ls= ls,lw = lw,color = sample_colors["BGS_FAINT"])
+    ax[1].plot(ms_cens, shred_frac_lowz_ms,ls= ls,lw = lw,color = sample_colors["LOWZ"])
+    ax[1].plot(ms_cens, shred_frac_elg_ms,ls= ls,lw = lw,color = sample_colors["ELG"])
 
-    # ls = "--"
-    # lw = 1.5
-    # ax[0].plot(ms_cens, shred_frac_bgsb_ms_cnn,ls= ls,lw = lw,color = bgs_col,alpha = 0.75)
-    # ax[0].plot(ms_cens, shred_frac_bgsf_ms_cnn,ls= ls,lw = lw,color = "r",alpha = 0.75)
-    # ax[0].plot(ms_cens, shred_frac_lowz_ms_cnn,ls= ls,lw = lw,color = lowz_col,alpha = 0.75)
-    # ax[0].plot(ms_cens, shred_frac_elg_ms_cnn,ls= ls,lw = lw,color = elg_col,alpha = 0.75)
-    # ax[0].plot([0,1],[0,1],ls=ls, lw = lw, color = "k", label = r"FRACFLUX cut, $p_{\rm CNN} \geq 0.3$")
+    ax[2].plot(mr_cens, shred_frac_bgsb_magr,ls= ls,lw = lw,label = "BGS Bright",color = sample_colors["BGS_BRIGHT"])
+    ax[2].plot(mr_cens, shred_frac_bgsf_magr,ls= ls,lw = lw,label = "BGS Faint",color = sample_colors["BGS_FAINT"])
+    ax[2].plot(mr_cens, shred_frac_lowz_magr,ls= ls,lw = lw,label = "LOWZ",color = sample_colors["LOWZ"])
+    ax[2].plot(mr_cens, shred_frac_elg_magr,ls= ls,lw = lw,label = "ELG",color = sample_colors["ELG"])
 
+
+    ax[2].legend(fontsize = 11,ncol = 2)
     
-    ax[1].legend(fontsize = 12)
-    # ax[0].legend(fontsize = 12)
-    
-    ax[1].set_xlim([0,0.1])
-    
-    ax[0].set_xlim([6,9.125])
+    ax[0].set_xlim([0,0.1])
+    ax[1].set_xlim([6,9])
+    ax[2].set_xlim([18,22.25])
     
     for axi in ax:
-        axi.set_ylim([0,1])
+        axi.set_ylim([1e-2,1])
+        axi.set_yscale("log")
         
-    ax[1].set_xlabel(r"Redshift",fontsize = 15)
-    ax[0].set_xlabel(r"LogM$^{\rm DR9}_{\star}$",fontsize = 15)
+    ax[0].set_xlabel(r"Redshift",fontsize = 15)
+    ax[1].set_xlabel(r"LogM$^{\rm DR9}_{\star}$",fontsize = 15)
+    ax[2].set_xlabel(r"r-band magnitude",fontsize = 15)
     
-    ax[1].set_ylabel(r"Likely Fragment Fraction",fontsize = 14)
+    
     ax[0].set_ylabel(r"Likely Fragment Fraction",fontsize = 14)
+    ax[1].set_ylabel(r"Likely Fragment Fraction",fontsize = 14)
+    ax[2].set_ylabel(r"Likely Fragment Fraction",fontsize = 14)
+    
     
     # plt.grid(ls=":",color = "lightgrey",alpha = 0.5)
     plt.savefig("/global/homes/v/virajvm/DESI2_LOWZ/quenched_fracs_nbs/paper_plots/frac_shreds.pdf", bbox_inches="tight")
     plt.close()
         
     return 
+
+    
 
 
 def get_offsets(file_path = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_BGS_BRIGHT_shreds_catalog_w_aper_mags.fits"):
@@ -1595,7 +1483,62 @@ def scarlet_aper_comp():
     plt.savefig("/global/homes/v/virajvm/DESI2_LOWZ/quenched_fracs_nbs/paper_plots/scarlet_aper_compare.pdf",bbox_inches="tight")
     plt.close()
 
+
+def make_mur_mstar_plot(tot_cat):
+
+    from desi_lowz_funcs import plot_2d_dist
+
+    bgsb_mask = (tot_cat["SAMPLE"] == "BGS_BRIGHT")
+    bgsf_mask = (tot_cat["SAMPLE"] == "BGS_FAINT")
+    lowz_mask = (tot_cat["SAMPLE"] == "LOWZ")
+
+
+    cmap_bgsb = make_cmap(sample_colors["BGS_BRIGHT"] )
+
+
+    fig,ax = plt.subplots(1,1,figsize = (4,4))
+    plot_2d_dist(tot_cat[bgsb_mask]["LOGM_SAGA"], tot_cat[bgsb_mask]["MU_R"], 25, 25, 
+                    cmin=1.e-4, cmax=1.0, smooth=2, clevs=[0,0.68,0.95,0.997],ax=ax, bounds= [ 5.75,9.25,17.75,27 ],
+                color = cmap_bgsb,filled=True, label = "BGS Bright")
     
+    plot_2d_dist(tot_cat[bgsf_mask]["LOGM_SAGA"], tot_cat[bgsf_mask]["MU_R"], 25, 25, 
+                    cmin=1.e-4, cmax=1.0, smooth=2, clevs=[0.68,0.95,0.997],ax=ax, bounds= [ 5.75,9.25,17.75,27 ],
+                color = sample_colors["BGS_FAINT"],label = "BGS Faint")
+    
+    
+    plot_2d_dist(tot_cat[lowz_mask]["LOGM_SAGA"], tot_cat[lowz_mask]["MU_R"], 25, 25, 
+                    cmin=1.e-4, cmax=1.0, smooth=2, clevs=[0.68,0.95,0.997],ax=ax, bounds= [ 5.75,9.25,17.75,27 ],
+                color = sample_colors["LOWZ"], label = "LOWZ")
+    
+    ax.set_ylim([18,26])
+    ax.set_xlim([6,9])
+    ax.set_xlabel(r"LogM$_{\rm star}$",fontsize = 15)
+    ax.set_ylabel(r"$\mu_r$ (mag/arcsec$^2$)",fontsize = 15)
+    ax.legend(frameon=False,fontsize = 13, loc = "lower left")
+    plt.savefig("/global/homes/v/virajvm/DESI2_LOWZ/quenched_fracs_nbs/paper_plots/mstar_mur.pdf",bbox_inches="tight")
+
+    return
+
+
+def get_elg_zred_dist():
+    '''
+    Function that plots the total ELG redshift distribution
+    '''
+
+    zred_elgs = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/elg_all_redshifts.npy")
+    
+    plt.figure(figsize = (4,4))
+    plt.title(r"ELG redshift distribution",fontsize = 15)
+    plt.hist(zred_elgs,density=True,bins=100, color = "#88CCEE")
+    plt.xlim([0,1.6])
+    plt.fill_betweenx(y = [0,2], x1=0.8, x2 = 1.6,color = "grey",alpha = 0.4,edgecolor = "none" )
+    plt.ylim([0,1.75])
+    plt.ylabel(r"$n(z)$",fontsize = 15)
+    plt.xlabel(r"Redshift",fontsize = 15)
+    plt.savefig("/global/homes/v/virajvm/DESI2_LOWZ/quenched_fracs_nbs/paper_plots/elg_zred_dist.png",bbox_inches="tight",dpi=300)
+    plt.close()
+
+
 
 if __name__ == '__main__':
 
@@ -1618,6 +1561,8 @@ if __name__ == '__main__':
     # elg_shreds = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_ELG_shreds_catalog_w_aper_mags_w_pz.fits")
 
     # make_shred_frac_plot()
+
+    make_pcnn_completeness()
     
     # make_img_s_pcnn_panels()
 
@@ -1638,8 +1583,13 @@ if __name__ == '__main__':
     
     # make_stellar_mass_comparison_plot()
 
-    make_sky_density_plot()
+    # make_sky_density_plot()
     # 
+    
+    # tot_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_combine_catalog.fits")
+
+
+    # make_mur_mstar_plot(tot_cat)
 
     
 

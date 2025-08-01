@@ -384,7 +384,7 @@ def evaluate(model, val_loader, device='cuda'):
     return avg_loss, acc, auc  # we still return val loss to keep existing training loop working
 
 
-def get_inputs(tgid, file_path, image_path,verbose=False):
+def get_inputs(tgid, file_path, image_path, verbose=False):
     '''
     Given the input file, it reads the relevant files to get the relevant data
 
@@ -398,37 +398,38 @@ def get_inputs(tgid, file_path, image_path,verbose=False):
 
     save_path = f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/shred_classifier_input_images/image_{tgid}.npy"
 
-    if os.path.exists( save_path ):
-        cnn_input = np.load( save_path)
-    else:
-        #load the relevant data
-        tractor_model = np.load(file_path + "/tractor_source_model.npy")
-    
-        img_data = fits.open(image_path)
-        data_arr = img_data[0].data
-    
-        #we want to plot the original iamge 
-        resis = data_arr - tractor_model 
-    
-        #now we trim all these objects to be in the central 64x64
-        #actually, even though we want 64x64, we are doing some augmentations,and so we will choose a larger one
-        size = 96
-        start = (350 - size) // 2
-        end = start + size
-    
-        img = data_arr[:, start:end, start:end]
-        img_minus_s = resis[:, start:end, start:end]
-    
-        #now we stack these two 
-        cnn_input = np.vstack((img,img_minus_s))
-    
-        if verbose:
-            print(f"Input image shape is {cnn_input.shape}")
-    
-        ##we need to also get the 6 metadata objects for this!
-        #it is going to be fracflux_grz and mag_grz
-    
-        np.save(save_path, cnn_input)
+    # if os.path.exists( save_path ):
+    #     cnn_input = np.load( save_path)
+    # else:
+    #load the relevant data
+    tractor_model = np.load(file_path + "/tractor_source_model.npy")
+
+    img_data = fits.open(image_path)
+    data_arr = img_data[0].data
+
+    #we want to plot the original iamge 
+    resis = data_arr - tractor_model 
+
+    #now we trim all these objects to be in the central 64x64
+    #actually, even though we want 64x64, we are doing some augmentations,and so we will choose a larger one
+    size = 96
+    box_size = data_arr.shape[1]
+    start = (box_size - size) // 2
+    end = start + size
+
+    img = data_arr[:, start:end, start:end]
+    img_minus_s = resis[:, start:end, start:end]
+
+    #now we stack these two 
+    cnn_input = np.vstack((img,img_minus_s))
+
+    if verbose:
+        print(f"Input image shape is {cnn_input.shape}")
+
+    ##we need to also get the 6 metadata objects for this!
+    #it is going to be fracflux_grz and mag_grz
+
+    np.save(save_path, cnn_input)
 
     return cnn_input
 
@@ -458,12 +459,7 @@ def normalize_image(image, mean, std):
     return (image - mean_np[:, None, None]) / std_np[:, None, None]
 
 
-
-
-
 import matplotlib.pyplot as plt
-
-
 
 def plot_image_grid_split_channels(images, probs, true_labs, indices, rows=5, cols=5, file_name = "summary_plot"):
     """
@@ -528,227 +524,226 @@ if __name__ == '__main__':
     use_channels = 6 #3 or 6
     run_data_collect = False
 
-    if run_data_collect:
-        ##load the dataset
-        data = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_VI_labelled.fits")
-        #let us sort this so that target id is in increasing order and unique!!
-        _,uni_inds = np.unique(data["TARGETID"].data, return_index=True)
+    # if run_data_collect:
+    #     ##load the dataset
+    #     data = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_VI_labelled.fits")
+    #     #let us sort this so that target id is in increasing order and unique!!
+    #     _,uni_inds = np.unique(data["TARGETID"].data, return_index=True)
     
-        data = data[uni_inds]
+    #     data = data[uni_inds]
     
-        ##let us get the corresponding meta data for these objects!
-        data_main = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v3.fits")
-        data_main = data_main["TARGETID","RA","DEC", "MAG_G","MAG_R","MAG_Z","FRACFLUX_G","FRACFLUX_R","FRACFLUX_Z","SAMPLE","FILE_PATH","SIGMA_G","SIGMA_R","SIGMA_Z"]
+    #     ##let us get the corresponding meta data for these objects!
+    #     data_main = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v4.fits")
+    #     data_main = data_main["TARGETID","RA","DEC", "MAG_G","MAG_R","MAG_Z","FRACFLUX_G","FRACFLUX_R","FRACFLUX_Z","SAMPLE","FILE_PATH","SIGMA_G","SIGMA_R","SIGMA_Z"]
     
-        _,uni_inds_main = np.unique(data_main["TARGETID"].data, return_index=True)
+    #     _,uni_inds_main = np.unique(data_main["TARGETID"].data, return_index=True)
     
-        data_main = data_main[uni_inds_main]
+    #     data_main = data_main[uni_inds_main]
     
-        #check if the matching is indeed good
-        print_maxabs_diff(data["TARGETID"].data, data_main["TARGETID"].data)
-        print_maxabs_diff(data["RA"].data, data_main["RA"].data)
+    #     #check if the matching is indeed good
+    #     print_maxabs_diff(data["TARGETID"].data, data_main["TARGETID"].data)
+    #     print_maxabs_diff(data["RA"].data, data_main["RA"].data)
     
-        #update our catalog with the metadata values!
-        ##ADD SAMPLE INFO AND MAG TO SEE IF THIS IMRPOVES 
+    #     #update our catalog with the metadata values!
+    #     ##ADD SAMPLE INFO AND MAG TO SEE IF THIS IMRPOVES 
         
-        for b in "GRZ":
-            data[f"MAG_{b}"] = data_main[f"MAG_{b}"]
-            data[f"FRACFLUX_{b}"] = data_main[f"FRACFLUX_{b}"]
-        data["SAMPLE"] = data_main["SAMPLE"]
-        data["FILE_PATH"] = data_main["FILE_PATH"]
+    #     for b in "GRZ":
+    #         data[f"MAG_{b}"] = data_main[f"MAG_{b}"]
+    #         data[f"FRACFLUX_{b}"] = data_main[f"FRACFLUX_{b}"]
+    #     data["SAMPLE"] = data_main["SAMPLE"]
+    #     data["FILE_PATH"] = data_main["FILE_PATH"]
 
-        ## let us only look at objects that have at least two SIGMA > 5. This is only relevant for the ELGs!
+    #     ## let us only look at objects that have at least two SIGMA > 5. This is only relevant for the ELGs!
         
-        #get the labelled data set!
-        data_label = data[(data["IS_SHRED_VI"] == "good") | (data["IS_SHRED_VI"] == "fragment")]
+    #     #get the labelled data set!
+    #     data_label = data[(data["IS_SHRED_VI"] == "good") | (data["IS_SHRED_VI"] == "fragment")]
 
-        metadata_cols = ["MAG_G","MAG_R","MAG_Z","FRACFLUX_G","FRACFLUX_R","FRACFLUX_Z"]
-        # Convert table to numpy array (shape: num_samples x num_features)
-        metadata_array = np.vstack([data_label[col] for col in metadata_cols]).T
-        print(f"Shape of entire metadata inputs = {np.shape(metadata_array)}")
-        #Scale the metadata
-        scaler = StandardScaler()
-        metadata_scaled = scaler.fit_transform(metadata_array)
+    #     metadata_cols = ["MAG_G","MAG_R","MAG_Z","FRACFLUX_G","FRACFLUX_R","FRACFLUX_Z"]
+    #     # Convert table to numpy array (shape: num_samples x num_features)
+    #     metadata_array = np.vstack([data_label[col] for col in metadata_cols]).T
+    #     print(f"Shape of entire metadata inputs = {np.shape(metadata_array)}")
+    #     #Scale the metadata
+    #     scaler = StandardScaler()
+    #     metadata_scaled = scaler.fit_transform(metadata_array)
 
-        ##save this data!!
-        np.save("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/metadata_scaled.npy", metadata_scaled)
+    #     ##save this data!!
+    #     np.save("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/metadata_scaled.npy", metadata_scaled)
 
-        data_label.write("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/data_labelled.fits",overwrite=True)
+    #     data_label.write("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/data_labelled.fits",overwrite=True)
 
-    else:
-        metadata_scaled = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/metadata_scaled.npy")
+    # else:
+    #     metadata_scaled = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/metadata_scaled.npy")
 
-        data_label = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/data_labelled.fits")
-
-    
-    print(f"Mean and std in one metadata axis = {np.mean(metadata_scaled[:,0]), np.std(metadata_scaled[:,0])}")
-
-    #let us get the labels now!!
-    #1 if it is shred and 0 if it is not a shred!
-    all_labels = np.zeros(len(data_label))
-    all_labels[ data_label["IS_SHRED_VI"] == "fragment"] = 1
-
-    print(f"Fragment number = {np.sum(all_labels)}, Good number = {len(all_labels[all_labels == 0])}")
+    #     data_label = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/data_labelled.fits")
 
     
-    if run_data_collect:
-        #now for this data_label, let us get all the input images!
-        all_input_images_unnorm = []
-        for i in trange(len(data_label)):
-            input_image_i = get_inputs(data_label["TARGETID"][i], data_label["FILE_PATH"][i],  data_label["IMAGE_PATH"][i],verbose=False)        
-            all_input_images_unnorm.append(input_image_i)
-    
-        all_input_images_unnorm = np.array(all_input_images_unnorm)
+    # print(f"Mean and std in one metadata axis = {np.mean(metadata_scaled[:,0]), np.std(metadata_scaled[:,0])}")
 
-        np.save("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/input_data_N_6_64_64.npy", all_input_images_unnorm)
+    # #let us get the labels now!!
+    # #1 if it is shred and 0 if it is not a shred!
+    # all_labels = np.zeros(len(data_label))
+    # all_labels[ data_label["IS_SHRED_VI"] == "fragment"] = 1
+
+    # print(f"Fragment number = {np.sum(all_labels)}, Good number = {len(all_labels[all_labels == 0])}")
+
     
-    else:
-        all_input_images_unnorm = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/input_data_N_6_64_64.npy")
+    # if run_data_collect:
+    #     #now for this data_label, let us get all the input images!
+    #     all_input_images_unnorm = []
+    #     for i in trange(len(data_label)):
+    #         input_image_i = get_inputs(data_label["TARGETID"][i], data_label["FILE_PATH"][i],  data_label["IMAGE_PATH"][i],verbose=False)        
+    #         all_input_images_unnorm.append(input_image_i)
+    
+    #     all_input_images_unnorm = np.array(all_input_images_unnorm)
+
+    #     np.save("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/input_data_N_6_64_64.npy", all_input_images_unnorm)
+    
+    # else:
+    #     all_input_images_unnorm = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/input_data_N_6_64_64.npy")
         
-    #crop to relevant number of channels needed for the CNN input!
-    all_input_images_unnorm_f = all_input_images_unnorm[ :, :use_channels, :, : ]
-    print(f"Shape of entire input image data = {all_input_images_unnorm_f.shape}")
+    # #crop to relevant number of channels needed for the CNN input!
+    # all_input_images_unnorm_f = all_input_images_unnorm[ :, :use_channels, :, : ]
+    # print(f"Shape of entire input image data = {all_input_images_unnorm_f.shape}")
     
-    num_samples = len(data_label)
-    # indices = list(range(num_samples))
-    indices = np.arange(len(all_labels))
+    # num_samples = len(data_label)
+    # # indices = list(range(num_samples))
+    # indices = np.arange(len(all_labels))
 
-    image_channel_mean, image_channel_std = compute_channel_mean_std(all_input_images_unnorm_f,use_channels = use_channels)
-    print("Image Channel means:", image_channel_mean)
-    print("Image Channel stds:", image_channel_std)
+    # image_channel_mean, image_channel_std = compute_channel_mean_std(all_input_images_unnorm_f,use_channels = use_channels)
+    # print("Image Channel means:", image_channel_mean)
+    # print("Image Channel stds:", image_channel_std)
 
-    # ##testing the image normalization!!
-    all_input_images = normalize_image(all_input_images_unnorm_f,  image_channel_mean, image_channel_std)
+    # # ##testing the image normalization!!
+    # all_input_images = normalize_image(all_input_images_unnorm_f,  image_channel_mean, image_channel_std)
 
-    for filti in range(use_channels):
-        print(f"Entire Shape = {all_input_images.shape}, Single Filter Shape = {all_input_images[:, filti, :, :].shape}, Filter Mean = {all_input_images[:, filti, :, :].mean()}, Filter Std = {all_input_images[:, filti, :, :].std()}")
+    # for filti in range(use_channels):
+    #     print(f"Entire Shape = {all_input_images.shape}, Single Filter Shape = {all_input_images[:, filti, :, :].shape}, Filter Mean = {all_input_images[:, filti, :, :].mean()}, Filter Std = {all_input_images[:, filti, :, :].std()}")
 
-    # 80% train, 20% test
-    train_size = int(0.8 * num_samples)
-    test_size = num_samples - train_size
+    # # 80% train, 20% test
+    # train_size = int(0.8 * num_samples)
+    # test_size = num_samples - train_size
     
-    train_indices, test_indices = random_split(indices, [train_size, test_size])
+    # train_indices, test_indices = random_split(indices, [train_size, test_size])
 
-    #get the transformations!!
-    train_transforms = transforms.Compose([
-    transforms.RandomHorizontalFlip(),  # Random horizontal flip
-    transforms.RandomVerticalFlip(),    # Random vertical flip
-    transforms.RandomRotation(10),      # Random rotation between -10 and 10 degrees
-    transforms.CenterCrop(64),          # Crop back to 64x64 after transformations
-    ])
-
-    # valid_transforms = transforms.Compose([
+    # #get the transformations!!
+    # train_transforms = transforms.Compose([
+    # transforms.RandomHorizontalFlip(),  # Random horizontal flip
+    # transforms.RandomVerticalFlip(),    # Random vertical flip
+    # transforms.RandomRotation(10),      # Random rotation between -10 and 10 degrees
     # transforms.CenterCrop(64),          # Crop back to 64x64 after transformations
     # ])
 
+    # # valid_transforms = transforms.Compose([
+    # # transforms.CenterCrop(64),          # Crop back to 64x64 after transformations
+    # # ])
 
-    #Create Datasets
-    train_dataset = ShredDataset(all_input_images, metadata_scaled, all_labels, train_indices,transform=train_transforms)
 
-    #let us just feed the validation dataset the cropped images!
-    size = 64
-    start = (96 - size) // 2
-    end = start + size
-    all_input_images = all_input_images[:,:, start:end, start:end]
-    print(all_input_images.shape)
-    val_dataset = ShredDataset(all_input_images, metadata_scaled, all_labels, test_indices,transform=None)
+    # #Create Datasets
+    # train_dataset = ShredDataset(all_input_images, metadata_scaled, all_labels, train_indices,transform=train_transforms)
+
+    # #let us just feed the validation dataset the cropped images!
+    # size = 64
+    # start = (96 - size) // 2
+    # end = start + size
+    # all_input_images = all_input_images[:,:, start:end, start:end]
+    # print(all_input_images.shape)
+    # val_dataset = ShredDataset(all_input_images, metadata_scaled, all_labels, test_indices,transform=None)
 
     
-
     use_meta_fc = True
     dropout_rate = 0.3
     num_cnn_layers = 4
     
-    #this with 6 channels has pretty good results!
-    # model = SmallShredCNN(metadata_dim=6, img_channels=use_channels, use_meta_fc=True, dropout_rate=0.3, num_cnn_layers=4)
+    # #this with 6 channels has pretty good results!
+    # # model = SmallShredCNN(metadata_dim=6, img_channels=use_channels, use_meta_fc=True, dropout_rate=0.3, num_cnn_layers=4)
     
-    if train_cnn:
-        #Create DataLoaders
-        train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-        val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
+    # if train_cnn:
+    #     #Create DataLoaders
+    #     train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+    #     val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
 
-        ##doing the k fold cross validation
-        cross_validate_kfold(SmallShredCNN, train_dataset, n_splits=5, batch_size=64, device='cuda', use_channels=use_channels, use_meta_fc=use_meta_fc, dropout_rate=dropout_rate, num_cnn_layers=num_cnn_layers)
+    #     ##doing the k fold cross validation
+    #     cross_validate_kfold(SmallShredCNN, train_dataset, n_splits=5, batch_size=64, device='cuda', use_channels=use_channels, use_meta_fc=use_meta_fc, dropout_rate=dropout_rate, num_cnn_layers=num_cnn_layers)
 
-        #now actually training the model on the full train dataset
-        model = SmallShredCNN(metadata_dim=6, img_channels=use_channels, use_meta_fc=use_meta_fc, dropout_rate=dropout_rate, num_cnn_layers=num_cnn_layers)
+    #     #now actually training the model on the full train dataset
+    #     model = SmallShredCNN(metadata_dim=6, img_channels=use_channels, use_meta_fc=use_meta_fc, dropout_rate=dropout_rate, num_cnn_layers=num_cnn_layers)
         
-        train(model, train_loader, val_loader, num_epochs=100, patience=5, lr=5e-5, device='cuda')
+    #     train(model, train_loader, val_loader, num_epochs=100, patience=5, lr=5e-5, device='cuda')
     
-        ##another thing is that I care most about completeness, what is the accuracy at which I am including majority of the shredded objects
-    else:
-        model = SmallShredCNN(metadata_dim=6, img_channels=use_channels, use_meta_fc=use_meta_fc, dropout_rate=dropout_rate, num_cnn_layers=num_cnn_layers)
+    #     ##another thing is that I care most about completeness, what is the accuracy at which I am including majority of the shredded objects
+    # else:
+    
+    
+    model = SmallShredCNN(metadata_dim=6, img_channels=use_channels, use_meta_fc=use_meta_fc, dropout_rate=dropout_rate, num_cnn_layers=num_cnn_layers)
     
     # Load the saved model state
     model.load_state_dict(torch.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/shred_best_model.pth"))
     model = model.to('cuda')
 
     #validation loop, to print the final model auc scores
-    val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
-    _, _, val_auc = evaluate(model, val_loader, "cuda")
-    print(f"Validation dataset AUC = {val_auc}")    
+    # val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
+    # _, _, val_auc = evaluate(model, val_loader, "cuda")
+    # print(f"Validation dataset AUC = {val_auc}")    
 
-    # Get pCNN scores for the validation dataset!
-    pred_pcnn, true_labels = get_pcnn_scores(model, val_dataset)
+    # # Get pCNN scores for the validation dataset!
+    # pred_pcnn, true_labels = get_pcnn_scores(model, val_dataset)
 
-    new_thresh = find_best_threshold(true_labels, pred_pcnn)
+    # new_thresh = find_best_threshold(true_labels, pred_pcnn)
 
-    ## I need to pass it the validation inds!!
-    plot_image_grid_split_channels(all_input_images_unnorm, pred_pcnn, true_labels, test_indices[:50], rows=10, cols=5)
+    # ## I need to pass it the validation inds!!
+    # plot_image_grid_split_channels(all_input_images_unnorm, pred_pcnn, true_labels, test_indices[:50], rows=10, cols=5)
 
-    ##I should plot the examples that had a bad prediction!
-    # Use threshold (change if you have a better one)
-    threshold = 0.5  
-    pred_classes = (pred_pcnn >= threshold).astype(int)
+    # ##I should plot the examples that had a bad prediction!
+    # # Use threshold (change if you have a better one)
+    # threshold = 0.5  
+    # pred_classes = (pred_pcnn >= threshold).astype(int)
     
-    test_wrong = (pred_classes != true_labels)
+    # test_wrong = (pred_classes != true_labels)
 
-    
-    test_indices = np.array(test_indices)
-    test_wrong = np.array(test_wrong.tolist())
+    # test_indices = np.array(test_indices)
+    # test_wrong = np.array(test_wrong.tolist())
 
-    plot_image_grid_split_channels(all_input_images_unnorm, pred_pcnn[test_wrong], true_labels[test_wrong], test_indices[test_wrong][:25], rows=5, cols=5, file_name = "wrong_labels")
+    # plot_image_grid_split_channels(all_input_images_unnorm, pred_pcnn[test_wrong], true_labels[test_wrong], test_indices[test_wrong][:25], rows=5, cols=5, file_name = "wrong_labels")
 
 
-    ##make plot of completeness of shred objects as a function of threshold. Can we find some threshold that will give us a high completeness sample of shredded objects?
+    # ##make plot of completeness of shred objects as a function of threshold. Can we find some threshold that will give us a high completeness sample of shredded objects?
 
-    thresh_grid = np.linspace(0., 0.999, 40)
+    # thresh_grid = np.linspace(0., 0.999, 40)
 
-    fragment_comp_frac = []
-    good_impure_frac = []
+    # fragment_comp_frac = []
+    # good_impure_frac = []
 
-    for thi in thresh_grid:
-        #compute what fraction of fragmented objects are above this cut!
-        tot_fragment = len(pred_pcnn[ (true_labels == 1) ])
+    # for thi in thresh_grid:
+    #     #compute what fraction of fragmented objects are above this cut!
+    #     tot_fragment = len(pred_pcnn[ (true_labels == 1) ])
 
-        tot_above_pcnn_fragment = len(pred_pcnn[ (pred_pcnn >= thi) & (true_labels == 1) ]) 
+    #     tot_above_pcnn_fragment = len(pred_pcnn[ (pred_pcnn >= thi) & (true_labels == 1) ]) 
 
-        tot_above_pcnn = len(pred_pcnn[ (pred_pcnn >= thi)])
-        tot_above_pcnn_good = len(pred_pcnn[ (pred_pcnn >= thi) & (true_labels == 0) ]) 
+    #     tot_above_pcnn = len(pred_pcnn[ (pred_pcnn >= thi)])
+    #     tot_above_pcnn_good = len(pred_pcnn[ (pred_pcnn >= thi) & (true_labels == 0) ]) 
         
 
-        #what fraction of objects are removed with a cut like this for usefulness of this approach purposes
-        #these will be the objects we call as not shreds!
-        frac_remove =  len(pred_pcnn[ pred_pcnn < thi ])/len(pred_pcnn)
+    #     #what fraction of objects are removed with a cut like this for usefulness of this approach purposes
+    #     #these will be the objects we call as not shreds!
+    #     frac_remove =  len(pred_pcnn[ pred_pcnn < thi ])/len(pred_pcnn)
 
-        fragment_comp_frac.append( tot_above_pcnn_fragment/tot_fragment )
-        good_impure_frac.append( tot_above_pcnn_good / tot_above_pcnn )
+    #     fragment_comp_frac.append( tot_above_pcnn_fragment/tot_fragment )
+    #     good_impure_frac.append( tot_above_pcnn_good / tot_above_pcnn )
         
-        print(f"Threshold = {thi:.2f}, Fragment Completeness = {tot_above_pcnn_fragment/tot_fragment}, Nfrag_tot = {tot_fragment}, Nfrag_above = {tot_above_pcnn_fragment}, Frac Remove = {frac_remove:.2f}" )
+    #     print(f"Threshold = {thi:.2f}, Fragment Completeness = {tot_above_pcnn_fragment/tot_fragment}, Nfrag_tot = {tot_fragment}, Nfrag_above = {tot_above_pcnn_fragment}, Frac Remove = {frac_remove:.2f}" )
 
 
-    #save these as numpy arrays
-    np.save("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/fragment_completeness.npy",np.array(fragment_comp_frac) )
-    np.save("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/good_impurity.npy",np.array(good_impure_frac) )
+    # #save these as numpy arrays
+    # np.save("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/fragment_completeness.npy",np.array(fragment_comp_frac) )
+    # np.save("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/good_impurity.npy",np.array(good_impure_frac) )
 
-    
-    
     ##### RUN CNN ON ENTIRE SHRED CATALOG
-    if False:
-        get_all_data = True
+    if True:
+        get_all_data = False
         
-        shred_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v3.fits")
-    
+        shred_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v4.fits")
+
+        print(f"Total number of shredded objects = {len(shred_cat)}")
     
         if get_all_data:
         
@@ -780,7 +775,9 @@ if __name__ == '__main__':
         else:
             all_shred_images_unnorm = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/all_shred_data_N_6_96_96.npy")
             all_metadata_scaled = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/all_shred_metadata_scaled.npy")
-    
+
+
+        print("Images finished generated/reading!")
             
         ##we normalize the image
         #crop to relevant number of channels needed for the CNN input!
@@ -797,7 +794,7 @@ if __name__ == '__main__':
         print("Image Channel stds:", all_image_channel_std)
     
         # ##testing the image normalization!!
-        all_shred_images = normalize_image(all_shred_images_unnorm_f,  image_channel_mean, image_channel_std)
+        all_shred_images = normalize_image(all_shred_images_unnorm_f,  all_image_channel_mean, all_image_channel_std)
     
         #let us just feed the validation dataset the cropped images!
         size = 64
@@ -814,7 +811,7 @@ if __name__ == '__main__':
         #we will now save this column in the catalog
         shred_cat["PCNN_FRAGMENT"] = full_pcnn
     
-        shred_cat.write("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v3.fits",overwrite=True)
+        shred_cat.write("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v4.fits",overwrite=True)
     
 
 

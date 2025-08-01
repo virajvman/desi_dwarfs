@@ -13,6 +13,7 @@ from tqdm import tqdm
 from astropy.io import fits
 from astropy.table import Table, vstack, join
 import astropy.coordinates as coord
+from scipy.ndimage import binary_dilation
 from astropy.table import Column
 from astropy import units as u
 from astropy.coordinates import SkyCoord
@@ -73,7 +74,102 @@ def mask_circle(array, x0, y0, r,value = 0):
     mask = (x - x0)**2 + (y - y0)**2 <= r**2
     array[mask] = value
     return array
-                    
+
+
+def get_binary_mask(mask_data_array, set_maskbits = [2,3,4]):
+    '''
+    Input is the mask bit array
+    
+    This function is originally taken from 
+    https://github.com/MultimodalUniverse/MultimodalUniverse/blob/d20de9b5d50564ca740e170030f807fd870d7f77/scripts/legacysurvey/build_parent_sample.py#L176C5-L176C13
+    '''
+
+    # Ensure input is an integer array suitable for bitwise operations
+    mask_data_array = np.asarray(mask_data_array)
+    if np.ma.isMaskedArray(mask_data_array):
+        mask_data_array = mask_data_array.filled(0)
+    mask_data_array = mask_data_array.astype(np.uint32)
+    
+    maskclean = np.ones_like(mask_data_array, dtype=bool)
+    #the 14,15 maskbits are related to i-band which we are not using so removed from below list
+    for bit in set_maskbits:
+        maskclean &= (mask_data_array & 2**bit)==0
+    
+    maskclean = maskclean.astype(mask_data_array.dtype)
+
+    return maskclean.astype(bool)
+    
+
+def make_new_saturated_mask(img_data, mask_data, invvar_data, noise_dict,plot=False):
+    '''
+    This function updates the mask constructed using the MASKBITS = 2,3,4.
+    Basically, it takes the original mask constructed, and then subselects the pixels from that to select!
+
+    Noise_dict is the dictionary of rms values per band
+    '''
+
+    #this is True for good pixels, False for bad pixrls
+    bin_mask = get_binary_mask(mask_data)
+
+    gimg,rimg,zimg = img_data[0],img_data[1],img_data[2]
+    
+    gr_img = gimg - rimg
+    rz_img = rimg - zimg
+    
+    sig_g_arr = gimg/noise_dict["g"]
+    sig_r_arr = rimg/noise_dict["r"] 
+    sig_z_arr = zimg/noise_dict["z"]
+
+    #construct the mask that has 200 sigma detection above rms in at least one band
+    sig_limit = 200
+    sig_grz_mask = (sig_g_arr > sig_limit) | (sig_r_arr > sig_limit) | (sig_z_arr > sig_limit)
+
+    color_mask = (np.abs(gr_img) > 2) | (np.abs(rz_img) > 2)
+
+    #we also mask pixels where the inverse variance is zero in at least one of the 3 bands
+    inv_mask = (invvar_data[0]== 0) | (invvar_data[1]== 0) | (invvar_data[2]== 0)
+
+    final_mask = ((~bin_mask) & sig_grz_mask) | ( (~bin_mask) & color_mask ) | (inv_mask)
+    ##once I have mask, how to grow it a bit!
+    # Apply dilation (repeat to grow by 2 pixels)
+    structure = np.ones((5, 5), dtype=bool)
+    final_mask_pd = binary_dilation(final_mask, structure=structure, iterations=4)
+
+    if plot:
+        grz_img = sdss_rgb(img_data)
+        #make a color color plot of these saturated pixels
+        fs = 18
+        fig,ax = plt.subplots(1,6,figsize = (30,5),sharex=True,sharey=True)
+        plt.subplots_adjust(wspace=0.1)
+        ax[0].set_title("grz data",fontsize = fs)
+        ax[0].imshow(grz_img)
+        ax[1].set_title("Original Mask",fontsize = fs)
+        ax[1].imshow(bin_mask)
+        ax[2].set_title("Updated Mask, Pre-Dilate",fontsize = fs)
+        ax[2].imshow(final_mask)
+        grz_img_copy = np.copy(grz_img)
+        grz_img_copy[~bin_mask] = 0
+        ax[3].set_title("Original Mask grz data",fontsize = fs)
+        ax[3].imshow(grz_img_copy)
+        grz_img_copy = np.copy(grz_img)
+        grz_img_copy[final_mask] = 0
+        ax[4].set_title("Updated Mask, Pre Dilate",fontsize = fs)
+        ax[4].imshow(grz_img_copy)
+        grz_img_copy = np.copy(grz_img)
+        grz_img_copy[final_mask_pd] = 0
+        ax[5].set_title("Updated Mask, Post Dilate",fontsize = fs)
+        ax[5].imshow(grz_img_copy)
+        plt.show()
+    
+    #we invert it as we want to return a mask of all the good pixels!    
+    return ~final_mask_pd
+    
+
+
+
+
+
+
 def run_aperture_pipe(input_dict):
     '''
     Function to redo the aperture via aperture photometry
@@ -94,7 +190,6 @@ def run_aperture_pipe(input_dict):
     
     '''
 
-    ## DONE: I THINK SELECTION CUT IS THAT MORE THAN 2 ABOVE 0.2
     ## TO DO: WHY IS THE GAIA STAR RADIUS SLIGHTLY DIFFERENT THAN THE RONGPU FORMULA RADIUS?
 
     save_path = input_dict["save_path"]
@@ -105,20 +200,21 @@ def run_aperture_pipe(input_dict):
     source_redshift  = input_dict["redshift"]
     wcs  = input_dict["wcs"]
     data_arr  = input_dict["image_data"]
+    mask_arr = input_dict["mask_data"]
+    invvar_arr = input_dict["invvar_data"]
     source_cat_f = input_dict["source_cat"]
     org_mag_g = input_dict["org_mag_g"]
     overwrite = input_dict["overwrite"]
     pcnn_val = input_dict["pcnn_val"]
     npixels_min = input_dict["npixels_min"]
     threshold_rms_scale = input_dict["threshold_rms_scale"]
+    image_size = input_dict["image_size"]
         
     verbose=False
 
     if verbose:
         print(source_ra, source_dec)
-    
-    use_photoz = False
-    
+        
     bstar_tuple = input_dict["bright_star_info"]
 
     sga_tuple = input_dict["sga_info"]
@@ -127,7 +223,7 @@ def run_aperture_pipe(input_dict):
     
     #this is the bright star info that was used to compute the STARDIST, STARFDIST etc.
     #the radius is given in arcsecs and will be plotted as a circle for reference
-    bstar_ra, bstar_dec, bstar_radius, bstar_fdist = bstar_tuple[0], bstar_tuple[1], bstar_tuple[2], bstar_tuple[3]
+    bstar_ra, bstar_dec, bstar_radius, bstar_fdist, bstar_mag = bstar_tuple[0], bstar_tuple[1], bstar_tuple[2], bstar_tuple[3], bstar_tuple[4]
 
     ##filter the source cat for objects with nan values
     ##we do not do this for the scarlet pipeline, and hence we do it separately over here
@@ -136,6 +232,20 @@ def run_aperture_pipe(input_dict):
     source_cat_f = source_cat_f[ ~np.isnan(source_cat_f["g-r_err"]) &  ~np.isnan(source_cat_f["r-z_err"]) &  ~np.isinf(source_cat_f["g-r_err"]) &  ~np.isinf(source_cat_f["r-z_err"]) ]
     source_cat_f = source_cat_f[ ~np.isnan(source_cat_f["g-r"]) &  ~np.isnan(source_cat_f["r-z"]) &  ~np.isinf(source_cat_f["g-r"]) &  ~np.isinf(source_cat_f["r-z"]) ]
 
+    #get the pixel locations of these sources 
+    sources_f_xpix,sources_f_ypix,_ = wcs.all_world2pix(source_cat_f['ra'].data, source_cat_f['dec'].data, 0,1)
+
+    source_cat_f["xpix"] = sources_f_xpix
+    source_cat_f["ypix"] = sources_f_ypix
+
+    #now we remove the soruces that are lie on the edge
+    edge_remove_mask = (source_cat_f["xpix"].data.astype(int) == image_size) | (source_cat_f["ypix"].data.astype(int) == image_size)
+
+    source_cat_f = source_cat_f[~edge_remove_mask]
+
+    sources_f_xpix = sources_f_xpix[~edge_remove_mask]
+    sources_f_ypix = sources_f_ypix[~edge_remove_mask]
+    
     gmm_file_zgrid = np.arange(0.001, 0.525,0.025)
 
     #bool variable that decides if the rephoto pipeline should be run
@@ -249,23 +359,17 @@ def run_aperture_pipe(input_dict):
         conf_levels = { "38":lvls[0]*Znorm,"68":lvls[1]*Znorm,"86":lvls[2]*Znorm,"95.4":lvls[3]*Znorm,"98.7":lvls[4]*Znorm} #,"99.7":lvls[5]*Znorm}
     
         #let us save these levels for future reference!
-        box_size = 350
+        box_size = image_size
     
         data = { "g": data_arr[0], "r": data_arr[1], "z": data_arr[2]}
 
         #make the rgb image
         rgb_stuff = sdss_rgb([data["g"],data["r"],data["z"]], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
-    
-        #get the pixel locations of these sources 
-        sources_f_xpix,sources_f_ypix,_ = wcs.all_world2pix(source_cat_f['ra'].data, source_cat_f['dec'].data, 0,1)
 
-        source_cat_f["xpix"] = sources_f_xpix
-        source_cat_f["ypix"] = sources_f_ypix
 
         #first estimate the background error to use in aperture photometry
         noise_dict = {}
 
-        ##SOMETHING TO CHECK IS IF THE FITS FILE I AM READING HAVE ANY INFORMATION ON THE BACKGROUND RMS LEVEL
         rms_estimator = MADStdBackgroundRMS()
         ##estimate the background rms in each band!
         for bii in ["g","r","z"]:        
@@ -280,15 +384,15 @@ def run_aperture_pipe(input_dict):
         tot_rms = np.sqrt( noise_dict["g"]**2 + noise_dict["r"]**2 + noise_dict["z"]**2 )
         
         #parameters to think a bit carefully about
-        # npixels_min = 20
         threshold = threshold_rms_scale * tot_rms
 
         kernel = make_2dgaussian_kernel(3.0, size=5)  # FWHM = 3.0
         
+    
         tot_data = np.sum(data_arr, axis=0)
 
-        if np.shape(tot_data) != (350,350):
-            raise ValueError("Dimensions of summed grz image are not (350,350)")
+        if np.shape(tot_data) != (image_size,image_size):
+            raise ValueError(f"Dimensions of summed grz image are not ({image_size},{image_size})")
         
         convolved_tot_data = convolve( tot_data, kernel )
 
@@ -296,7 +400,7 @@ def run_aperture_pipe(input_dict):
         segment_map = detect_sources(convolved_tot_data, threshold, npixels=npixels_min) 
         
     
-        ##do deblending per band image
+        ##do deblending per band image 16
         segm_deblend = deblend_sources(convolved_tot_data, segment_map,
                                    npixels=npixels_min,nlevels=16, contrast=0.01,
                                    progress_bar=False)
@@ -318,7 +422,9 @@ def run_aperture_pipe(input_dict):
         #is it possible that the source lies on background and not in one of the segmented islands?
         #this is possible if the source was located in the very faint extremeties which is possible for ELGs
         #In this case, I think just keep the aperture as is and just having fixed apertures is the way to go?
+        lie_on_segment_island = 1
         if island_num == 0:
+            lie_on_segment_island = 0
             print_stage(f"Following source does not lie on a segment island, TGID:{source_tgid}")
             segment_map_v2, island_num, fiber_xpix, fiber_ypix = find_nearest_island(segment_map_v2, fiber_xpix, fiber_ypix)
     
@@ -343,9 +449,13 @@ def run_aperture_pipe(input_dict):
 
         #just in case of the wild possibility that our main bright star is not located in the catalog, we just mask it again here!
         if bstar_ra != 99:
-            # aperture_mask[ segm_deblend_v3 == source_cat_stars_inseg["new_deblend_id"][j] ] = 0  
+            mask_radius_frac = 0.5
+            if bstar_mag < 11:
+                mask_radius_frac = 0.5
             #returning an updating aperture mask where the pixels within 0.5 of star radius are masked!
-            star_mask = mask_circle(star_mask, bstar_xpix,bstar_ypix, 0.5 * bstar_radius_pix, value = 1)
+            #If the star is very bright, like mag < 10, then we will mask 0.75 of the radius!
+            
+            star_mask = mask_circle(star_mask, bstar_xpix,bstar_ypix, mask_radius_frac * bstar_radius_pix, value = 1)
             #this ensures that we are just masking the stellar region and not the whole deblended segment!
         else:
             #if no bright star exists, then we do not do this!
@@ -365,12 +475,24 @@ def run_aperture_pipe(input_dict):
             else:
                 #compute its radius and mask it! It is returned in degrees and so convert to arcseconds
                 star_radius_i_as =  mask_radius_for_mag( float(source_cat_all_stars["max_mag"][j])) * 3600
-                star_radius_i_pix = 0.5*star_radius_i_as/0.262
+
+                #same thing as before
+                mask_radius_frac = 0.5
+                if source_cat_all_stars["max_mag"][j] < 11:
+                    mask_radius_frac = 0.5
+                    
+                star_radius_i_pix = mask_radius_frac*star_radius_i_as/0.262
                 #mask it now!
                 star_mask = mask_circle(star_mask, source_cat_all_stars["xpix"][j], source_cat_all_stars["ypix"][j], star_radius_i_pix, value = 1 )                 
 
         star_mask = star_mask.astype(bool)
         ## the star mask is ready!!!
+
+        #construct the mask from the saturated pixels from bright spikes around stars
+        # good_pixel_mask = get_binary_mask(mask_arr,set_maskbits=[5,6,7])
+        good_pixel_mask = get_binary_mask(mask_arr,set_maskbits=[2,3,4])
+        #update it!
+        good_pixel_mask = make_new_saturated_mask(data_arr, mask_arr, invvar_arr, noise_dict,plot=False)
 
         #note that in the below case, if the segment_map_v2 has been updated to be 99999, we will need to use the 
         #updated segment_map_v2 and not segment_map.data
@@ -384,8 +506,8 @@ def run_aperture_pipe(input_dict):
         #rest all remains 0
 
         #constructing the fiducial aperture for doing photometry
-        aperture_for_phot = get_elliptical_aperture( segment_map_v2, star_mask, 2, sigma = 3.5 )
-        aperture_for_phot_noscale = get_elliptical_aperture( segment_map_v2, star_mask, 2, sigma = 1 )
+        aperture_for_phot, _ = get_elliptical_aperture( segment_map_v2, star_mask, 2, sigma = 3.5 )
+        aperture_for_phot_noscale, _ = get_elliptical_aperture( segment_map_v2, star_mask, 2, sigma = 1 )
 
         
         #make a copy of the deblended array, this is the one where even the main segment is split into different deblended components
@@ -415,6 +537,9 @@ def run_aperture_pipe(input_dict):
         new_deblend_island_num = int(new_deblend_ids[deblend_ids == deblend_island_num])
  
         source_cat_f["new_deblend_id"] = -99*np.ones_like(sources_f_xpix)
+
+        #FOR BRIGHT STAR MASKING WE WANT TO THE EXTRA BITS MAYBE STARS ON EDGE, BUT FOR EVERYTHING ELSE WE DO NOT ....
+        # TO DO FIX THIS: 
 
         #what are the deblend segment ids of our DR9 sources in our region?
         for k in range(len(source_cat_f)):
@@ -446,6 +571,9 @@ def run_aperture_pipe(input_dict):
             #making all the stars = 0
             data_for_colors_i[star_mask] = 0
 
+            #we will also mask the spike regions in this part!!
+            data_for_colors_i[~good_pixel_mask] = 0
+            
             #saving this to the updated dictionary!
             data_for_colors[biii] = data_for_colors_i
 
@@ -512,9 +640,15 @@ def run_aperture_pipe(input_dict):
         source_cat_f["separations"] = separations
         
         source_cat_obs = source_cat_f[np.argmin(separations)]
-        
-        if np.min(separations) != 0:
-            raise ValueError("Distance between source and closest object in the photometry catalog in area =",np.min(separations))
+
+        #Due to some mistake in the LOWZ source catalog, and how the overlapping region was handled, for LOWZ the separations can be 
+        #non-zero in the overlapping region
+        if np.min(separations) > 1:
+            print("---")
+            print("Distance between source and closest object in the photometry catalog in area =",np.min(separations))
+            print(source_ra, source_dec)
+            print(save_path)
+            print("---")
         #get the original magnitude of the object
 
         #this magnitude is not milky way corrected
@@ -548,7 +682,6 @@ def run_aperture_pipe(input_dict):
         #we will be passing this to the curve of growth analysis later
         aperture_mask_no_bkg = np.ones_like( tot_data)
         
-
         #firstly mask all the identified segments that are not part of our main segment island!
         aperture_mask[segment_map_v2 == 1] = 0
 
@@ -556,21 +689,27 @@ def run_aperture_pipe(input_dict):
         ref_deblend_gr = float(all_segs_grs[new_deblend_island_num - 1])
         ref_deblend_rz = float(all_segs_rzs[new_deblend_island_num - 1])
 
+        #these minimum choices roughly line up with the lower end of the color-color contour
+        #they were originally 0.2 and 0, but becayse of the +0.1 later, we subtract -0.1 here to make sure the final cut is 0.2 and 0!
+        ref_deblend_gr = np.maximum(ref_deblend_gr, 0.1) 
+        ref_deblend_rz = np.maximum(ref_deblend_rz, -0.05) 
+
+        #select objects that are very blue that we want to keep
+        very_blue_keep_mask = (all_segs_rzs < -0.1) & (all_segs_grs < 0.5)
+
         #identifying segs that are redder than ref deblend seg by 0.1 or more in either direction. 0.1 is how much we are being lenient by
         #and has no nan and inf values 
         likely_other_seg_mask =  ( (all_segs_grs > (col_lenient + ref_deblend_gr)) | (all_segs_rzs > (col_lenient + ref_deblend_rz)) ) & ( ~np.isnan(all_segs_grs) ) & (~np.isnan(all_segs_rzs)) & ( ~np.isinf(all_segs_grs) ) & (~np.isinf(all_segs_rzs) )
-        
+
+        # exclude from this mask the sources with r-z < -0.1 and g-r < 0.5. These are objects that we find are associated 
+        #with very blue HII regions in galaxies and we want to keep them and not mask them!!
+        likely_other_seg_mask &= ~very_blue_keep_mask
+
         new_deblend_ids_likely_other_segs = new_deblend_ids[likely_other_seg_mask]        
         #this is an array of new deblend ids of the likely other deblend segments. This maps on to segm_deblend_v3 it seems
              
         #what is the probabiltiy that these other segments agree with the color-distribution??
         #score_samples returns the log likelihood and so we do np.exp to get the normal probabilities
-
-
-        ##THIS COLOR COLOR SELECTION CAN BE DONE A BIT BETTER ...
-
-        ##AM I ENFORCING THAT THE TARGETED SOURCE IS NOT BEING REMOVED?
-        ## I am imagine a case where if the entire island is the segment (no deblended segment) and if source has weird color then this can happen
 
         
         if len(all_segs_grs[likely_other_seg_mask]) == 0:
@@ -592,7 +731,6 @@ def run_aperture_pipe(input_dict):
             for i,indi in enumerate(new_deblend_ids_likely_other_segs):
                 ## we loop over each likely other segment and decide whether it is part of our galaxy or not 
                 
-                #we will use the criterion that if they are within 4sigma percentile contour of the color distribution, then we accept it
                 if Z_likely_segs[i] >= conf_levels["98.7"]:
                     # print("include")
                     #yay include!
@@ -647,8 +785,6 @@ def run_aperture_pipe(input_dict):
                 col_posi_sources_mp = np.vstack([ source_cat_nostars_inseg["g-r"].data - gr_err_nostars_inseg , source_cat_nostars_inseg["r-z"].data + rz_err_nostars_inseg])
                 col_posi_sources_mm = np.vstack([ source_cat_nostars_inseg["g-r"].data - gr_err_nostars_inseg , source_cat_nostars_inseg["r-z"].data - rz_err_nostars_inseg])
 
-
-                ##to do this, I will try all the 4 possible options, ++,+-,-+ etc. and if one hits inside contour, we consider it! 
                 Z_likely_sources_pp = np.exp(gmm.score_samples(col_posi_sources_pp.T))
                 Z_likely_sources_pm = np.exp(gmm.score_samples(col_posi_sources_pm.T))
                 Z_likely_sources_mp = np.exp(gmm.score_samples(col_posi_sources_mp.T))
@@ -659,81 +795,53 @@ def run_aperture_pipe(input_dict):
                 ##is the source bluer than than reference source segment? If so, we will accept it!!
                 is_in_blue_box = ( source_cat_nostars_inseg["g-r"].data - gr_err_nostars_inseg  < ref_deblend_gr + col_lenient ) & (source_cat_nostars_inseg["r-z"].data - rz_err_nostars_inseg < ref_deblend_rz + col_lenient)
 
+                #we will add the similar r-z<-0.1, g-r<0.5 color cut here for the HII regions!
+                very_blue_keep_mask_sources = (source_cat_nostars_inseg["r-z"].data- rz_err_nostars_inseg < -0.1) & (source_cat_nostars_inseg["g-r"].data - gr_err_nostars_inseg  < 0.5)
+
+                is_in_blue_box |= very_blue_keep_mask_sources
+
                 
                 for w in range(len(source_cat_nostars_inseg) ):
              
                     if is_in_blue_box[w]:
                         pass
                     else:
-                        #if the source is redder, we will investigate its photo-zs
-                        #unsure if I should choose 68 or 95 here
-                        #also low-redshift photo-zs are often not accurate and so if it within 0.15 within errors we good!
-                        #but we also want to look reliable photozs, or ones with, not too large errors
-                        #not sure how to be quantitative about this
-                        sra = source_cat_nostars_inseg["ra"][w]	
-                        sdec = source_cat_nostars_inseg["dec"][w]	
-                        
-                        ## important note : https://www.legacysurvey.org/dr9/files/#photo-z-sweeps-9-1-photo-z-sweep-brickmin-brickmax-pz-fits
-                        ## Although we provide photo-zs for all objects that meet the NOBS cut, 
-                        ## the brightest objects have the most reliable photo-zs. 
-                        ## As a rule of thumb, objects brighter than 𝑧-band magnitude of 21 are mostly reliable, 
-
-
-                        ##WE ARE NOT USING PHOTO-ZS ANY LONGER!
-                        zphot_low = np.zeros_like(len(source_cat_nostars_inseg))  # source_cat_nostars_inseg["Z_PHOT_L95"][w]
-                        if zphot_low <= 0.1:
-                            #the idea here is that at low-redshift, photo-zs are not accurate
-                            zphot_low = 0
-                        zphot_high = 100 + np.zeros_like(len(source_cat_nostars_inseg)) # source_cat_nostars_inseg["Z_PHOT_U95"][w]	
-                        
-                        # zphot_std = source_cat_nostars_inseg["Z_PHOT_STD"][w]	
-                        # zphot_mean = source_cat_nostars_inseg["Z_PHOT_MEAN"][w]	
-
-                        #if object is fainter than z band 21, we just make its zphot range very large so that it is like it its photoz is not being used
-                        if source_cat_nostars_inseg["mag_z"][w] >= 21:
-                            zphot_low = 0
-                            zphot_high = 100
-
-                        
-                        if use_photoz:
-                            #if we are using photo-zs to separated objects, then 
-                            in_zphot_range = (zphot_low <= source_redshift) & (source_redshift <= zphot_high)
-                        else:
-                            #if we are not using photo-zs to separated objects
-                            in_zphot_range = True
-
-                        if (in_zphot_range & (Z_likely_sources_max[w] >= conf_levels["98.7"])) | ( (zphot_low == -99) & (zphot_high == -99) & (Z_likely_sources_max[w] >= conf_levels["98.7"]) ) : 
-                            # if the redshift is in 95% photoz interval + good colors
-                            #or if the source has no photoz but good colors
-                            #then we consider this source as part of our galaxies
+                       
+                        if Z_likely_sources_max[w] >= conf_levels["98.7"]: 
                             pass
                         else:
-                            aperture_mask[ segm_deblend_v3 == source_cat_nostars_inseg["new_deblend_id"][w] ] = 1
-                            aperture_mask_no_bkg[ segm_deblend_v3 == source_cat_nostars_inseg["new_deblend_id"][w] ] = 1
-                            
-                            ##adding flux of that source to the 
-                            
-                            tot_subtract_sources_g += 10**( (22.5  -  source_cat_nostars_inseg["mag_g"][w] )/2.5 )
-                            tot_subtract_sources_r += 10**( (22.5  -  source_cat_nostars_inseg["mag_r"][w] )/2.5 )
-                            tot_subtract_sources_z += 10**( (22.5  -  source_cat_nostars_inseg["mag_z"][w] )/2.5 )
-                            
+                            # print(w, source_cat_nostars_inseg["g-r"].data[w] - gr_err_nostars_inseg[w], source_cat_nostars_inseg["r-z"].data[w] - rz_err_nostars_inseg[w] ,  Z_likely_sources_max[w],conf_levels["98.7"]   ) 
 
-                             #plot this source for reference on the mask plot!!
-                            ax[4].scatter( [source_cat_nostars_inseg["xpix"][w]] , [source_cat_nostars_inseg["ypix"][w] ],  color = "k", marker = source_cat_nostars_inseg["marker"][w],s= 20,  zorder = 1)
+                            ##the sources we want to subtract, we want to make sure they are not already being masked by the bright star masks?
+                            ##we can identify this based on whether the center of the source lies on top of the masked pixel region or not
 
-                            subtract_source_pos["x"].append(source_cat_nostars_inseg["xpix"][w])
-                            subtract_source_pos["y"].append(source_cat_nostars_inseg["ypix"][w])
-                            subtract_source_pos["marker"].append(source_cat_nostars_inseg["marker"][w])
+                            star_mask_val_w = star_mask[int(source_cat_nostars_inseg["ypix"][w]), int(source_cat_nostars_inseg["xpix"][w]) ]
 
-                            #saving the row index in the catalog corresponding to subtracted source
-                            source_cat_nostars_inseg_inds.append(w) 
+                            if star_mask_val_w == True:
+                                #do nothing, that is, do not subtract as it is already being subtracted by virtue of the stellar mass
+                                pass
+                            else:    
+                                aperture_mask[ segm_deblend_v3 == source_cat_nostars_inseg["new_deblend_id"][w] ] = 1
+                                aperture_mask_no_bkg[ segm_deblend_v3 == source_cat_nostars_inseg["new_deblend_id"][w] ] = 1
+                                
+                                ##adding flux of that source to the 
+                                
+                                tot_subtract_sources_g += 10**( (22.5  -  source_cat_nostars_inseg["mag_g"][w] )/2.5 )
+                                tot_subtract_sources_r += 10**( (22.5  -  source_cat_nostars_inseg["mag_r"][w] )/2.5 )
+                                tot_subtract_sources_z += 10**( (22.5  -  source_cat_nostars_inseg["mag_z"][w] )/2.5 )
+                                
+    
+                                 #plot this source for reference on the mask plot!!
+                                ax[4].scatter( [source_cat_nostars_inseg["xpix"][w]] , [source_cat_nostars_inseg["ypix"][w] ],  color = "k", marker = source_cat_nostars_inseg["marker"][w],s= 20,  zorder = 1)
+    
+                                subtract_source_pos["x"].append(source_cat_nostars_inseg["xpix"][w])
+                                subtract_source_pos["y"].append(source_cat_nostars_inseg["ypix"][w])
+                                subtract_source_pos["marker"].append(source_cat_nostars_inseg["marker"][w])
+    
+                                #saving the row index in the catalog corresponding to subtracted source
+                                source_cat_nostars_inseg_inds.append(w) 
                             
                             
-                            
-                            # Annotate the point
-                            if use_photoz:
-                                ax[4].text( source_cat_nostars_inseg["xpix"][w] , source_cat_nostars_inseg["ypix"][w] + 5,  "[%.2f,%.2f]"%(zphot_low, zphot_high),fontsize = 8, ha = "center")
-
 
             #########
             ## DEALING WITH STARS :) 
@@ -744,12 +852,19 @@ def run_aperture_pipe(input_dict):
             aperture_mask_no_bkg[star_mask] = 0            
 
 
-        tractor_model = np.load(save_path + "/tractor_source_model.npy")
-
+        if os.path.exists(save_path + "/tractor_source_model.npy"):
+            tractor_model = np.load(save_path + "/tractor_source_model.npy")
+        else:
+            tractor_model = np.zeros_like(data_arr)
+        
         #we will mask all the nans in the data
         aperture_mask[ np.isnan(tot_data) ] = 0
         aperture_mask_no_bkg[ np.isnan(tot_data) ] = 0
 
+        
+        aperture_mask[ ~good_pixel_mask ] = 0
+        aperture_mask_no_bkg[ ~good_pixel_mask ] = 0
+        
         #what about pixels that anomalous negative values?
         #we will mask pixels that are 5sigma lower than the background!
         aperture_mask[ data["g"] < -5*noise_dict["g"] ] = 0
@@ -807,8 +922,8 @@ def run_aperture_pipe(input_dict):
         ax_id = 5
         ax[ax_id].set_title("grz image w/aperture",fontsize = 13)
         ax[ax_id].imshow(rgb_stuff,origin="lower",zorder = 0)
-        #th box size is 350x350
-        ax[ax_id].text(65,325, "(%.3f,%.3f, z=%.3f)"%(source_ra,source_dec, source_redshift) ,color = "yellow",fontsize = 10)
+        #th box size is image_sizeximage_size, with fiducial being 350x350 pixels
+        ax[ax_id].text(image_size * (65/350),image_size * (325/350), "(%.3f,%.3f, z=%.3f)"%(source_ra,source_dec, source_redshift) ,color = "yellow",fontsize = 10)
 
         #get pixel co-ordinates of the source galaxy
         circle = patches.Circle( (fiber_xpix_org, fiber_ypix_org),3, color='orange', fill=False, linewidth=1,ls ="-")
@@ -952,6 +1067,11 @@ def run_aperture_pipe(input_dict):
         ax[ax_id].hlines(y = all_segs_rzs[new_deblend_island_num - 1] + col_lenient,xmin = -0.5, xmax= all_segs_grs[new_deblend_island_num - 1] + col_lenient,color = "k",lw = 1, ls = "-")
         ax[ax_id].vlines(x = all_segs_grs[new_deblend_island_num - 1] + col_lenient,ymin = -0.5, ymax= all_segs_rzs[new_deblend_island_num - 1] + col_lenient,color = "k",lw = 1, ls = "-")
 
+        ax[ax_id].hlines(y = ref_deblend_rz+col_lenient,xmin = -0.5, xmax= ref_deblend_gr + col_lenient,color = "k",lw = 0.75, ls = "--")
+        ax[ax_id].vlines(x = ref_deblend_gr + col_lenient,ymin = -0.5, ymax= ref_deblend_rz + col_lenient,color = "k",lw = 0.75, ls = "--")
+
+        
+
         ax[ax_id].set_xlim([ -0.5, 2])
         ax[ax_id].set_ylim([  -0.5, 1.5])
         ax[ax_id].tick_params(axis='both', labelsize=10)
@@ -966,7 +1086,7 @@ def run_aperture_pipe(input_dict):
         rgb_resis = sdss_rgb(resis, ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
         #we crop to the center 64 as that is our CNN input
         size = 64
-        start = (350 - size) // 2
+        start = (image_size - size) // 2
         end = start + size
 
         ax[ax_id].set_title(r"IMG")
@@ -1059,7 +1179,8 @@ def run_aperture_pipe(input_dict):
                 "save_path": save_path,
                 "save_summary_png": save_summary_png,
                 "img_path": img_path,
-                "closest_star_norm_dist": closest_star_norm_dist
+                "closest_star_norm_dist": closest_star_norm_dist,
+                "lie_on_segment_island": lie_on_segment_island
             }
         
         # return closest_star_dist, closest_star_mag, fidu_aper_mags, org_mags, save_path, save_summary_png, img_path
