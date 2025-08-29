@@ -1372,19 +1372,20 @@ def get_image_path(args):
     top_folder, tgid, ra, dec, size = args
     # top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_good"
 
-    if tgid in good_dict:
-        return good_dict[tgid]
-    elif tgid in shred_dict:
-        return shred_dict[tgid]
-    elif tgid in sga_dict:
-        return sga_dict[tgid]
-    else:
-        image_path = f"{top_folder}_cutouts/image_tgid_{tgid}_ra_{ra:.3f}_dec_{dec:.3f}.fits"
-        save_cutouts(ra, dec, image_path, session, size=size, timeout=30)
-        # if os.path.exists(image_path):
-        #     return image_path
-        # else:
-        return image_path
+    # if tgid in good_dict:
+    #     return good_dict[tgid]
+    # elif tgid in shred_dict:
+    #     return shred_dict[tgid]
+    # elif tgid in sga_dict:
+    #     return sga_dict[tgid]
+    # else:
+    #     raise ValueError(f"NO IMAGE PATH FOUND ANYWHERE?: {tgid}")
+    image_path = f"{top_folder}_cutouts/image_tgid_{tgid}_ra_{ra:.3f}_dec_{dec:.3f}.fits"
+    # save_cutouts(ra, dec, image_path, session, size=size, timeout=30)
+    # if os.path.exists(image_path):
+    #     return image_path
+    # else:
+    return image_path
 
 def parallel_run(target_list, n_processes=None):
     """

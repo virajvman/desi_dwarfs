@@ -247,6 +247,30 @@ def combine_sbimgs(sbimgs_hdus, data_wcs_2d):
 
     return np.array(final_inv_maps)
 
+
+
+def multi_panel_image(grz_img, model_img, residual_img, save_img_path):
+    '''
+    Function that makes a multi-panel image 
+    '''
+
+    fig,ax = make_subplots(ncol =3, nrow =1, col_spacing = 0.75, return_fig=True)
+
+    grz_rgb = sdss_rgb(grz_img)
+    model_rgb = sdss_rgb(model_img)
+    resi_rgb = sdss_rgb(residual_img)
+
+    ax[0].imshow(grz_rgb,origin="lower")
+    ax[1].imshow(model_rgb,origin="lower")
+    ax[2].imshow(resi_rgb,origin="lower")
+    
+    for axi in ax:
+        axi.set_xticks([])
+        axi.set_yticks([])
+    
+    plt.savefig(save_img_path,bbox_inches="tight")
+    plt.close()
+
     
 def run_scarlet_pipe(input_dict):
     '''
@@ -268,7 +292,32 @@ def run_scarlet_pipe(input_dict):
     wcs  = input_dict["wcs"]
     #data_arr is the C x N x N matrix with image data
     data_arr  = input_dict["image_data"]
+    invar_weights = input_dict["invvar_data"]
     source_cat_f = input_dict["source_cat"]
+    print(len(source_cat_f))
+    ## update this to remove duplicate stars!!
+    # extract gaia ids of the stars
+    signi_pm = ( np.abs(source_cat_f["pmra"]) * np.sqrt(source_cat_f["pmra_ivar"]) > 3) | ( np.abs(source_cat_f["pmdec"]) * np.sqrt(source_cat_f["pmdec_ivar"]) > 3)
+    is_star = (source_cat_f["ref_cat"] == "G2")  &  ( 
+    (source_cat_f['type'] == "PSF")  | signi_pm )
+    star_gaia_ids = np.array(source_cat_f["ref_id"])[is_star]
+    # find the *first* index for each unique gaia_id in the star subset
+    _, keep_idx_in_subset = np.unique(star_gaia_ids, return_index=True)
+    # convert those subset indices back into indices in the full table
+    star_indices = np.where(is_star)[0]
+    keep_indices = star_indices[keep_idx_in_subset]
+    # now build a new full-mask where duplicate-gaia stars are dropped
+    final_mask = np.ones(len(source_cat_f), dtype=bool)
+    # drop everything in (star_indices - keep_indices)
+    drop_indices = np.setdiff1d(star_indices, keep_indices)
+    final_mask[drop_indices] = False
+    # optionally create the filtered table
+    source_cat_f = source_cat_f[final_mask]
+
+    print(len(source_cat_f))
+
+    ######
+    
     overwrite = input_dict["overwrite"]
     #do we run our own peak finder, or use LS DR9 sources as peaks?
     run_own_detect = input_dict["run_own_detect"]
@@ -278,6 +327,17 @@ def run_scarlet_pipe(input_dict):
     aper_mag_g = input_dict["MAG_G_APERTURE_COG"]
     aper_mag_r = input_dict["MAG_R_APERTURE_COG"]
     aper_mag_z = input_dict["MAG_Z_APERTURE_COG"]
+
+    aper_xcen = input_dict["APER_XCEN"]
+    aper_ycen = input_dict["APER_YCEN"]
+    aper_semi_maj = input_dict["APER_SEMI_MAJ"]
+
+    aper_ba = input_dict["APER_BA"]
+    aper_theta = input_dict["APER_THETA"]
+
+
+    use_main_blob = False
+    print("USE MAIN BLOB IS", use_main_blob)
 
     verbose=True
 
@@ -311,42 +371,12 @@ def run_scarlet_pipe(input_dict):
             
     psf = np.array( [ new_psfs["g"], new_psfs["r"], new_psfs["z"] ] )
 
-    sbimg_path = save_path + "/grz_subimage.fits"
 
-    if os.path.exists(sbimg_path):
-        sbimg = fits.open(sbimg_path)
-
-        ## combine all the sub-images to compute the coadded inverse variance map
+    if np.shape(invar_weights) != np.shape(data_arr):
+        print(np.shape(invar_weights),  np.shape(data_arr) )
+        print(save_path)
+        raise ValueError("invariance maps and data arrays not of same size!")
         
-        data_wcs_2d = wcs.dropaxis(2)
-        invar_weights = combine_sbimgs(sbimg, data_wcs_2d)
-        # invar_weights = np.array([g_invar, r_invar, z_invar])
-
-        if np.shape(invar_weights) != np.shape(data_arr):
-            print(np.shape(invar_weights),  np.shape(data_arr) )
-            print(save_path)
-            raise ValueError("sub-image invariance map and data array not of the size!")
-            
-    else:
-        print("Sub-images did not exist before and are being downloaded!")
-        sbimg_path = save_path + "/grz_subimage.fits"
-        
-        with requests.Session() as session:
-            save_subimage(source_ra, source_dec, sbimg_path, session, size = 350)
-        try:
-            #hopefully the file was downloaded
-            sbimg = fits.open(sbimg_path)
-            invar_weights = combine_sbimgs(sbimg, data_wcs_2d)
-
-            if np.shape(invar_weights) != np.shape(data_arr):
-                print(np.shape(invar_weights),  np.shape(data_arr) )
-                print(save_path)
-                raise ValueError("sub-image invariance maps and data arrays not of same size!")
-            
-        except:
-            print("Sub-images were not downloaded successfully :( ")
-            return [np.nan,np.nan,np.nan], [np.nan,np.nan,np.nan], ""
-                
     if psf is None:
         #try download the psf again
 
@@ -361,131 +391,180 @@ def run_scarlet_pipe(input_dict):
         ########################################################
                 
         ## we do not want a very large box as it unnecessary more computation :)
-        #we will define a rectangular/square box that encapsulates the whole main segment times some factor 
+        #we will define a rectangular/square box that encapsulates the whole R4 aperture times some factor! 
         
          ## plot these sources on an image segmentation map to find the scarlet components associated with the dwarf
-        image_tot = np.sum(data_arr,axis=0)
 
-        noise_dict = {}
-        rms_estimator = MADStdBackgroundRMS()
-        ##estimate the background rms in each band!
-        for filter_ind, bii in enumerate(["g","r","z"]):        
-            # Apply sigma clipping
-            sigma_clip = SigmaClip(sigma=3.0,maxiters=5)
-            clipped_data = sigma_clip(data_arr[filter_ind])
-            # Estimate RMS
-            background_rms = rms_estimator(clipped_data)
-            noise_dict[bii] = background_rms
-
-        #the rms in the total image will be the rms in the 3 bands added in quadrature
-        tot_rms = np.sqrt( noise_dict["g"]**2 + noise_dict["r"]**2 + noise_dict["z"]**2 )
-        
-        threshold = 1.5 * tot_rms
-        
-        ##do image segmentation per band image
-        npixels_min = 10
-        from photutils.segmentation import detect_sources
-
-        #convolving the data
-        kernel = make_2dgaussian_kernel(3.0, size=5)  # FWHM = 3.0
-        convolved_image_tot = convolve( image_tot, kernel )
-
-        segment_map = detect_sources(convolved_image_tot, threshold, npixels=npixels_min) 
-        
-        #this also includes the zero, we will remove it later
-        all_segment_nums = np.unique(segment_map.data)
-        
-        ## find the sources that lie on the main segment
-        #get the segment number where the main source of interest lies in
-        fiber_xpix, fiber_ypix,_ = wcs.all_world2pix(source_ra, source_dec,0,1)
-        
-        island_num = segment_map.data[int(fiber_ypix),int(fiber_xpix)]
-        
-        #getting the ids of the other sources that are not the main island!
-        all_segment_nums_notmain = all_segment_nums[ (all_segment_nums != island_num) & (all_segment_nums != 0)]
-        
-        #any segment not part of this main segment is considered to be a different source 
-        #make a copy of the segment array
-        segment_map_v2 = np.copy(segment_map.data)
-
-        #pixels that are part of main segment island are called 2
-        segment_map_v2[segment_map.data == island_num] = 2
-        #all other segments that are not background are called 1
-        segment_map_v2[(segment_map.data != island_num) & (segment_map.data > 0)] = 1
-        #rest all remains 0
-        
-        # Find the coordinates of all pixels with the main segment island
-        y_coords, x_coords = np.where(segment_map_v2 == 2)
-
-        # Determine the bounding box
-        x_min, x_max = x_coords.min(), x_coords.max()
-        y_min, y_max = y_coords.min(), y_coords.max()
-
-
-        #scale this box by some value
-        xc = 0.5*(x_min + x_max)
-        yc = 0.5*(y_min + y_max)
-
-        ##this was originally 2
-        scale_fac = 1.5
-        x_min_new = np.maximum( int( xc - scale_fac*(xc - x_min) ), 0)
-        y_min_new = np.maximum( int( yc - scale_fac*(yc - y_min) ), 0)
-        x_max_new = np.minimum( int(scale_fac*(x_max - xc) + xc), 349)
-        y_max_new = np.minimum( int(scale_fac*(y_max - yc) + yc) , 349)
-
-        #draw a box showing this 
-        
-        fig,ax = plt.subplots(figsize = (7,7))
-        
-        ##plot the rgb image of the data
-        img_rgb =  sdss_rgb([data_arr[0],data_arr[1],data_arr[2]], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
-        
-        rect = patches.Rectangle(
-                (x_min_new - 0.5, y_min_new - 0.5),  # Rectangle lower-left corner
-                x_max_new - x_min_new + 1,  # Width
-                y_max_new - y_min_new + 1,  # Height
-                linewidth=2, edgecolor='lime', facecolor='none' )
-
-        # Add the rectangle to the plot
-        ax.add_patch(rect)
-
-        ax.imshow(img_rgb,origin="lower")
-        fig.savefig(save_path + "/bounding_box.pdf",bbox_inches="tight")
-        plt.close(fig)
- 
-        ##once this new box has been defined, shift everything into that co-ordinate frame 
-        ##plotting LS DR9 sources on this for reference
-        #get the pixel locations of these sources 
-        
-        #update the arrays as well that we will be using
-        data_arr = data_arr[:, y_min_new : y_max_new, x_min_new : x_max_new ]
-        invar_weights = invar_weights[ :, y_min_new : y_max_new, x_min_new : x_max_new  ]
-
-        ##we will save hte bounding box co-ordinates for later use!
-        np.save(save_path + "/bounding_box_coords.npy",[y_min_new, y_max_new, x_min_new, x_max_new]  )
-        
-        image_tot = np.sum(data_arr,axis=0)
-        segment_map_v2 = segment_map_v2[y_min_new : y_max_new, x_min_new : x_max_new]
-        segment_data_new = segment_map.data[y_min_new : y_max_new, x_min_new : x_max_new]
-        
-        #updating the segment nums
-        all_segment_nums = np.unique(segment_data_new)
-        #getting the ids of the other sources that are not the main island!
-        all_segment_nums_notmain = all_segment_nums[ (all_segment_nums != island_num) & (all_segment_nums != 0)]
-        
-        sources_f_xpix,sources_f_ypix,_ = wcs.all_world2pix(source_cat_f['ra'].data, source_cat_f['dec'].data, 0,1)    
-        sources_f_xpix,sources_f_ypix,W,H = transform_coords(sources_f_xpix,sources_f_ypix, x_min_new, x_max_new, y_min_new, y_max_new )
-
-                
-        box_mask = (sources_f_xpix >= 0) & (sources_f_xpix <= W) & (sources_f_ypix >= 0) & (sources_f_ypix <= H)
-        
-        #only keep the sources that lie in the box
-        source_cat_f = source_cat_f[box_mask]
-        sources_f_xpix = sources_f_xpix[box_mask]
-        sources_f_ypix = sources_f_ypix[box_mask]
-        
-        ##I want to first identify a reasonable size for the cutout, so I am not fitting more targets than I need to
+        if use_main_blob:
+            image_tot = np.sum(data_arr,axis=0)
     
+            noise_dict = {}
+            rms_estimator = MADStdBackgroundRMS()
+            ##estimate the background rms in each band!
+            for filter_ind, bii in enumerate(["g","r","z"]):        
+                # Apply sigma clipping
+                sigma_clip = SigmaClip(sigma=3.0,maxiters=5)
+                clipped_data = sigma_clip(data_arr[filter_ind])
+                # Estimate RMS
+                background_rms = rms_estimator(clipped_data)
+                noise_dict[bii] = background_rms
+    
+        
+            #the rms in the total image will be the rms in the 3 bands added in quadrature
+            tot_rms = np.sqrt( noise_dict["g"]**2 + noise_dict["r"]**2 + noise_dict["z"]**2 )
+            
+            threshold = 1.5 * tot_rms
+            
+            ##do image segmentation per band image
+            npixels_min = 10
+            from photutils.segmentation import detect_sources
+    
+            #load in the R4 aperture and its co-ordinate and size!
+    
+            #convolving the data
+            kernel = make_2dgaussian_kernel(3.0, size=5)  # FWHM = 3.0
+            convolved_image_tot = convolve( image_tot, kernel )
+    
+            segment_map = detect_sources(convolved_image_tot, threshold, npixels=npixels_min) 
+            
+            #this also includes the zero, we will remove it later
+            all_segment_nums = np.unique(segment_map.data)
+                
+            ## find the sources that lie on the main segment
+            #get the segment number where the main source of interest lies in
+            fiber_xpix, fiber_ypix,_ = wcs.all_world2pix(source_ra, source_dec,0,1)
+                
+            island_num = segment_map.data[int(fiber_ypix),int(fiber_xpix)]
+                
+            #getting the ids of the other sources that are not the main island!
+            all_segment_nums_notmain = all_segment_nums[ (all_segment_nums != island_num) & (all_segment_nums != 0)]
+                
+            #any segment not part of this main segment is considered to be a different source 
+            #make a copy of the segment array
+            segment_map_v2 = np.copy(segment_map.data)
+        
+            #pixels that are part of main segment island are called 2
+            segment_map_v2[segment_map.data == island_num] = 2
+            #all other segments that are not background are called 1
+            segment_map_v2[(segment_map.data != island_num) & (segment_map.data > 0)] = 1
+            #rest all remains 0
+    
+            plt.figure(figsize = (5,5))
+            plt.imshow(segment_map_v2,cmap="viridis",origin="lower")
+            plt.scatter( [fiber_xpix], [fiber_ypix],color = "r", marker = "x",s=50)
+            plt.savefig(save_path + "/scarlet_segment_map_v2.pdf",bbox_inches="tight")
+            plt.close()
+                
+            #get the bounding box
+            scale_fac = 2
+            x_min_new = int(aper_xcen - int(scale_fac*2*aper_semi_maj))
+            x_max_new = int(aper_xcen + int(scale_fac*2*aper_semi_maj))
+            y_min_new = int(aper_ycen - int(scale_fac*2*aper_semi_maj))
+            y_max_new = int(aper_ycen + int(scale_fac*2*aper_semi_maj))
+    
+            aper_xcen_local = aper_xcen - x_min_new
+            aper_ycen_local = aper_ycen - y_min_new
+    
+            #draw a box showing this             
+            
+            fig,ax = plt.subplots(figsize = (7,7))
+            
+            ##plot the rgb image of the data
+            img_rgb =  sdss_rgb([data_arr[0],data_arr[1],data_arr[2]], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
+            
+            rect = patches.Rectangle(
+                    (x_min_new - 0.5, y_min_new - 0.5),  # Rectangle lower-left corner
+                    x_max_new - x_min_new + 1,  # Width
+                    y_max_new - y_min_new + 1,  # Height
+                    linewidth=2, edgecolor='lime', facecolor='none' )
+    
+            # Add the rectangle to the plot
+            ax.add_patch(rect)
+    
+            ax.imshow(img_rgb,origin="lower")
+            fig.savefig(save_path + "/bounding_box.pdf",bbox_inches="tight")
+            plt.close(fig)
+    
+            #update the arrays as well that we will be using
+            data_arr = data_arr[:, y_min_new : y_max_new, x_min_new : x_max_new ]
+            invar_weights = invar_weights[ :, y_min_new : y_max_new, x_min_new : x_max_new  ]
+    
+            ##we will save hte bounding box co-ordinates for later use!
+            np.save(save_path + "/bounding_box_coords.npy",[y_min_new, y_max_new, x_min_new, x_max_new]  )
+            
+            image_tot = np.sum(data_arr,axis=0)
+            segment_map_v2 = segment_map_v2[y_min_new : y_max_new, x_min_new : x_max_new]
+            segment_data_new = segment_map.data[y_min_new : y_max_new, x_min_new : x_max_new]
+            
+            #updating the segment nums
+            all_segment_nums = np.unique(segment_data_new)
+            #getting the ids of the other sources that are not the main island!
+            all_segment_nums_notmain = all_segment_nums[ (all_segment_nums != island_num) & (all_segment_nums != 0)]
+            
+            sources_f_xpix,sources_f_ypix,_ = wcs.all_world2pix(source_cat_f['ra'].data, source_cat_f['dec'].data, 0,1)    
+            sources_f_xpix,sources_f_ypix,W,H = transform_coords(sources_f_xpix,sources_f_ypix, x_min_new, x_max_new, y_min_new, y_max_new )
+    
+                    
+            box_mask = (sources_f_xpix >= 0) & (sources_f_xpix <= W) & (sources_f_ypix >= 0) & (sources_f_ypix <= H)
+            
+            #only keep the sources that lie in the box
+            source_cat_f = source_cat_f[box_mask]
+            sources_f_xpix = sources_f_xpix[box_mask]
+            sources_f_ypix = sources_f_ypix[box_mask]
+        
+        else:
+            ##IN THIS CASE, WE JUST MODEL THE FULL IMAGE AND JUST DIFFERENTIATE BASED ON COLOR
+            ##no main blob is used to identify the main segment
+            new_cutout_size = 300
+            
+            #we use the DESI source as the center and just obtain some square cutout
+            x_min_new = int(aper_xcen - int(new_cutout_size))
+            x_max_new = int(aper_xcen + int(new_cutout_size))
+            y_min_new = int(aper_ycen - int(new_cutout_size))
+            y_max_new = int(aper_ycen + int(new_cutout_size))
+    
+            aper_xcen_local = aper_xcen - x_min_new
+            aper_ycen_local = aper_ycen - y_min_new
+
+            ##plot the rgb image of the data
+            fig,ax = plt.subplots(figsize = (7,7))
+            img_rgb =  sdss_rgb([data_arr[0],data_arr[1],data_arr[2]], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
+            rect = patches.Rectangle(
+                    (x_min_new - 0.5, y_min_new - 0.5),  # Rectangle lower-left corner
+                    x_max_new - x_min_new + 1,  # Width
+                    y_max_new - y_min_new + 1,  # Height
+                    linewidth=2, edgecolor='lime', facecolor='none' )
+            # Add the rectangle to the plot
+            ax.add_patch(rect)
+            ax.imshow(img_rgb,origin="lower")
+            fig.savefig(save_path + "/bounding_box.pdf",bbox_inches="tight")
+            plt.close(fig)
+
+             ##we will save hte bounding box co-ordinates for later use!
+            np.save(save_path + "/bounding_box_coords.npy",[y_min_new, y_max_new, x_min_new, x_max_new]  )
+
+            #update the arrays as well that we will be using
+            data_arr = data_arr[:, y_min_new : y_max_new, x_min_new : x_max_new ]
+            invar_weights = invar_weights[ :, y_min_new : y_max_new, x_min_new : x_max_new  ]
+
+            #the whole image is part of the main blob
+            segment_map_v2 = np.ones_like(data_arr[0]) * 2
+
+            all_segment_nums = np.array([2])
+            #getting the ids of the other sources that are not the main island!
+            all_segment_nums_notmain = np.array([])
+
+            sources_f_xpix,sources_f_ypix,_ = wcs.all_world2pix(source_cat_f['ra'].data, source_cat_f['dec'].data, 0,1)    
+            sources_f_xpix,sources_f_ypix,W,H = transform_coords(sources_f_xpix,sources_f_ypix, x_min_new, x_max_new, y_min_new, y_max_new )
+    
+            box_mask = (sources_f_xpix >= 0) & (sources_f_xpix <= W) & (sources_f_ypix >= 0) & (sources_f_ypix <= H)
+            
+            #only keep the sources that lie in the box
+            source_cat_f = source_cat_f[box_mask]
+            sources_f_xpix = sources_f_xpix[box_mask]
+            sources_f_ypix = sources_f_ypix[box_mask]
+
+        
         ##identifying the stars in the footprint
         ##these will be the stars that will be modeled as a psf source!
         #should I also include a magnitude limit as we want to specifically model the bright ones?
@@ -497,7 +576,8 @@ def run_scarlet_pipe(input_dict):
         
         is_star = (source_cat_f["ref_cat"] == "G2")  &  ( 
             (source_cat_f['type'] == "PSF")  | signi_pm 
-    ) 
+        ) 
+
         
         #what is the distance to the closest star from us?
         all_stars = source_cat_f[is_star]
@@ -611,6 +691,9 @@ def run_scarlet_pipe(input_dict):
             print(np.max(centers_arr,axis=1))
             print(np.shape(data_arr))
 
+
+        ## GET A MASK FOR WHETHER THE SCARLET FOOTPRINTS ARE ON THE IDENTIFIED SEGMENT OR NOT!
+        
         
         
         if np.sum(is_star) > 0:
@@ -622,7 +705,7 @@ def run_scarlet_pipe(input_dict):
 
             source_cat_is_star = source_cat_f[is_star]
             
-            source_star_max_mags = np.min( (  np.array(source_cat_is_star["gaia_phot_bp_mean_mag"]), np.array(source_cat_is_star["gaia_phot_rp_mean_mag"]),np.array(source_cat_is_star["gaia_phot_g_mean_mag"])    )       ,axis = 0)
+            source_star_max_mags = np.nanmin( (  np.array(source_cat_is_star["gaia_phot_bp_mean_mag"]), np.array(source_cat_is_star["gaia_phot_rp_mean_mag"]),np.array(source_cat_is_star["gaia_phot_g_mean_mag"])    )       ,axis = 0)
             
         
             ax[0].scatter( star_f_xpix, star_f_ypix, color = "w", marker = "*",s = 30)
@@ -635,29 +718,47 @@ def run_scarlet_pipe(input_dict):
             all_stars = np.array([star_f_ypix, star_f_xpix]).T
             
             all_cens = np.array([ centers_arr[:,0], centers_arr[:,1] ]).T
-    
-            # Compute pairwise distances between all points
+
+            #UPDATE CODE
+            # Compute pairwise distances between all stars and all centers:
+            #   distances[i, j] = distance from star i to center j
             distances = np.linalg.norm(all_stars[:, None, :] - all_cens[None, :, :], axis=-1)
             
-            # Find closest center that is within 5 pixels of a star
-            # Mask out distances >= 5
+            # Mask out distances >= 15
             distances[distances >= 15] = np.inf
+            
+            # Now, for each star -> find its closest center
+            closest_center_for_star = np.argmin(distances, axis=1)
+            min_distance_for_star   = np.min(distances, axis=1)
+            
+            # Filter valid star/center matches
+            valid = min_distance_for_star < np.inf
+            center_star_inds = closest_center_for_star[valid]
+            centers_stars = all_cens[center_star_inds]
+                        
+            # # Compute pairwise distances between all points
+            # distances = np.linalg.norm(all_stars[:, None, :] - all_cens[None, :, :], axis=-1)
+            
+            # # Find closest center that is within 5 pixels of a star
+            # # Mask out distances >= 5
+            # distances[distances >= 15] = np.inf
 
-            # Find the closest valid match
-            closest_indices = np.argmin(distances, axis=0)
-            min_distances = np.min(distances, axis=0)
+            # # Find the closest valid match
+            # closest_indices = np.argmin(distances, axis=0)
+            # min_distances = np.min(distances, axis=0)
 
             
-            # Filter valid matches
-            valid_matches = min_distances < np.inf
-            centers_stars = all_cens[valid_matches]
-            #I need the indices of these centers so can replace sources with psf
-            center_star_inds = np.where(valid_matches)[0]
+            # # Filter valid matches
+            # valid_matches = min_distances < np.inf
+            # centers_stars = all_cens[valid_matches]
+            # #I need the indices of these centers so can replace sources with psf
+            # center_star_inds = np.where(valid_matches)[0]
 
             #centers_stars are the centers that are stars and thus should be fit as stars
             if len(center_star_inds) != len(star_f_xpix):
-                print( "All stars are not matched to a center!" )
                 print(len(centers_stars),len(center_star_inds), len(star_f_xpix))
+                raise ValueError( "All stars are not matched to a center!" )
+                
 
         ##I want to make a separate plot just showing the identified peaks!
         fig_detect, axd = make_subplots(ncol = 1, nrow = 1, label_font_size = fontsize,plot_size = 4, return_fig = True)
@@ -724,10 +825,10 @@ def run_scarlet_pipe(input_dict):
 
                 ##use rongpu stellar radius here!
                 star_mag = source_star_max_mags[si]
+                print(star_mag)
                 radius_pix = 3600*mask_radius_for_mag(star_mag)/0.262
-                # radius = int(4/0.262)
 
-                print(si, star_f_xpix[si], star_f_ypix[si], radius_pix)
+                print(si, star_mag, star_f_xpix[si], star_f_ypix[si], radius_pix)
                 
                 #in general, need to be very careful when copying and modifying arrays
                 invar_weights_starmask = mask_star(invar_weights_starmask, ( star_f_xpix[si], star_f_ypix[si]) , radius_pix )
@@ -735,12 +836,23 @@ def run_scarlet_pipe(input_dict):
         else:
             invar_weights_starmask = invar_weights
 
+        print("Making an external source mask!")
+        invar_weights_bkgmask = invar_weights.copy()
+        
+        #the pixels we will mask is where segment map = 1
+        #could binary grow these masks a bit more if wanted to do some more masking!
+        invar_weights_bkgmask[:, segment_map_v2 == 1] = 0
+        #we want to the bkg mask to be both stars and bkg sources!!
+        invar_weights_bkgmask[invar_weights_starmask == 0] = 0
+        
         ##plotting the r-band inverse variance mask after doing the star masking 
         fig_invar1,ax_invar1 = make_subplots(ncol =1, nrow = 1, return_fig = True)
-        ax_invar1[0].imshow(invar_weights_starmask[1])
-        # ax_invar1[0].set_xticks([])
-        # ax_invar1[0].set_yticks([])
+        ax_invar1[0].imshow(invar_weights_starmask[1],origin="lower")
         fig_invar1.savefig(save_path + "/invar_rband_poststar.png",bbox_inches="tight")
+
+        fig_invar2,ax_invar2 = make_subplots(ncol =1, nrow = 1, return_fig = True)
+        ax_invar2[0].imshow(invar_weights_bkgmask[1],origin="lower")
+        fig_invar2.savefig(save_path + "/invar_rband_bkgmask.png",bbox_inches="tight")
 
         print("Fitting only extended sources, no stars and no lsbs")
         
@@ -793,22 +905,71 @@ def run_scarlet_pipe(input_dict):
         
         fig_nostar_nolsb.savefig(save_path + "/scarlet_scene_results_nolsb_nostar.png",bbox_inches="tight")
         plt.close(fig_nostar_nolsb)
+
+        model_nolsb = blend.get_model()
+        # Render it in the observed frame
+        model_nolsb_ = observation_nostar.render(model_nolsb)
+        # Compute residual
+        residual_nolsb = data_arr-model_nolsb_
+        #make a plot the grz image, the model and then the residuals 
+        multi_panel_image(data_arr, model_nolsb, residual_nolsb, save_path + "/scarlet_model_img_nolsb.pdf")
         
         #-------
         #Step 2: Update scarlet model by adding a LSB component, but still masking stars
+        #We fix the colors and position of the bkg sources, we also mask them in invar so the LSB does not fit them
+        #we will unmask them in the end
         #-------
+        
         print("Fitting only extended sources and lsb, no stars")
             
         ##like the point source, why does this not need an observation frame in its definition???
 
-        # Starck et al. 2011, erin's paper on streams scales (hsc imaging paper)
-        #restrict myself to certain wavelet scales? look at scales parameter in the tutorial 
-        scar_comps_nostars.append(scarlet.source.StarletSource(model_frame))
-        
-        scarlet.initialization.set_spectra_to_match(scar_comps_nostars, observation_nostar)
-        
+        ## I want to fix the colors of the background sources as do not want them to influence the LSB component flux? 
+        ##define all components fresh, everyone component should have the same observation
+        ##we ensure that the position remains fixed!
+
+        observation_nostar_wlsb_bkgfix = scarlet.Observation(
+                data_arr,
+                psf=scarlet.ImagePSF(psf),
+                weights = invar_weights_bkgmask,
+                channels=filters).match(model_frame)
+
+        scar_comps_nostars_v2 = np.copy(scar_comps_nostars)
+
+        print(len(scar_comps_nostars_v2), len(centers_arr_nostars))
+
+        ##only loop over the sources that are not starlet
+        for ci,comp in enumerate(scar_comps_nostars_v2):
+            #if the source is outside the main segment, then fix its color!!
+            comp_y = int(centers_arr_nostars[ci][0])
+            comp_x = int(centers_arr_nostars[ci][1])
+            
+            c_seg_num = segment_map_v2[comp_y, comp_x]
+            
+            if c_seg_num != 2:
+                print(f"Source {ci} is not on main blob")
+                # print(comp.parameters[0].__dict__["name"])
+                # print(comp.parameters[1].__dict__["name"])
+                # print(comp.parameters[2].__dict__["name"])
+                # print("--")
+                #fix spectrum and the center!
+                comp.parameters[0].fixed=True #spectrum
+                comp.parameters[1].fixed=True #image
+                comp.parameters[2].fixed=True #shift
+                
+                ## if LSB, just set the wavelet documentation
+                ##inputs to a models are defined as a class called parameter
+                # https://pmelchior.github.io/scarlet/1-concepts.html#
+                ## look at the parameter fixed
+
+        scar_comps_nostars_v2 = list(scar_comps_nostars_v2)
+        #adding the LSB source now
+        scar_comps_nostars_v2.append(scarlet.source.StarletSource(model_frame))
+
+        scarlet.initialization.set_spectra_to_match(scar_comps_nostars_v2, observation_nostar_wlsb_bkgfix)
+
         #run the fitting optimizer
-        blend = scarlet.Blend(scar_comps_nostars, observation_nostar)
+        blend = scarlet.Blend(scar_comps_nostars_v2, observation_nostar_wlsb_bkgfix)
         it, logL = blend.fit(200, e_rel=1e-10)
         print(f"scarlet ran for {it} iterations to logL = {logL}")
         fig3 = scarlet.display.show_likelihood(blend)
@@ -819,9 +980,9 @@ def run_scarlet_pipe(input_dict):
         # How to get uncertainties on flux parameter?
     
         ##display the fitting results
-        fig4 = scarlet.display.show_scene(scar_comps_nostars,
+        fig4 = scarlet.display.show_scene(scar_comps_nostars_v2,
                                    norm=norm,
-                                   observation=observation_nostar,
+                                   observation=observation_nostar_wlsb_bkgfix,
                                    show_rendered=True,
                                    show_observed=True,
                                    show_residual=True,
@@ -830,9 +991,9 @@ def run_scarlet_pipe(input_dict):
         fig4.savefig(save_path + "/scarlet_scene_results_wlsb_nostar.png",bbox_inches="tight")
         plt.close(fig4)
 
-        fig_sources = scarlet.display.show_sources(scar_comps_nostars,
+        fig_sources = scarlet.display.show_sources(scar_comps_nostars_v2,
                                    norm=norm,
-                                   observation=observation_nostar,
+                                   observation=observation_nostar_wlsb_bkgfix,
                                     show_model=True,
                                  show_rendered=True,
                                  show_observed=True,
@@ -872,12 +1033,13 @@ def run_scarlet_pipe(input_dict):
             ##define all components fresh, everyone component should have the same observation
             ##we ensure that the position remains fixed!
 
-            scar_comps_nostars_new = np.copy(scar_comps_nostars)
+            scar_comps_nostars_new = np.copy(scar_comps_nostars_v2)
 
             ##only loop over the sources that are not starlet
             for comp in scar_comps_nostars_new[:-1]:
                 #for all non-LSB,non-star components, fix color/spectrum and center
-                comp.parameters[0].fixed=True
+                comp.parameters[0].fixed=False
+                comp.parameters[1].fixed=False
                 comp.parameters[2].fixed=True
                 ## if LSB, just set the wavelet documentation
                 ##inputs to a models are defined as a class called parameter
@@ -887,7 +1049,7 @@ def run_scarlet_pipe(input_dict):
             ##fix the spectrum/color of LSB component
             scar_comps_nostars_new[-1].parameters[0].fixed = True
             #should we also fix the coeffs?
-            # scar_comps_nostars_new[-1].parameters[1].fixed = True
+            # scar_comps_nostars_new[-1].parameters[1].fixed = F
 
             #I have confirmed via print statements that the fixing parameters does change
 
@@ -940,8 +1102,8 @@ def run_scarlet_pipe(input_dict):
             fig_sources.savefig(save_path + "/scarlet_sources_results_wlsb_wstar.png",bbox_inches="tight")
             plt.close(fig_sources)
         else:
-            scar_comps_wlsb_wstars = scar_comps_nostars
-            observation_wstar = observation_nostar
+            scar_comps_wlsb_wstars = scar_comps_nostars_v2
+            observation_wstar = observation_nostar_wlsb_bkgfix
     
         # for k, src in enumerate(scar_comps):
         #     print (f"{k}: {src.__class__.__name__}")
@@ -952,15 +1114,11 @@ def run_scarlet_pipe(input_dict):
         ##add the sourece that will model LSB component in the entire cutout
 #         scar_comps.append(scarlet.source.StarletSource(model_frame))
      
-    
-#         ## THEN FIT THE DIFFUSE STARLET SOURCE
-
         ##I do not think I am actually begining with the earlier model
         ##has scar comps changed???
         # https://pmelchior.github.io/scarlet/0-quickstart.html#Initialize-sources
         ## look at this link!!
 
-        
         ##display the fitting results for each band 
         # Compute model
         model = blend.get_model()
@@ -1068,7 +1226,7 @@ def run_scarlet_pipe(input_dict):
         # Function to check if a point is inside the aperture
         def is_inside_ellipse(ys, xs, aperture):
             #the order of x and y is flipped because that is how the centers_arr is constructed
-            mask = aperture.to_mask(method='center').to_image(image_tot.shape) # Create a mask
+            mask = aperture.to_mask(method='center').to_image(segment_map_v2.shape) # Create a mask
             ##now I just need to check if any of these xs,ys fall inside this mask!
             mask_vals = mask[ ys.astype(int), xs.astype(int)] 
             if np.max(mask_vals) == 1:
@@ -1098,25 +1256,25 @@ def run_scarlet_pipe(input_dict):
         ## but we do the aperture estimation on the original segment map, not the 0,1,2 map
         
         # Create a mask of the same shape as the image
-        lsb_mask = np.zeros(image_tot.shape, dtype=bool)
+        lsb_mask = np.zeros(segment_map_v2.shape, dtype=bool)
         # Convert apertures to masks and combine them
         
         if len(all_notmain_apers) > 0:            
             for api in all_notmain_apers:
-                mask_ap = api.to_mask(method='center').to_image(image_tot.shape)  # Convert to mask
+                mask_ap = api.to_mask(method='center').to_image(segment_map_v2.shape)  # Convert to mask
                 lsb_mask |= mask_ap.astype(bool)
 
         #I want to also mask the stars here!!
             
         #add to the mask all stuff outside the main aperture too
-        mask_ap_outside = mainseg_aperture.to_mask(method='center').to_image(image_tot.shape)
+        mask_ap_outside = mainseg_aperture.to_mask(method='center').to_image(segment_map_v2.shape)
         lsb_mask |= ~mask_ap_outside.astype(bool)
 
         #I want to also mask the stars in the LSB component here!!
 
-        lsb_star_mask = np.zeros(image_tot.shape, dtype=bool)
+        lsb_star_mask = np.zeros(segment_map_v2.shape, dtype=bool)
         
-        print(image_tot.shape)
+        print(segment_map_v2.shape)
         print(lsb_star_mask.shape)
         
         for si in range(np.sum(is_star)):
@@ -1128,8 +1286,25 @@ def run_scarlet_pipe(input_dict):
             lsb_star_mask = mask_star( lsb_star_mask , ( star_f_xpix[si], star_f_ypix[si]) , radius_pix, mask_val = True )
 
         lsb_mask |= lsb_star_mask
+
+
+        ## UPDATED lsb_mask
+        ##it is simply going to mask the locations of the stars we were at!
+        lsb_mask = np.zeros(segment_map_v2.shape, dtype=bool)
+        lsb_mask[segment_map_v2 == 1] = True
+
+        ##make an aperture here based on the R4.25 ellipse 
+        from photutils.aperture import EllipticalAperture
+        xypos = (aper_xcen_local, aper_ycen_local)
+        b = aper_semi_maj * aper_ba * 4.25
+        a = aper_semi_maj * 4.25
+        aperture_r4 = EllipticalAperture(xypos, a, b, theta=aper_theta)
+        aperture_r4.plot(ax=ax[1], color='limegreen', lw=3)
+        #make a mask based on this!
+        aper_r4_mask = aperture_r4.to_mask(method='center')  # or 'exact' if you want subpixel accuracy
+        # now rasterize it onto an array the same shape as your image
+        aper_r4_mask = aper_r4_mask.to_image(segment_map_v2.shape).astype(bool)
         
-    
         #################################################
         ##plotting the LSB component in each band and its masked bits
 
@@ -1178,6 +1353,8 @@ def run_scarlet_pipe(input_dict):
                 #let us measure the total flux and the flux in the aperture and print it in the plot
         
                 phot_table_i = aperture_photometry(lsb_model[i], mainseg_aperture, mask = lsb_mask)
+                # phot_table_i = aperture_photometry(lsb_model[i], mainseg_aperture)
+                
                 aper_flux_i = float(phot_table_i["aperture_sum"] )
                 lsb_aper_flux.append( aper_flux_i )
         
@@ -1274,9 +1451,7 @@ def run_scarlet_pipe(input_dict):
         ##plot the g-r vs. r-z color contours from the redshift bin of this object        
         ax[3].contour(X, Y, Z_gmm, levels=sorted(lvls), cmap="viridis_r",alpha = 1,zorder = 1)
         
-        
         ##I want to be able to see all the points even if they are outside the plotting grids. 
-        
         all_grs_clip = np.clip(all_grs, -1, 2)
         all_rzs_clip = np.clip(all_rzs, -1, 1.5)
         
@@ -1284,15 +1459,12 @@ def run_scarlet_pipe(input_dict):
         
         ##plot the errors for these sources too!
         
-        
         #plotting LSB colors if they are not zer0
         if lsb_aper_mag[0] != np.nan:
             ax[3].scatter( lsb_aper_mag[0] - lsb_aper_mag[1], lsb_aper_mag[1] - lsb_aper_mag[2],edgecolor = "hotpink",lw = 2,
                        facecolor = "k",marker = "p",s = 100  )
         
-        #plotting the LSB color for reference
-        
-        
+
         # Iterate only over filtered elements
         for gr, rz, k in zip(all_grs_clip, all_rzs_clip, all_comp_inds_inseg):
             ax[3].text(gr * 1.02, rz * 1.02, k, color="r", weight="bold")
@@ -1302,18 +1474,29 @@ def run_scarlet_pipe(input_dict):
         #what happens if the LSB is way too far off like it is very blue??
         if lsb_aper_mag[0] != np.nan:
             col_lenient = 0.1 
-            gr_cut = lsb_aper_mag[0] - lsb_aper_mag[1] + col_lenient
-            rz_cut = lsb_aper_mag[1] - lsb_aper_mag[2] + col_lenient
+            lsb_gr = lsb_aper_mag[0] - lsb_aper_mag[1]
+            lsb_rz = lsb_aper_mag[1] - lsb_aper_mag[2]
+
+            print(f"LSB colors = {lsb_gr, lsb_rz}")
+        
+            #set a minimum amount
+            lsb_gr = np.maximum( lsb_gr, 0.3 )
+            lsb_rz = np.maximum( lsb_rz, 0.3 )
+            
+            gr_cut = lsb_gr + col_lenient
+            rz_cut =  lsb_rz + col_lenient
         else:
-            gr_cut = 0.2
-            rz_cut = 0.3
+            print("LSB COLOR IS NAN!")
+            gr_cut = 0.1 + 0.1
+            rz_cut = -0.01 + 0.1
+
+        print(f"reference colors = {gr_cut, rz_cut}")
         
         ##plot the bluer boundary lines
         ax[3].hlines(y = rz_cut,xmin = -1, xmax= gr_cut,color = "k",lw = 1, ls = "dotted")
         ax[3].vlines(x = gr_cut,ymin = -1, ymax= rz_cut,color = "k",lw = 1, ls = "dotted")    
         ax[3].set_xlim([-1,2])
         ax[3].set_ylim([-1,1.5])
-
     
         #########################################
         #COMPUTE NEW MAGNITUDES AND MAKE DWARF IMAGE
@@ -1326,7 +1509,6 @@ def run_scarlet_pipe(input_dict):
         col_positions = np.vstack([ all_grs , all_rzs ])
         Z_likely_comps = np.exp(gmm.score_samples(col_positions.T))
         
-
         #is in the blue box or is along the contour!
         # has to have good color and not be a star!
         ## FOR THE SCARLET PIPELINE, WE ARE AS OF NOW DECIDING NOT USE THESE COLOR CONTOURS ... 
@@ -1349,7 +1531,7 @@ def run_scarlet_pipe(input_dict):
             #the lsb mask is True on the regions that want to be masked!
             #those are the regions we want to subtract!
             lsb_model = scar_comps_lsb.get_model(frame = model_frame)
-            subtract_mask_image = np.zeros(image_tot.shape)
+            subtract_mask_image = np.zeros(segment_map_v2.shape)
             subtract_mask_image[lsb_mask] = lsb_model[i][lsb_mask]    
             dwarf[i] -= subtract_mask_image
     
@@ -1360,6 +1542,10 @@ def run_scarlet_pipe(input_dict):
         new_mag_g = 22.5 - 2.5*np.log10(np.sum(dwarf[0]))
         new_mag_r = 22.5 - 2.5*np.log10(np.sum(dwarf[1]))
         new_mag_z = 22.5 - 2.5*np.log10(np.sum(dwarf[2]))
+
+        new_mag_r4_g = 22.5 - 2.5*np.log10(np.sum(dwarf[0][aper_r4_mask] ))
+        new_mag_r4_r = 22.5 - 2.5*np.log10(np.sum(dwarf[1][aper_r4_mask] ))
+        new_mag_r4_z = 22.5 - 2.5*np.log10(np.sum(dwarf[2][aper_r4_mask] ))
     
         ######################################
         
@@ -1445,12 +1631,14 @@ def run_scarlet_pipe(input_dict):
         ax[4].text(0.05,0.95,"Org-mag g = %.2f"%source_mag_g,size =11,transform=ax[4].transAxes, verticalalignment='top')
         ax[4].text(0.05,0.95 - spacing*1,"AperCog-mag g = %.2f"%aper_mag_g,size = 11,transform=ax[4].transAxes, verticalalignment='top')
         ax[4].text(0.05,0.95 - spacing*2,"Scarlet-mag g = %.2f"%new_mag_g,size = 11,transform=ax[4].transAxes, verticalalignment='top')
+        ax[4].text(0.05,0.95 - spacing*3,"Scarlet-mag R4 g = %.2f"%new_mag_r4_g,size = 11,transform=ax[4].transAxes, verticalalignment='top')
         
         # ax[4].text(0.05,0.95 - spacing*3,"fracflux_g = %.2f, %.2f"%(source_cat_obs["fracflux_g"]),size = 11,transform=ax[4].transAxes, verticalalignment='top')
         
         ax[4].text(0.05,0.95 - spacing*4,"Org-mag r = %.2f"%source_mag_r,size =11,transform=ax[4].transAxes, verticalalignment='top')
         ax[4].text(0.05,0.95 - spacing*5,"AperCog-mag r = %.2f"%aper_mag_r,size = 11,transform=ax[4].transAxes, verticalalignment='top')
         ax[4].text(0.05,0.95 - spacing*6,"Scarlet-mag r = %.2f"%new_mag_r,size = 11,transform=ax[4].transAxes, verticalalignment='top')
+        ax[4].text(0.05,0.95 - spacing*7,"Scarlet-mag R4 r = %.2f"%new_mag_r4_r,size = 11,transform=ax[4].transAxes, verticalalignment='top')
         
         # ax[4].text(0.05,0.95 - spacing*7,"fracflux_r = %.2f, %.2f"%(source_cat_obs["fracflux_r"]),size = 11,transform=ax[4].transAxes, verticalalignment='top')
         
@@ -1458,6 +1646,7 @@ def run_scarlet_pipe(input_dict):
         ax[4].text(0.05,0.95 - spacing*8,"Org-mag z = %.2f"%source_mag_z,size =11,transform=ax[4].transAxes, verticalalignment='top')
         ax[4].text(0.05,0.95 - spacing*9,"AperCog-mag z = %.2f"%aper_mag_z,size = 11,transform=ax[4].transAxes, verticalalignment='top')
         ax[4].text(0.05,0.95 - spacing*10,"Scarlet-mag z = %.2f"%new_mag_z,size = 11,transform=ax[4].transAxes, verticalalignment='top')
+        ax[4].text(0.05,0.95 - spacing*11,"Scarlet-mag R4 z = %.2f"%new_mag_r4_z,size = 11,transform=ax[4].transAxes, verticalalignment='top')
         
         # ax[4].text(0.05,0.95 - spacing*11,"fracflux_z = %.2f, %.2f"%(source_cat_obs["fracflux_z"]),size = 11,transform=ax[4].transAxes, verticalalignment='top')
     
@@ -1481,33 +1670,101 @@ def run_scarlet_pipe(input_dict):
         new_mag_r_mwc = new_mag_r + 2.5 * np.log10(source_cat_obs["mw_transmission_r"])
         new_mag_z_mwc = new_mag_z + 2.5 * np.log10(source_cat_obs["mw_transmission_z"])
 
+        new_mag_R4_g_mwc = new_mag_r4_g + 2.5 * np.log10(source_cat_obs["mw_transmission_g"])
+        new_mag_R4_r_mwc = new_mag_r4_r + 2.5 * np.log10(source_cat_obs["mw_transmission_r"])
+        new_mag_R4_z_mwc = new_mag_r4_z + 2.5 * np.log10(source_cat_obs["mw_transmission_z"])
+
         #save these magnitudes for future reference!
 
         new_mags = [ new_mag_g_mwc, new_mag_r_mwc,new_mag_z_mwc ]
         np.save( save_path + "/scarlet_mags.npy", new_mags )
+
+        new_mags_R4 = [ new_mag_R4_g_mwc, new_mag_R4_r_mwc,new_mag_R4_z_mwc ]
+        np.save( save_path + "/scarlet_mags_R4.npy", new_mags_R4 )
         # org_mags =   [ source_mag_g_mwc,source_mag_r_mwc,source_mag_z_mwc  ]
         
         return
 
 
+import numpy as np
+from astropy.coordinates import SkyCoord
+import astropy.units as u
+
+def filter_close_sources(ra, dec, radius_arcsec=30):
+    """
+    Remove sources that lie within <radius_arcsec of another source.
+    Keeps the first instance encountered.
+
+    ra, dec : arrays in degrees
+    returns : indices of the sources to keep
+    """
+    coords = SkyCoord(ra=ra*u.degree, dec=dec*u.degree, frame='icrs')
+    keep = []
+    mask = np.ones(len(coords), dtype=bool)
+
+    for i in range(len(coords)):
+        if not mask[i]:
+            continue  # this one was already excluded
+        keep.append(i)
+        # mark all others within the radius as excluded
+        sep = coords[i].separation(coords)
+        mask[sep < (radius_arcsec*u.arcsec)] = False
+
+    return np.array(keep)
+
+
+
+def basic_filter_scarlet(data):
+    data_scarlet = data[(data["Z"] < 0.01) & (data["LOGM_SAGA_APERTURE_COG"] < 8) & (data["LOGM_SAGA_APERTURE_COG"] > 6) 
+                        & (data["MASKBITS"]==0) & (data["SGA_D26_NORM_DIST"] > 2) & (data["is_south"] == 1)  ]
+
+    return data_scarlet
+    
+
+def get_entire_scarlet():
+
+    data_bgsb = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_BGS_BRIGHT_shreds_catalog_w_aper_mags.fits")
+    data_bgsf = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_BGS_FAINT_shreds_catalog_w_aper_mags.fits")
+    data_lowz = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_LOWZ_shreds_catalog_w_aper_mags.fits")
+    data_elg = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_ELG_shreds_catalog_w_aper_mags.fits")
+    
+    data_bgsb = basic_filter_scarlet(data_bgsb)
+    data_bgsf = basic_filter_scarlet(data_bgsf)
+    data_lowz = basic_filter_scarlet(data_lowz)
+    data_elg = basic_filter_scarlet(data_elg)
+
+    print(len(data_bgsb), len(data_bgsf), len(data_lowz), len(data_elg))
+
+    data_all = vstack([data_bgsb, data_bgsf, data_lowz, data_elg])
+
+    print(len(data_all))
+    
+    # example usage:
+    keep_indices = filter_close_sources( data_all["RA"].data, data_all["DEC"].data, radius_arcsec = 60 )
+
+    data_all = data_all[keep_indices]
+
+    print(len(data_all))
+
+    return data_all
+
+    
 
 
 
 if __name__ == '__main__':
 
-    #load in the fragmented catalog
-    data = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_filter.fits")
+    # data_scarlet = get_entire_scarlet()
+    # print(f"Number of galaxies for scarlet model = {len(data_scarlet)}")
+    
 
-    #filter for objects that would be good to do a scarlet model for
-    data_scarlet = data[(data["Z"] < 0.01) & (data["SAMPLE"] != "ELG") & (data["LOGM_SAGA_APERTURE_COG"] < 9) & (data["MASKBITS"]==0) & (data["STARFDIST"] > 2) & (data["SGA_D26_NORM_DIST"] > 4) & (data["is_south"] == 1)  ]
+    data_scarlet = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_BGS_BRIGHT_shreds_catalog_w_aper_mags.fits")
+    index = np.where(data_scarlet["TARGETID"] == 39627824100806546 )[0][0]
 
-    print(f"Number of galaxies for scarlet model = {len(data_scarlet)}")
-
-    # Indices to skip
-    SKIP_INDICES = set([7, 22, 23, 25, 30, 45, 63, 66, 77, 82, 85, 93, 94, 95, 97, 98, 108, 119, 123, 126, 127, 128, 129, 130])
-
-        
+    SKIP_INDICES = []
+    
     def process_index(index):
+        print(index)
         if index in SKIP_INDICES:
             return
     
@@ -1519,11 +1776,14 @@ if __name__ == '__main__':
             cutout_path = data_scarlet["IMAGE_PATH"].data[index]
             hdus = fits.open(cutout_path)
             image_data = hdus[0].data
+            invvar_data = hdus[1].data
+    
             wcs = WCS(hdus[0])
     
             save_folder = data_scarlet["FILE_PATH"].data[index]
             if isinstance(save_folder, bytes):
                 save_folder = save_folder.decode("utf-8")
+    
     
             source_file = os.path.join(save_folder, "source_cat_f_more.fits")
             if not os.path.exists(source_file):
@@ -1538,10 +1798,16 @@ if __name__ == '__main__':
                 "redshift": zred_i,
                 "wcs": wcs,
                 "image_data": image_data,
+                "invvar_data" : invvar_data,
                 "source_cat": source_cat,
                 "overwrite": True,
                 "run_own_detect": True,
-                "box_size": 350
+                "box_size": np.shape(image_data)[1],
+                "APER_XCEN": data_scarlet["COG_APER_CEN_XPIX"].data[index] ,
+                "APER_YCEN": data_scarlet["COG_APER_CEN_YPIX"].data[index],
+                "APER_SEMI_MAJ": data_scarlet["COG_APER_PARAMS"].data[:,0][index], 
+                "APER_BA": data_scarlet["COG_APER_PARAMS"].data[:,1][index],
+                "APER_THETA": data_scarlet["COG_APER_PARAMS"].data[:,2][index]     
             }
     
             for b in "GRZ":
@@ -1549,18 +1815,24 @@ if __name__ == '__main__':
     
             print(f"Processing: {index}, RA={ra_i}, DEC={dec_i}, Folder={save_folder}")
             run_scarlet_pipe(input_dict)
-        
+            
         except Exception as e:
             print(f"Error processing index {index}: {e}")
 
     ##index = 26 is an interesting case to study as the tractor model was not perfect but the scarlet model is better. We can discuss this as an interestin case!
 
     # indices_to_process = [i for i in range(len(data_scarlet)) if i not in SKIP_INDICES]
-
-    # with ProcessPoolExecutor(max_workers=16) as executor:
+    # indices_to_process = [i for i in range(len(data_scarlet))]
+    
+    # with ProcessPoolExecutor(max_workers=8) as executor:
     #     list(tqdm(executor.map(process_index, indices_to_process), total=len(indices_to_process)))
-    index = 6
+
+    # index = 1
+    # process_index(index)
+
     process_index(index)
+
+
    
 
     

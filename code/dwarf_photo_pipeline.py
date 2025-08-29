@@ -1,5 +1,3 @@
-'''
-'''
 import numpy as np
 import astropy.io.fits as fits
 import matplotlib as mpl
@@ -36,6 +34,8 @@ from PIL import Image
 from pathlib import Path
 import random, string
 from datetime import datetime
+from shred_photometry_maskbits import create_shred_maskbits
+import glob
 
 def parse_tgids(value):
     if not value:
@@ -43,12 +43,17 @@ def parse_tgids(value):
     return [int(x) for x in value.split(',')]
 
 
-
 def generate_random_string(length=5):
+    '''
+    Function that generates random string to add on to summary figure pdf file
+    '''
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
 
 
 def stack_images_vertically(img_path1, img_path2):
+    '''
+    Function that stacks two summary images into one so can be all in a single scrollable pdf
+    '''
     img1 = Image.open(img_path1).convert("RGB")
     img2 = Image.open(img_path2).convert("RGB")
 
@@ -64,42 +69,70 @@ def stack_images_vertically(img_path1, img_path2):
     new_img.paste(img2, (0, img1.height))
     return new_img
 
-def make_scroll_pdf(
-    all_aper_saveimgs1,
-    save_sample_path,
-    summary_scroll_file_name,
-    special_plot_mask,
-    max_num=500,
-    type_str="aper",
-    all_aper_saveimgs2=None
-):
+
+def clean_image_lists(imgs1, imgs2=None, mask=None):
+    '''
+    Function that cleans lists of image paths
+    '''
+    imgs1 = np.array(imgs1)
+
+    if imgs2 is not None:
+        imgs2 = np.array(imgs2)
+
+        valid_mask = (imgs1 != None) & (imgs2 != None)
+
+        imgs1 = imgs1[valid_mask]
+        imgs2 = imgs2[valid_mask]
+        
+        if mask is not None:
+            mask = np.array(mask)[valid_mask]
+    else:
+        valid_mask = (imgs1 != None)
+        imgs1 = imgs1[valid_mask]
+        if mask is not None:
+            mask = np.array(mask)[valid_mask]
+        imgs2 = None
+
+    return imgs1, imgs2, mask
+
+
+
+def make_scroll_pdf(all_aper_saveimgs1, save_sample_path, summary_scroll_file_name,
+                    special_plot_mask, max_num=500, type_str="aper", all_aper_saveimgs2=None):
+    '''
+    Function that make scrollable pdf given two lists containing the paths to summary images
+    '''
+    
+    # Clean input arrays
+    all_aper_saveimgs1, all_aper_saveimgs2, special_plot_mask = clean_image_lists(
+        all_aper_saveimgs1, all_aper_saveimgs2, special_plot_mask
+    )
+
+    # Set default name if needed
     if summary_scroll_file_name == "":
         summary_scroll_file_name = f"images_{type_str}_" + generate_random_string(5) + ".pdf"
-    output_pdf = save_sample_path + "%s" % summary_scroll_file_name
+    output_pdf = save_sample_path + f"{summary_scroll_file_name}"
 
-    all_aper_saveimgs1 = np.array(all_aper_saveimgs1)
+    # Prepare image pairs or singles
     if all_aper_saveimgs2 is not None:
-        all_aper_saveimgs2 = np.array(all_aper_saveimgs2)
-        assert len(all_aper_saveimgs1) == len(all_aper_saveimgs2), "Both image lists must be the same length."
 
-    # Prepare main images
-    if all_aper_saveimgs2 is not None:
+        if len(all_aper_saveimgs1) != len(all_aper_saveimgs2):
+            raise ValueError("Input image files lists to make_scroll_pdf function are not of equal length")
+        
         image_pairs = list(zip(all_aper_saveimgs1[:max_num], all_aper_saveimgs2[:max_num]))
         images = [stack_images_vertically(img1, img2) for img1, img2 in image_pairs]
     else:
-        image_files = all_aper_saveimgs1[:max_num]
-        images = [Image.open(img).convert("RGB") for img in image_files]
+        images = [Image.open(img).convert("RGB") for img in all_aper_saveimgs1[:max_num]]
 
-    # Save main PDF
-    if len(images) > 0:
+    # Save full summary
+    if images:
         images[0].save(output_pdf, save_all=True, append_images=images[1:])
         print(f"Photo summary images saved at {output_pdf}")
     else:
         print("No images to save.")
 
-    # Handle special subset
-    if special_plot_mask is not None:
-        special_plot_mask = np.array(special_plot_mask)
+    # Special subset
+    if special_plot_mask is not None and np.any(special_plot_mask):
         special_imgs1 = all_aper_saveimgs1[special_plot_mask][:max_num]
 
         if all_aper_saveimgs2 is not None:
@@ -109,7 +142,7 @@ def make_scroll_pdf(
         else:
             special_images = [Image.open(img).convert("RGB") for img in special_imgs1]
 
-        if len(special_images) > 0:
+        if special_images:
             date_str = datetime.now().strftime("%Y-%m-%d")
             output_special_pdf = save_sample_path + f"images_special_{type_str}_{date_str}_{generate_random_string(3)}.pdf"
             special_images[0].save(output_special_pdf, save_all=True, append_images=special_images[1:])
@@ -119,6 +152,7 @@ def make_scroll_pdf(
 
     return
 
+    
 
 def argument_parser():
     '''
@@ -137,7 +171,6 @@ def argument_parser():
     result.add_argument('-use_sample',dest='use_sample', type = str, default = "")
     result.add_argument('-overwrite',dest='overwrite',action='store_true')
     result.add_argument('-make_cats',dest='make_cats', action='store_true')
-    result.add_argument('-run_w_source',dest='run_w_source', action='store_true')
     result.add_argument('-run_aper',dest='run_aper', action='store_true')
     result.add_argument('-run_cog',dest='run_cog', action='store_true')
     result.add_argument('-nchunks',dest='nchunks', type=int,default = 1)
@@ -153,27 +186,35 @@ def argument_parser():
 
 def get_relevant_files_aper(input_dict):
     '''
-    Get the relevant files for a single object!
+    Function that gets the relevant, useful files for running the aperture photometry pipeline.
     '''
 
+    #TARGETID of DESI source
     tgid_k = input_dict["TARGETID"]
+    #SAMPLE object is part of: BGS_BRIGHT, LOWZ etc.
     samp_k = input_dict["SAMPLE"]
+    #RA, DEC, redshift of source
     ra_k = input_dict["RA"]
     dec_k = input_dict["DEC"]
     redshift_k = input_dict["Z"]
-    
+
+    #Tractor object and brickid of the source
     objid_k = input_dict["OBJID"]
     brickid_k = input_dict["BRICKID"]
-    
+
+    #folder info in which object info will be stored
     top_folder = input_dict["top_folder"]
     sweep_folder = input_dict["sweep_folder"]
     brick_i = input_dict["brick_i"]
+    #is it in south or north catalog?
     wcat = input_dict["wcat"]
+    #table for source photo-zs, but no longer needed
     source_pzs_i = input_dict["source_pzs_i"]
+    #table for source catalog
     source_cat = input_dict["source_cat"]
+    #integer for the size of the image cutput
     box_size = input_dict["image_size"]
     
-    # top_path_k = top_folder + "/%s/"%wcat + sweep_folder + "/" + brick_i + "/%s_tgid_%d"%(samp_k, tgid_k)
     top_path_k = f"{top_folder}/{wcat}/{sweep_folder}/{brick_i}/{samp_k}_tgid_{tgid_k}"
     
     check_path_existence(all_paths=[top_path_k])
@@ -195,25 +236,30 @@ def get_relevant_files_aper(input_dict):
     if os.path.exists(image_path):
         pass
     else:
-        #if this image path does not exist, does it exist in the other folder?
-        if "all_deshreds" in image_path:
-            image_path_other = image_path.replace("all_deshreds","all_good")
-        if "all_good" in image_path:
-            image_path_other = image_path.replace("all_good","all_deshreds")
-        if "all_sga" in image_path:
-            image_path_other = image_path.replace("all_sga","all_good")
+        print(f"IMAGE PATH DOES NOT EXIST: {image_path}")
+
+        # file_search = glob.glob(image_path)
+        # print(file_search)
+        # print("---")
+        # #if this image path does not exist, does it exist in the other folder?
+        # if "all_deshreds" in image_path:
+        #     image_path_other = image_path.replace("all_deshreds","all_good")
+        # if "all_good" in image_path:
+        #     image_path_other = image_path.replace("all_good","all_deshreds")
+        # if "all_sga" in image_path:
+        #     image_path_other = image_path.replace("all_sga","all_good")
             
-        if os.path.exists(image_path_other):
-            shutil.copy(image_path_other, image_path)
-        else:
+        # if os.path.exists(image_path_other):
+        #     shutil.copy(image_path_other, image_path)
+        # else:
             #we need to obtain the cutout data!
 
-            #as we are multi-threading the processing for each galaxy, and sessions are not thread safe
-            #we will be creating a session per image and then closing it right away!
-            with requests.Session() as session:
-                save_cutouts(ra_k, dec_k, image_path, session, size=box_size)
+        #as we are multi-threading the processing for each galaxy, and sessions are not thread safe
+        #we will be creating a session per image and then closing it right away!
+        with requests.Session() as session:
+            save_cutouts(ra_k, dec_k, image_path, session, size=box_size)
         
-    ##done saving all the files!
+    ##done saving all the relevant, useful files!
     return
 
 def select_unique_objs(catalog):
@@ -229,7 +275,8 @@ def select_unique_objs(catalog):
 
 def make_clean_shreds_catalogs():
     '''
-    This function makes the primary clean and shred catalogs we work with!
+    Function that combines the initial DESI catalogs from each sample into clean and likely shredded dwarf galaxy catalogs.
+    Useful information is added to the catalog in the process.
     '''
 
     bgsb_list = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_bgs_bright_filter_zsucc_zrr02_allfracflux.fits")
@@ -248,7 +295,6 @@ def make_clean_shreds_catalogs():
 
     #identifying the objects that have the 
     fracflux_grz = [f"FRACFLUX_{b}" for b in "GRZ"]
-    # rchisq_grz = [f"RCHISQ_{b}" for b in "GRZ"]
 
     remove_queries = [Query(_n_or_more_lt(fracflux_grz, 2, 0.2)) ]
     
@@ -259,39 +305,33 @@ def make_clean_shreds_catalogs():
     elg_mask = get_remove_flag(elg_list, remove_queries) == 0
     lowz_mask = get_remove_flag(lowz_list, remove_queries) == 0
 
-    ## FILTER FOR SGA SOURCES?
-    ## we will remove the sources that are on SGA but no dwarf galaxys
-
     #invert the above to get the clean mask!
     clean_mask_bgsb = (~bgsb_mask)
     clean_mask_bgsf = (~bgsf_mask)
     clean_mask_elg = (~elg_mask)
     clean_mask_lowz = (~lowz_mask)
     
-    ##construct the clean catalog
-    ## to make things easy in the cleaning stage, we will use the optical based colors
-    ## we will probably stick with these as our fiducial stellar masses
+    ##CLEAN CATALOG
 
     dwarf_mask_bgsb = (bgsb_list["LOGM_SAGA"] < 9.25) 
     dwarf_mask_bgsf = (bgsf_list["LOGM_SAGA"] < 9.25) 
     dwarf_mask_lowz = (lowz_list["LOGM_SAGA"] < 9.25) 
     dwarf_mask_elg = (elg_list["LOGM_SAGA"] < 9.25)   
 
-    bgsb_clean_dwarfs = bgsb_list[ clean_mask_bgsb  & (dwarf_mask_bgsb) ] #& (bgsb_list["LOGM_SAGA"] > 7)
-
-    bgsf_clean_dwarfs = bgsf_list[ clean_mask_bgsf  & (dwarf_mask_bgsf) ] # & (bgsf_list["LOGM_SAGA"] > 7)
-
+    bgsb_clean_dwarfs = bgsb_list[ clean_mask_bgsb  & (dwarf_mask_bgsb) ] 
+    bgsf_clean_dwarfs = bgsf_list[ clean_mask_bgsf  & (dwarf_mask_bgsf) ]
     lowz_clean_dwarfs = lowz_list[ clean_mask_lowz  & dwarf_mask_lowz ]
+    elg_clean_dwarfs = elg_list[ clean_mask_elg & dwarf_mask_elg  ]
 
-    elg_clean_dwarfs = elg_list[ clean_mask_elg & dwarf_mask_elg  ] # & (elg_list["LOGM_SAGA"] > 7)
-
+    #adding the sample column for reference
     bgsb_clean_dwarfs["SAMPLE"] = np.array(len(bgsb_clean_dwarfs)*["BGS_BRIGHT"])
     bgsf_clean_dwarfs["SAMPLE"] = np.array(len(bgsf_clean_dwarfs)*["BGS_FAINT"])
     elg_clean_dwarfs["SAMPLE"] = np.array(len(elg_clean_dwarfs)*["ELG"])
     lowz_clean_dwarfs["SAMPLE"] = np.array(len(lowz_clean_dwarfs)*["LOWZ"])
 
     all_clean_dwarfs = vstack( [ bgsb_clean_dwarfs, bgsf_clean_dwarfs, lowz_clean_dwarfs, elg_clean_dwarfs] )
-    
+
+    #removing columns that were present in the ELG column from whole catalog
     all_clean_dwarfs.remove_column("OII_FLUX")
     all_clean_dwarfs.remove_column("OII_FLUX_IVAR")
     all_clean_dwarfs.remove_column("Z_HPX")
@@ -301,9 +341,10 @@ def make_clean_shreds_catalogs():
 
     print("Total number of galaxies in clean catalog=",len(all_clean_dwarfs))
 
-    ## we add the SGA information to the objects now!
+    ## We add information about nearest SGA objects here
     all_clean_dwarfs = get_sga_norm_dists_FAST(all_clean_dwarfs, siena_path="/global/cfs/cdirs/cosmo/data/sga/2020/SGA-2020.fits")
 
+    #keys to be added to catalog regarding bright star information
     bstar_keys = [ "STARFDIST", "STARDIST_DEG","STARMAG", "STAR_RADIUS_ARCSEC", "STAR_RA","STAR_DEC"]
 
     # Check if all bright star keys exist
@@ -314,11 +355,10 @@ def make_clean_shreds_catalogs():
         print("Bright star information did not exist and will be computed.")
         all_clean_dwarfs = bright_star_filter(all_clean_dwarfs)
     
-
     # save the clean dwarfs now!
-    save_table(all_clean_dwarfs,"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4.fits",comment="This is a compilation of dwarf galaxy candidates in DESI Y1 data from the BGS Bright, BGS Faint, ELG and LOW-Z samples. Only galaxies with LogMstar < 9.5 (w/SAGA based stellar masses) and that have robust photometry are included.")
+    save_table(all_clean_dwarfs,"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4.fits",comment="This is a compilation of dwarf galaxy candidates in DESI Y1 data from the BGS Bright, BGS Faint, ELG and LOW-Z samples. Only galaxies with LogMstar < 9.25 (w/SAGA based stellar masses) and that have robust photometry are included.")
         
-    ##applying the mask and then stacking them!!
+    ##LIKELY SHREDDED CATALOG!!
 
     bgsb_shreds = bgsb_list[ ~clean_mask_bgsb & dwarf_mask_bgsb]
     bgsf_shreds = bgsf_list[  ~clean_mask_bgsf & dwarf_mask_bgsf]
@@ -343,7 +383,7 @@ def make_clean_shreds_catalogs():
     
     print("Total number of objects identified as likely shreds = ", len(shreds_all))
 
-    ##if the existing file already has SGA info, then we just add that
+    #We add information about nearest SGA objects here
     shreds_all = get_sga_norm_dists_FAST(shreds_all, siena_path="/global/cfs/cdirs/cosmo/data/sga/2020/SGA-2020.fits")
 
     # Check if the bright star key already exist
@@ -362,8 +402,8 @@ def make_clean_shreds_catalogs():
 
 def create_brick_jobs(brick_i, shreds_focus_w, wcat, top_folder):
     '''
-    In this function, we parallelize the reading of the source cat and creation of the galaxy dicts!!
-    We will be multi-threading here so it will share the memory of shreds_focus_w catalog!!
+    In this function, we parallelize the reading of the source cat and creation of the dictionaries per galaxy containing variables for running photometry pipeline!!
+    We will be multi-threading here so it will share the memory of 'shreds_focus_w' catalog!!
 
     The brick_i is the only variable that is changing, the others can be kept constant over north/south                 
     '''
@@ -402,7 +442,6 @@ def create_brick_jobs(brick_i, shreds_focus_w, wcat, top_folder):
         brick_dicts.append(galaxy_dict)
 
     #brick_dicts is a list of dictionaries where one dictionary corresponds to one galaxy!
-
     return brick_dicts
     
 
@@ -420,29 +459,19 @@ def process_bricks_parallel(brick_dict):
     
 def compute_aperture_masses(shreds_table, rband_key="MAG_R_APERTURE_R375", gband_key="MAG_G_APERTURE_R375", z_key="Z", output_key="LOGM_SAGA_APERTURE_R375"):
     """
-    Compute aperture-photometry-based stellar masses using g - r color, r-band magnitude, and redshift.
+    Compute new aperture-photometry-based stellar masses using g - r color, r-band magnitude, and redshift.
 
     Parameters
     ----------
-    shreds_table : astropy Table or numpy structured array
-        Input table with aperture magnitudes and redshift.
-
-    rband_key : str
-        Column name for r-band aperture magnitude.
-
-    gband_key : str
-        Column name for g-band aperture magnitude.
-
-    z_key : str
-        Column name for redshift.
-
-    output_key : str
-        Name of the output column to store log stellar masses.
+    shreds_table : astropy Table, Input table with aperture magnitudes and redshift.
+    rband_key : str, Column name for r-band aperture magnitude.
+    gband_key : str, Column name for g-band aperture magnitude.
+    z_key : str, Column name for redshift.
+    output_key : str, Name of the output column to store log stellar masses.
 
     Returns
     -------
-    shreds_table : same as input
-        Modified in-place (and also returned) with a new column containing log stellar masses.
+    shreds_table : astropy Table, Modified in-place (and also returned) with a new column containing log stellar masses.
     """
     rmag_aper = shreds_table[rband_key].data
     gr_aper = shreds_table[gband_key].data - rmag_aper
@@ -461,9 +490,19 @@ def compute_aperture_masses(shreds_table, rband_key="MAG_R_APERTURE_R375", gband
     return shreds_table
 
 
-        
-if __name__ == '__main__':
 
+def consolidate_photometry():
+    '''
+    Function that consolidates the different photometry measurements we have into a single best photometry column!
+    '''
+
+    TODO: if PCNN < 0.5, we revert to the tractor photometry! The shredmaskbit should be within the certain star radius but not PCNN > 0.5
+    those values should be used with caution and but only if a significant fraction of the star is masked! So maybe not just based on star radius, but whether a significant fraction is masked, because if just teh desi source is masked then its fine!
+
+    
+    
+    
+if __name__ == '__main__':
     import warnings
     from astropy.units import UnitsWarning
     from astropy.wcs import FITSFixedWarning
@@ -500,14 +539,18 @@ if __name__ == '__main__':
         sample_list = True
         all_samples  = sample_str.split(",")
 
+    #reading all the input flags
     min_ind = args.min
     max_ind = args.max
     run_parr = args.parallel
-    #use clean catalog or shred catalog
+    #use clean, shreds, or sga catalog.
     use_sample = args.use_sample
+
+    if use_sample not in ["clean","sga","shred"]:
+        raise ValueError("Incorrect entry for use_sample. Correct entries are ["clean","sga","shred"]")
+    
     no_cnn_cut = args.no_cnn_cut
     ncores = args.ncores
-    #if we will be using user-input catalog or not
     #will we overwrite/redo the image segmentation part?
     overwrite_bool = args.overwrite
     make_cats = args.make_cats
@@ -520,28 +563,33 @@ if __name__ == '__main__':
     #this is for whether we will run the make shreds and clean catalog function
     make_main_cats = args.make_main_cats
     end_name = args.end_name
-    
-    run_w_source = args.run_w_source
-    
+    #should the aperture photometry pipeline be run?
     run_aper = args.run_aper
+    #should the cog pipeline be run?
     run_cog = args.run_cog
 
+    #the fiducial parameters for the image segmentation!
     npixels_min = 10
     threshold_rms_scale = 1.5
     
     c_light = 299792 #km/s
 
     ##################
-    ##PART 1: Make the clean and shredded catalogs!
+    ##PART 1: Make, prep the catalogs!
     ##################
 
     if make_main_cats:
         make_clean_shreds_catalogs()
 
+    #################
+    #run the many_cutouts.py script to generate cutouts!!
+    #################
+
     ##add the columns on image path and file_path to these catalogs!!
     shreds_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v4.fits"
     # shreds_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/TEMPORARY_desi_y1_dwarf_shreds_catalog_v3.fits"
-    clean_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4.fits"
+    # clean_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4.fits"
+    clean_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4_RUN_W_APER.fits"
     sga_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_sga_matched_dwarfs.fits"
 
     if use_sample == "shred":
@@ -550,7 +598,8 @@ if __name__ == '__main__':
         top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_sga"
     if use_sample == "clean":
         top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_good"
-    
+
+    ##Adding the image path and file path (where all the outputs are saved) columns to the catalog if they do not exist
     shreds_cat = Table.read(shreds_file)
     clean_cat = Table.read(clean_file)
     sga_cat = Table.read(sga_file)
@@ -562,26 +611,21 @@ if __name__ == '__main__':
         print("Adding image_path and file_path to shreds catalog!")
         add_paths_to_catalog(org_file = shreds_file, out_file = shreds_file,top_folder="/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds")
 
-    # if "IMAGE_PATH" in clean_cat.colnames and "FILE_PATH" in clean_cat.colnames:
-    #     print("image_path and file_path columns already exist in clean catalog!")
-    # else:
-    #     print("Adding image_path and file_path to clean catalog!")
-    #     add_paths_to_catalog(org_file = clean_file, out_file = clean_file,top_folder="/pscratch/sd/v/virajvm/redo_photometry_plots/all_good")
+    if "IMAGE_PATH" in clean_cat.colnames and "FILE_PATH" in clean_cat.colnames:
+        print("image_path and file_path columns already exist in clean catalog!")
+    else:
+        print("Adding image_path and file_path to clean catalog!")
+        add_paths_to_catalog(org_file = clean_file, out_file = clean_file,top_folder="/pscratch/sd/v/virajvm/redo_photometry_plots/all_good")
 
     if "IMAGE_PATH" in sga_cat.colnames and "FILE_PATH" in sga_cat.colnames:
         print("image_path and file_path columns already exist in sga catalog!")
     else:
         print("Adding image_path and file_path to sga catalog!")
         add_paths_to_catalog(org_file = sga_file, out_file = sga_file,top_folder="/pscratch/sd/v/virajvm/redo_photometry_plots/all_sga")
-
     
     #delete these variables as no longer needed!
     del shreds_cat, clean_cat, sga_cat
-
-    #################
-    #run the many_cutouts.py script to generate cutouts!!
-    #################
-        
+     
     ##################
     ##PART 2: Generate nested folder structure with relevant files for doing photometry
     ##################
@@ -608,27 +652,24 @@ if __name__ == '__main__':
         #we have provided a list of samples
         data_samples = shreds_all['SAMPLE'].data.astype(str)
         all_samples = np.array(all_samples).astype(str)
-        print(all_samples)
-        
+        print("Samples being read today:", all_samples)
         sample_mask = np.isin(data_samples, all_samples) 
-        
     else:
         #only a single sample is given!
         sample_mask = (shreds_all["SAMPLE"] ==  sample_str) # & (shreds_all["Z"] < 0.007)
 
     shreds_focus = shreds_all[sample_mask]
-
-
-    #TO DO: HOW TO GET THE PCNN FRAGMENTS??
     
     #we also apply a mask on the PCNN probabilities if relevant
     if no_cnn_cut:
+        print("NO PCNN cut is being applied")
         pass
     else:
-        #filter for sources that CNN thinks are fragments
-        shreds_focus = shreds_focus[ shreds_focus["PCNN_FRAGMENT"] >= 0.4]
+        #filter for sources that CNN thinks are shreds
+        print("PCNN cut is being applied")
+        shreds_focus = shreds_focus[ shreds_focus["PCNN_FRAGMENT"] >= 0.5]
 
-    print(len(shreds_focus))
+    print("Number of objects in catalog so far: ", len(shreds_focus))
 
     ##finally, if a list of targetids is provided, then we only select those
     if tgids_list is not None:
@@ -641,6 +682,8 @@ if __name__ == '__main__':
     max_ind = np.minimum( max_ind, len(shreds_focus) )
     shreds_focus = shreds_focus[min_ind:max_ind]
 
+    print("Number of objects in catalog so far: ", len(shreds_focus))
+
     if make_cats == True:    
         print_stage("Generating relevant files for doing aperture photometry")
         print(f"Using catalog being used: {use_sample}")
@@ -650,13 +693,9 @@ if __name__ == '__main__':
         print(f"Number of objects in south: {len(shreds_focus[shreds_focus['is_south'] == 1])}" )
         print(f"Number of objects in north: {len(shreds_focus[shreds_focus['is_south'] == 0])}" )
         
-        ##I do not need the photo-z file and so we will not bother loading it!
-    
         for wcat_ind, wcat in enumerate(["north","south"]):
             check_path_existence(all_paths=[top_folder + "/%s"%wcat])
-
-            #if we are not using the photo-z file, we can parallize directly over the bricks!
-
+            
             ##we can invert this if we want to make sure all cats are being made without long code times
             unique_sweeps = np.unique( shreds_focus[shreds_focus["is_south"] == wcat_ind]["SWEEP"])
             print(len(unique_sweeps), f"unique sweeps found in {wcat}")
@@ -689,6 +728,7 @@ if __name__ == '__main__':
                     #                             desc="Creating brick jobs!"   ) )
                 
                 #we do not care about the order in the brick jobs!!
+                #doing the prep work before running the actual job!!
                 all_brick_jobs = []
                 with ThreadPoolExecutor(max_workers=64) as executor:
                     futures = [executor.submit(create_brick_jobs_fixed, brick_i) for brick_i in unique_bricks_chunki]
@@ -922,6 +962,9 @@ if __name__ == '__main__':
                 final_image_paths       = [r["save_summary_png"] for r in results]
                 all_img_data_paths          = [r["img_path"] for r in results]
 
+                aper_frac_mask_badpix = [r["aper_frac_mask_badpix"] for r in results]
+                img_frac_mask_badpix = [r["img_frac_mask_badpix"] for r in results]
+                
                 if chunk_i == 0:
                     print_stage("Example outputs from aperture pipeline")
                     print("fidu aper mags shape : ",final_fidu_aper_mags.shape)
@@ -929,6 +972,9 @@ if __name__ == '__main__':
                     #print some values for testing
                     print("aper_mags : ", final_fidu_aper_mags[0])
                     print("org_mags : ", final_org_mags[0])
+                    print("aper frac mask badpix : ", aper_frac_mask_badpix[0] )
+                    print("img frac mask badpix : ", img_frac_mask_badpix[0] )
+                    
                     print("---"*5)
                     
                 #these final image paths will be used to make a scrollable png file!
@@ -945,7 +991,7 @@ if __name__ == '__main__':
                 
                 shreds_focus_i["NEAREST_STAR_NORM_DIST"] = final_close_star_dists
                 shreds_focus_i["NEAREST_STAR_MAX_MAG"] = final_close_star_maxmags
-                
+
                 shreds_focus_i["MAG_G_APERTURE_R375"] = final_fidu_aper_mags[:,0]
                 shreds_focus_i["MAG_R_APERTURE_R375"] = final_fidu_aper_mags[:,1]
                 shreds_focus_i["MAG_Z_APERTURE_R375"] = final_fidu_aper_mags[:,2]
@@ -953,7 +999,10 @@ if __name__ == '__main__':
                 shreds_focus_i["SAVE_PATH"] = final_save_paths 
                 shreds_focus_i["APER_SOURCE_ON_SEGMENT"] = on_segment_island.astype(bool)
                 shreds_focus_i["IMAGE_FITS_PATH"] = all_img_data_paths
-                            
+
+                shreds_focus_i["APER_R35_MASK_PIX_FRAC"] = aper_frac_mask_badpix
+                shreds_focus_i["IMAGE_MASK_PIX_FRAC"] = img_frac_mask_badpix
+                
                 print("Compute aperture-photometry based stellar masses now!")
 
                 shreds_focus_i = compute_aperture_masses(shreds_focus_i, rband_key="MAG_R_APERTURE_R375", gband_key="MAG_G_APERTURE_R375", z_key="Z", output_key="LOGM_SAGA_APERTURE_R375")
@@ -1005,8 +1054,13 @@ if __name__ == '__main__':
                 final_cog_params_g_err = np.vstack([r["params_g_err"] for r in results])
                 final_cog_params_r_err = np.vstack([r["params_r_err"] for r in results])
                 final_cog_params_z_err = np.vstack([r["params_z_err"] for r in results])
-                
-                final_cog_saveimgs     = np.array([r["img_path"] for r in results], dtype=str)
+
+                final_cog_saveimgs = []
+                for r in results:
+                    if r["img_path"] is None:
+                        final_cog_saveimgs.append(None)
+                    else:
+                        final_cog_saveimgs.append(r["img_path"])
 
                 final_cog_aper_areafrac_in = np.array([r["areafrac_in_image"] for r in results])
 
@@ -1016,10 +1070,15 @@ if __name__ == '__main__':
                 final_cog_mag_decrease_len = np.vstack( [r["cog_decrease_len"] for r in results] )
                 final_cog_mag_decrease_mag = np.vstack( [r["cog_decrease_mag"] for r in results] )
 
+                final_cog_aper_params = np.vstack( [r["aper_params"] for r in results] )
                 
+                #collect the aper center infno
+                final_cog_apercen_ra = np.array([ r["aper_ra_cen"] for r in results])
+                final_cog_apercen_dec = np.array([ r["aper_dec_cen"] for r in results])
+                final_cog_apercen_xpix = np.array([ r["aper_xpix_cen"] for r in results])
+                final_cog_apercen_ypix = np.array([ r["aper_ypix_cen"] for r in results])
                 
-                
-                all_cog_saveimgs += list(final_cog_saveimgs)
+                all_cog_saveimgs += final_cog_saveimgs
 
                 if chunk_i == 0:
                     print_stage("Example outputs from cog pipeline")
@@ -1033,6 +1092,7 @@ if __name__ == '__main__':
                     print("cog_mags_err : ", final_cog_mags_err[0])
                     print("cog params g : ",final_cog_params_g[0])
                     print("cog params g err  : ", final_cog_params_g_err[0])
+                    print("cog aper frac-in-image : ", final_cog_aper_areafrac_in[0] )
                     print("cog saveimg : ", final_cog_saveimgs[0])
                     print("---"*5)
                     
@@ -1079,7 +1139,6 @@ if __name__ == '__main__':
                 col_cog_params_g = Column(final_cog_params_g, name='MAG_G_APERTURE_COG_PARAMS')
                 col_cog_params_r = Column(final_cog_params_r, name='MAG_R_APERTURE_COG_PARAMS')
                 col_cog_params_z = Column(final_cog_params_z, name='MAG_Z_APERTURE_COG_PARAMS')
-
                 # Add the column to the table
                 shreds_focus_i.add_column(col_cog_params_g)
                 shreds_focus_i.add_column(col_cog_params_r)
@@ -1088,14 +1147,32 @@ if __name__ == '__main__':
                 col_cog_params_err_g = Column(final_cog_params_g_err, name='MAG_G_APERTURE_COG_PARAMS_ERR')
                 col_cog_params_err_r = Column(final_cog_params_r_err, name='MAG_R_APERTURE_COG_PARAMS_ERR')
                 col_cog_params_err_z = Column(final_cog_params_z_err, name='MAG_Z_APERTURE_COG_PARAMS_ERR')
-
                 # Add the column to the table
                 shreds_focus_i.add_column(col_cog_params_err_g)
                 shreds_focus_i.add_column(col_cog_params_err_r)
                 shreds_focus_i.add_column(col_cog_params_err_z)
 
+                col_cog_mag_decrease_len = Column(final_cog_mag_decrease_len, name='COG_DECREASE_MAX_LEN')
+                col_cog_mag_decrease_mag = Column(final_cog_mag_decrease_mag, name='COG_DECREASE_MAX_MAG')
+                # Add the column to the table
+                shreds_focus_i.add_column(col_cog_mag_decrease_len)
+                shreds_focus_i.add_column(col_cog_mag_decrease_mag)
+
+                shreds_focus_i["COG_MAXAPER_FRAC_IN"] = final_cog_aper_areafrac_in 
+
+                shreds_focus_i["COG_APER_CEN_RA"] = final_cog_apercen_ra
+                shreds_focus_i["COG_APER_CEN_DEC"] = final_cog_apercen_dec
+                shreds_focus_i["COG_APER_CEN_XPIX"] = final_cog_apercen_xpix
+                shreds_focus_i["COG_APER_CEN_YPIX"] = final_cog_apercen_ypix
+
+                col_cog_aper_params = Column(final_cog_aper_params, name='COG_APER_PARAMS')
+                shreds_focus_i.add_column(col_cog_aper_params)
+                
                 #Get the cog based stellar mass
                 shreds_focus_i = compute_aperture_masses(shreds_focus_i, rband_key="MAG_R_APERTURE_COG", gband_key="MAG_G_APERTURE_COG", z_key="Z", output_key="LOGM_SAGA_APERTURE_COG")
+
+                #add the shred maskbits to the catalog
+                shreds_focus_i = create_shred_maskbits(shreds_focus_i)
                 
                 if tgids_list is None:
                     save_table( shreds_focus_i, file_save)   
@@ -1150,12 +1227,16 @@ if __name__ == '__main__':
     ##only make for some objects?
 
     if tgids_list is None and run_aper:
+        print("Saving aperture photometry imgs")
         make_scroll_pdf(all_aper_saveimgs, save_sample_path, summary_scroll_file_name, special_plot_mask, max_num=500, type_str="aper",all_aper_saveimgs2=None)
 
     if tgids_list is None and run_cog:
+        print("Saving COG aperture photometry imgs")
+        
         make_scroll_pdf(all_cog_saveimgs, save_sample_path, summary_scroll_file_name, special_plot_mask, max_num=500, type_str="cog",all_aper_saveimgs2=None)
         
     if tgids_list is None and run_cog and run_aper:
+        print("Saving COG and aperture photometry imgs")
         make_scroll_pdf(all_aper_saveimgs, save_sample_path, summary_scroll_file_name, special_plot_mask, max_num=500, type_str="apercog",all_aper_saveimgs2=all_cog_saveimgs)
 
     

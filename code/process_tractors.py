@@ -80,7 +80,9 @@ def get_nearby_source_catalog(ra_k, dec_k, objid_k, brickid_k, box_size, wcat, b
     source_cat_f["r-z_err"] = np.sqrt(  source_cat_f["mag_r_err"]**2 + source_cat_f["mag_z_err"]**2)
 
     #remove if there are any nans in the data!
-    source_cat_f = source_cat_f[ ~np.isnan(source_cat_f["g-r_err"]) &  ~np.isnan(source_cat_f["r-z_err"]) & ~np.isnan(source_cat_f["g-r"]) &  ~np.isnan(source_cat_f["r-z"])  ]
+    # source_cat_f = source_cat_f[ ~np.isnan(source_cat_f["g-r_err"]) &  ~np.isnan(source_cat_f["r-z_err"]) & ~np.isnan(source_cat_f["g-r"]) &  ~np.isnan(source_cat_f["r-z"])  ]
+
+    #We will not be filtering for nan sources now. We will apply that cut later as easier to downsample later
 
     if primary:
         #if we are working in the brick where the primary source is!

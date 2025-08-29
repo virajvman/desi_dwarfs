@@ -25,7 +25,7 @@ import multiprocessing as mp
 from astropy.wcs import WCS
 import time
 import sys
-
+import argparse
 
 def simple_progress_bar(iteration, total, length=30):
     percent = iteration / total
@@ -241,6 +241,19 @@ def save_rgb_tripanel(mod, data_arr, file_path, tgid=None, width=None, testing=F
     plt.close()
 
 
+def save_rgb_single_panel(data_arr, file_path, image_name=None):
+    
+    rgb_data = sdss_rgb(data_arr, ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
+
+    fig, ax = plt.subplots(1, 1, figsize=(8, 8))
+    ax[0].set_title("MODEL",fontsize = 13)
+    ax[0].imshow(rgb_data, origin="lower")
+    plt.savefig(f"{file_path}/{image_name}.png")
+    plt.close()
+
+    return
+
+
 def get_img_source(i, ra, dec, tgid, file_path, img_path, width, pixscale=0.262, testing=True):
     '''
     Getting the model of the targeted DESI source
@@ -354,7 +367,7 @@ def get_blended_remove_sources(i, ra, dec, tgid, file_path, img_path, width,pixs
         #if this source has a missing psfsize then we assume an average psfsize from the catalog
         ave_psfsize_dict = { "g": np.mean(tractor.get("psfsize_g")), "r": np.mean(tractor.get("psfsize_r")),  "z": np.mean(tractor.get("psfsize_z"))    }
         
-        if len(tractor_blend_re) != 0 or ():
+        if len(tractor_blend_re) != 0:
                 
             wcs = make_custom_wcs(ra, dec, width, pixscale)
             
@@ -370,6 +383,57 @@ def get_blended_remove_sources(i, ra, dec, tgid, file_path, img_path, width,pixs
         
     
     return
+
+
+def get_main_blob_sources(i, ra, dec, tgid, file_path, img_path, width, pixscale=0.262,testing=False):
+    '''
+    Function that gets all the tractor sources for things on the main blob that are considered to be the galaxy of interest!
+    The goal is that we will use this as a model image for our parent galaxy and just add up the component magnitudes to get the total photometry
+    '''
+
+    tractor = load_tractor(file_path)
+    
+    parent_source_cat = Table.read(file_path + "/parent_galaxy_sources.fits")
+
+    ps_ras = parent_source_cat["ra"]
+    ps_decs = parent_source_cat["dec"]
+    
+    #we need to get all the pixel locations of these sources given the wcs and see which ones lie on the main segment
+    #sources not on the main segment will be on a zero!
+    ra_all = tractor.get("ra")
+    dec_all = tractor.get("dec")
+
+    #find all the sources that match the blend_remove_cat objects!
+    c = SkyCoord(ra= ps_ras* u.degree, dec= ps_decs*u.degree )
+    catalog = SkyCoord(ra=ra_all*u.degree, dec=dec_all*u.degree )
+    idx, d2d, d3d = c.match_to_catalog_sky(catalog)
+
+    #get the indices of objects in the ra_all catalog that match and have zero separation!
+    parent_source_inds = idx[d2d.arcsec == 0]
+
+    if len(parent_source_inds) != len(ps_ras):
+        raise ValueError(f"Inconsistent number of sources in parent galaxy : {len(parent_source_inds}, {len(ps_ras)} for {tgid}")
+
+    tractor_parent = tractor[parent_source_inds]
+
+    ave_psfsize_dict = { "g": np.mean(tractor_parent.get("psfsize_g")), "r": np.mean(tractor_parent.get("psfsize_r")),  "z": np.mean(tractor_parent.get("psfsize_z"))    }
+
+    if len(tractor_blend_re) != 0:
+        wcs = make_custom_wcs(ra, dec, width, pixscale)
+        mod = build_model_image(tractor_parent, wcs, ave_psfsize_dict, mean_psf=True)
+        np.save(f"{file_path}/tractor_parent_galaxy_model.npy", mod)
+
+        #save just this model galaxy image!
+        save_rgb_single_panel(mod, file_path, image_name="tractor_parent_galaxy_model")
+
+    else:
+        #there were no sources to subtract and so we can save an empty array!
+        np.save(f"{file_path}/tractor_parent_galaxy_model.npy", np.zeros((3, width, width))  )
+
+    
+    return
+
+    
 
     
 ## another function to consider, if it is fast enough in the future is to store the tractor model for each object and then just add the ones we want at the end !!
@@ -391,84 +455,63 @@ def worker(args):
 
 
     
-
-if __name__ == '__main__':
-
-    #need to run this for some of the clean sources too as we are testing our pipeline on them ...
-    #get the tractor model and their backgrounds for these sources
-
-    ##load the file 
-
-    # dwarf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v3.fits")
-    # dwarf_cat_1 = dwarf_cat[dwarf_cat["SAMPLE"] == "BGS_BRIGHT"][:12000]
-    # dwarf_cat_2 = dwarf_cat[dwarf_cat["SAMPLE"] == "BGS_FAINT"][:2400]
-    # dwarf_cat_3 = dwarf_cat[dwarf_cat["SAMPLE"] == "LOWZ"][:500]
-    # dwarf_cat_4 = dwarf_cat[dwarf_cat["SAMPLE"] == "ELG"][:24000]
-    # dwarf_cat = vstack([dwarf_cat_1, dwarf_cat_2, dwarf_cat_3, dwarf_cat_4])
-
-    # print(len(dwarf_cat))
-
-    # total = len(dwarf_cat)
-
-    ##########################################
-    ## for SHRED galaxies!
-    ##########################################
-    if True:
-        dwarf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v4.fits")
-        
-        print(len(dwarf_cat))
-        total = len(dwarf_cat)
+def argument_parser():
+    '''
+    Function that parses the arguments passed while running a script
+    '''
+    result = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    # path to the config file with parameters and information about the run
+    result.add_argument('-use_sample', dest='use_sample', type=str, default = "clean") 
+    result.add_argument('-sample', dest='sample', type=str, default = "BGS_BRIGHT") 
+    result.add_argument('-img_source',dest='img_source', action = "store_true")  
+    result.add_argument('-bkg_source',dest='bkg_source', action = "store_true")    
+    result.add_argument('-blend_remove_source',dest='blend_remove_source', action = "store_true")  
+    result.add_argument('-parent_galaxy',dest='parent_galaxy', action = "store_true")    
     
-        # pool = mp.Pool(128)
-        
-        # completed = 0
-        # for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_img_source ) for i in range(total)], chunksize = 500 ):
-        #     completed += 1
-        #     simple_progress_bar(completed, total-1)
-    
-        # pool.close()
-        # pool.join()
-    
-        pool = mp.Pool(128)
-        
-        completed = 0
-        for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_bkg_sources ) for i in range(total)], chunksize = 500 ):
-            completed += 1
-            simple_progress_bar(completed, total-1)
-    
-        pool.close()
-        pool.join()
-    
-        pool = mp.Pool(128)
-        
-        completed = 0
-        for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_blended_remove_sources) for i in range(total)], chunksize = 500 ):
-            completed += 1
-            simple_progress_bar(completed, total-1)
-    
-        pool.close()
-        pool.join()
+    return result
 
 
-    ##########################################
-    ## for SGA galaxies!
-    ##########################################
-    if False:
+if __name__ == '__main__': 
+
+
+    # read in command line arguments
+    args = argument_parser().parse_args()
+
+    use_sample = args.use_sample
+    sample = args.sample
+    img_source = args.img_source
+    bkg_source = args.bkg_source
+    blend_remove_source = args.blend_remove_source
+    parent_galaxy = args.parent_galaxy
+    
+    print(f"Reading the sample = {use_sample}")
+
+    if use_sample == "sga":
         dwarf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_sga_matched_dwarfs.fits")
-    
-        print(len(dwarf_cat))
-        total = len(dwarf_cat)
-    
-        # pool = mp.Pool(128)
-        
-        # completed = 0
-        # for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_img_source ) for i in range(total)], chunksize = 500 ):
-        #     completed += 1
-        #     simple_progress_bar(completed, total-1)
-    
-        # pool.close()
-        # pool.join()
-    
+    if use_sample == "clean":
+        dwarf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4_RUN_W_APER.fits")
+    if use_sample == "shred":
+        dwarf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v4.fits")
+
+    print(f"Reading the sample = {sample}")
+    dwarf_cat = dwarf_cat[dwarf_cat["SAMPLE"] == sample]
+   
+    print(len(dwarf_cat))
+    total = len(dwarf_cat)
+
+    if img_source:
+        print("Getting img source models")
+        pool = mp.Pool(128)
+        completed = 0
+        for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_img_source ) for i in range(total)], chunksize = 500 ):
+            completed += 1
+            simple_progress_bar(completed, total-1)
+        pool.close()
+        pool.join()
+
+
+    if bkg_source:
+        print("Getting bkg source models")
         pool = mp.Pool(128)
         
         completed = 0
@@ -478,7 +521,9 @@ if __name__ == '__main__':
     
         pool.close()
         pool.join()
-    
+
+    if blend_remove_source:
+        print("Getting blend remove source models")
         pool = mp.Pool(128)
         
         completed = 0
@@ -489,6 +534,19 @@ if __name__ == '__main__':
         pool.close()
         pool.join()
 
+
+    if parent_galaxy:
+        print("Getting the parent galaxy source models")
+        pool = mp.Pool(128)
+        
+        completed = 0
+        for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_main_blob_sources) for i in range(total)], chunksize = 500 ):
+            completed += 1
+            simple_progress_bar(completed, total-1)
+    
+        pool.close()
+        pool.join()
+        
     ###########################################
     ##getting the model for the temporary source!
 
