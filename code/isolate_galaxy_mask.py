@@ -18,8 +18,8 @@ from astropy.convolution import convolve
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import numpy as np
-
-TODO: In this step, we need to update what is being considered the center of the source and use source_ra, source_dec based pixel coordinates
+from alternative_photometry_methods import find_nearest_island
+from desi_lowz_funcs import make_subplots
 
 def make_custom_cmap(n_colors, cmap_name="rainbow"):
     """
@@ -56,16 +56,26 @@ def jaccard(a, b):
     union = np.logical_or(a, b).sum()
     return inter / union if union > 0 else 1.0
 
+    
 def get_desi_segment_score(current_deblend, prev_deblend):
     
     current_deblend, prev_deblend = current_deblend.data, prev_deblend.data
     
-    
-    # the component that contains our fiber
-    fiber_label = current_deblend[175,175]
+    center_coord = int(current_deblend.shape[0]/2)
+
+    if center_coord < 175:
+        raise ValueError(f"Weird center location: {center_coord}")
+        
+    # the component that contains our fiber. Our fiber will be in the center!
+    fiber_label = current_deblend[center_coord,center_coord]
+    #in both cases, if fiber label happens to be off-center, we find the closest deblend segment!
+    if fiber_label == 0:
+        fiber_label, _ = find_nearest_island(current_deblend, center_coord,center_coord)
     top_mask = (current_deblend == fiber_label)
     
-    fiber_label = prev_deblend[175,175]
+    fiber_label = prev_deblend[center_coord,center_coord]
+    if fiber_label == 0:
+        fiber_label, _ = find_nearest_island(current_deblend, center_coord,center_coord)
     prev_mask = (prev_deblend == fiber_label)
 
     score = jaccard(prev_mask, top_mask)
@@ -97,10 +107,7 @@ def measure_jaccard_scores(current_deblend, prev_deblend):
     ##THIS IS THE SCORE OF THE LARGEST SEGMENT
     large_score = get_largest_segment_score(current_deblend, prev_deblend)
 
-
     return desi_score, large_score
-
-
 
 
 def find_contrast_run(ncontrast, all_jacc_desi, all_jacc_largest, thresh=0.95, run_len=5):
@@ -125,24 +132,45 @@ def find_contrast_run(ncontrast, all_jacc_desi, all_jacc_largest, thresh=0.95, r
     
     return None, np.nan  # nothing found
 
-def find_optimal_ncontrast(convolved_tot_data, segment_map, nlevel_val = 4,verbose=False):
+
+def find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_map, nlevel_val = 4,save_path = None):
     '''
-    In this function, we find the optimal ncontrast value with which we will deblend
+    In this function, we find the optimal ncontrast value with which we will deblend.
+    We also save a plot regarding this!!
     '''
     
-
     all_segm_deblends = []
     all_jacc_desi = []
     all_jacc_largest = []
 
-    ncontrast = np.arange(0.05,0.2,0.01)
-    
+    #this originally used to be 0.05
+    ncontrast = np.arange(0.001,0.2,0.01)
+
+    fig,ax = make_subplots(ncol = 4 , nrow = 6, return_fig = True,row_spacing = 0.1,col_spacing = 0.1,plot_size = 1.5)
+
+    for axi in ax:
+        axi.set_xticks([])
+        axi.set_yticks([])
+
+    ##plot the rgb image too
+    ax[-4].set_title(f"grz image",fontsize = 10)
+    ax[-4].imshow(img_rgb,origin="lower")
+
+    ax[-3].set_title(f"latest reconstruct grz image",fontsize = 10)
+    ax[-3].imshow(img_rgb_mask,origin="lower")
+
+    #plot the smoothed segment that is being deblended
+    ax[-2].imshow(segment_map.data,cmap = "tab10",origin="lower")
+
     for i in range(len(ncontrast)):
         segm_deblend_ni_map = deblend_sources(convolved_tot_data,segment_map,
                                    npixels=10,nlevels=nlevel_val, contrast=ncontrast[i],
                                    progress_bar=False)
         
-        # segm_deblend_ni, segm_deblend_ni_map = get_deblend_segments(convolved_tot_data, segment_map, nlevels = nlevel_val, ncontrast = ncontrast[i])
+        ax[i].text(0.5,0.85, f"nlevel = {nlevel_val}\nncontrast = {ncontrast[i]:.3f}", transform=ax[i].transAxes,
+                   ha="center",va="center",fontsize = 10 )
+        
+        ax[i].imshow(segm_deblend_ni_map.data,cmap ="tab20",origin="lower")
 
         if i > 0:
             desi_jacc, large_jacc = measure_jaccard_scores(segm_deblend_ni_map, all_segm_deblends[-1] )
@@ -150,36 +178,65 @@ def find_optimal_ncontrast(convolved_tot_data, segment_map, nlevel_val = 4,verbo
             all_jacc_desi.append(desi_jacc)
             all_jacc_largest.append(large_jacc)
 
+            ax[i].text(0.5,0.1, f"$j_{{\\rm desi}},j_{{\\rm large}} = {desi_jacc:.2f}, {large_jacc:.2f}$", transform=ax[i].transAxes,
+                       ha="center",va="center",fontsize = 9 )
+
         all_segm_deblends.append( segm_deblend_ni_map )
-        
+
+        ##make a plot with this!
+
+
+
         
     all_jacc_desi = np.array(all_jacc_desi)
     all_jacc_largest = np.array(all_jacc_largest)
     
     #we want to identify the first instance of 5 consecutive values of J > 0.95.
     #we stop at hte last one and choose that ncontrast value!!
-    if verbose:
-        print(all_jacc_desi)
-        print(all_jacc_largest)
-        print(ncontrast)
-    
+    # if verbose:
+    #     print(all_jacc_desi)
+    #     print(all_jacc_largest)
+    #     print(ncontrast)
+
+
+    #if we do not find any, we should just stick with the largest 0.2 value!
     _, ncontrast_opt = find_contrast_run(ncontrast, all_jacc_desi, all_jacc_largest, thresh=0.95, run_len=5)
+
+    segm_deblend_optimal = deblend_sources(convolved_tot_data,segment_map,
+                                       npixels=10,nlevels=nlevel_val, contrast=ncontrast_opt,
+                                       progress_bar=False)
+
+    if _ is None:
+        ncontrast_opt = 0.2
+
+    #now plot the most optimal ncontrast value!!
+    ax[-1].imshow(segm_deblend_optimal.data,cmap ="tab20",origin="lower")
+
+    plt.savefig(save_path + f"/jaccard_smoothing_nlevel_{nlevel_val}.png",bbox_inches="tight")
+    plt.close()
     
     return ncontrast_opt
+
 
 
 
 def process_deblend_image(segment_map, segm_deblend, fiber_xpix, fiber_ypix):
     '''
     Function where we process the deblended image so easier to plot!! Sets all other deblended segments in image to zero and just focuses on the deblended segment of the main blob.
+
+    Note here we do not need to worry about no segment being detected as we have already taken care of that situation before running this function!
     '''
         
     segment_map_v2 = np.copy(segment_map.data)
     segment_map_v2_copy = np.copy(segment_map_v2)
     
     island_num = segment_map.data[int(fiber_ypix),int(fiber_xpix)]
+
+    #if the island num is zero (on bkg), we get the closest one!
+    if island_num == 0:
+        island_num, _ = find_nearest_island(segment_map_v2_copy, fiber_xpix,fiber_ypix)
     
-    #pixels that are part of main segment island are called 2
+    #pixels that are part of main blob are called 2
     segment_map_v2[segment_map_v2_copy == island_num] = 2
     #all other segments that are not background are called 1
     segment_map_v2[(segment_map_v2_copy != island_num) & (segment_map_v2_copy > 0)] = 1
@@ -204,84 +261,37 @@ def process_deblend_image(segment_map, segm_deblend, fiber_xpix, fiber_ypix):
 
     #what is the deblend id where our main source is in?
     deblend_island_num = segm_deblend_v3[int(fiber_ypix),int(fiber_xpix)]
-
-    #what if there are blobs in the image, but the desi fiber lies on the background? That is definitely possible
+    
     if deblend_island_num == 0:
-        lie_on_smooth_segment=True
-    
-    else:
+        deblend_island_num, nearest_deblend_dist_pix = find_nearest_island(segm_deblend_v3, fiber_xpix,fiber_ypix)
         lie_on_smooth_segment=False
-        #get the id of the closest segment    
-    
+    else:
+        nearest_deblend_dist_pix = 0
+        lie_on_smooth_segment=True
 
-    #deblend_seg_id is the segment number associated with the desi fiber! If it lies on top of a deblend segment, it is just the id of that segment
-    #if it does not lie on top of any segment, then we will take the closest galaxy
-    
-    return segm_deblend_v3, deblend_island_num, lie_on_smooth_segment
+    #given this deblend island num, get the mask of just the parent galaxy of interest
+    parent_galaxy_mask = (segm_deblend_v3 == deblend_island_num)
+    not_parent_galaxy_mask = (segm_deblend_v3 != deblend_island_num) & (segm_deblend_v3 > 0)
 
-def find_main_deblend_segment(segm_deblend_opt, fiber_xpix, fiber_ypix):
+    ##how many deblended segments are on the main blob?
+    num_deblend_segs_main_blob = len(deblend_ids)
+
+    return segm_deblend_v3, num_deblend_segs_main_blob, parent_galaxy_mask.astype(int), not_parent_galaxy_mask,  nearest_deblend_dist_pix, lie_on_smooth_segment
+
+
+def get_isolate_galaxy_mask(img_rgb=None, img_rgb_mask=None, r_band_data=None, r_rms=None, fiber_xpix=None, fiber_ypix=None, file_path=None,  tgid=None, aperture_mask=None ):
     '''
-    Given all the deblended segments in the main blob, find the one that contains the DESI fiber or the closest one!
+    Function that returns the deblended segment used for isolating the parent galaxy. 
+    Note that this function is only run when z > 0.01, and that flag is applied in the aperture_cogs.py script when this function is called
+
+    Note that the r_band_data here is not the original r band image, but is from the final reconstructed image where some parts are already masked
     '''
-
-    segm_desi_iso = np.copy(segm_deblend_opt)
-    new_desi_blob_id = segm_deblend_opt[ int(fiber_ypix), int(fiber_xpix) ]
-    ##identify the one that contains the DESI source and set everything else to zero!!
-    segm_desi_iso[segm_desi_iso != new_desi_blob_id] = 0
-
-    if np.max(segm_desi_iso) == 0:
-        #that is, all the segments were masked, then we need to find the closest deblend segment to desi fiber
-        segm_desi_iso = 
-
-    #this is the mask we will use to identify the tractor sources to consider!
-    return segm_desi_iso
-
-
-def get_isolate_galaxy_mask(r_band_data=None, r_rms=None, fiber_xpix=None, fiber_ypix=None, file_path=None, use_final_reconstruction=False, tgid=None ):
-    '''
-    Function that returns the deblended segment used for isolating the parent galaxy 
-    '''
-  # data_row = data_shred_all[data_shred_all["TARGETID"] == plot_tgids[plot_ind]]
     
-    # img_path = data_row["IMAGE_PATH"]
-    # file_path = data_row["FILE_PATH"]
-    
-    # source_ra, source_dec = data_row["RA"], data_row["DEC"]
-    # data_arr = fits.open(img_path)[0].data
-    # wcs = WCS(fits.getheader( img_path))
-    # fiber_xpix, fiber_ypix,_ = wcs.all_world2pix(source_ra, source_dec,0,1)
-
-    # #first estimate the background error to use in aperture photometry
-    # noise_dict = {}
-    
-    # data = {"g": data_arr[0],"r":data_arr[1], "z":data_arr[2]}
-
-    #     rms_estimator = MADStdBackgroundRMS()
-    # ##estimate the background rms in each band!
-    # for bii in ["g","r","z"]:        
-    #     # Apply sigma clipping
-    #     sigma_clip = SigmaClip(sigma=3.0,maxiters=5)
-    #     clipped_data = sigma_clip(data[bii])
-    #     # Estimate RMS
-    #     background_rms = rms_estimator(clipped_data)
-    #     noise_dict[bii] = background_rms
-
-    #the rms in the total image will be the rms in the 3 bands added in quadrature
-    # tot_rms = noise_dict["r"]
-
     npixels_min = 10
     threshold_rms_scale = 1.5
 
-    if use_final_reconstruction:
-        #instead of loading the full original image, we load in the final reconstruction!
-        #overwrite the previosu data_arr!!
-        data_arr = np.load(file_path + "/final_reconstruct_galaxy.npy")
-        r_band_data = data_arr[1]
-    else:
-        #we use the provided r_band_data variable
-        #note that here the bad pixel mask and stuff is not applied yet, and so will have to be applied ... 
-        pass
-    
+    r_band_data[aperture_mask] = 0 
+
     ###get the updated deblend values!!
     kernel = make_2dgaussian_kernel(15, size=29)  # FWHM = 3.0
 
@@ -293,22 +303,30 @@ def get_isolate_galaxy_mask(r_band_data=None, r_rms=None, fiber_xpix=None, fiber
 
     #we want sources where we detect something!! If we do not detect anything, we return a non valyue
     if np.max(segment_map_data) == 0:
-        print(f"Nothing found in this smooth segmentation: {tgid}! Returning Nones")
-        return 
+        print(f"Nothing found in this smooth segmentation: {tgid}! Returning Nones. In such cases, we will revert back to the tractor photometry!")
+        
+        return None, None, None, None, None
     else:
-        ncontrast_opt = find_optimal_ncontrast(convolved_tot_data, segment_map, nlevel_val = 4)
+        ncontrast_opt = find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_map, nlevel_val = 4, save_path = file_path)
         
         segm_deblend_opt = deblend_sources(convolved_tot_data,segment_map,
                                            npixels=npixels_min,nlevels=4, contrast=ncontrast_opt,
                                            progress_bar=False)
-        
-        segm_deblend_opt = process_deblend_image(segment_map, segm_deblend_opt, fiber_xpix, fiber_ypix)
-    
-    
-        
-        #isolate the deblend segment of interest
-        find_main_deblend_segment(segm_deblend_opt, fiber_xpix, fiber_ypix)
-    
 
-    return segm_deblend_opt
+        segm_deblend_opt, num_deblend_segs_main_blob, parent_galaxy_mask,not_parent_galaxy_mask, nearest_deblend_dist_pix, lie_on_smooth_segment = process_deblend_image(segment_map, segm_deblend_opt, fiber_xpix, fiber_ypix)
+
+        #segm_deblend_opt is the optimally deblended image with just the deblended segments on main blob highlighted
+        #num_deblend_segs_main_blob is the number of deblended segments identified in the main blob
+        #if it is equal to 1, we do not change anything
+        #parent_galaxy_mask is the mask that contains only the parent galaxy of interest 
+        #no_parent_galaxy_mask is a mask for the other deblended blobs identified in the main blob and is the mask that we will apply in COG pipeline
+
+        if num_deblend_segs_main_blob == 0:
+            raise ValueError(f"Incorrect number of deblended blobs found in main blob in isolate galaxy mask! -> {tgid} ")
+
+    ##let us do a binary dilation on the not_parent_galaxy_mask to avoid some of the extremeities!!
+    structure = np.ones((3, 3), dtype=bool)
+    not_parent_galaxy_mask = binary_dilation(not_parent_galaxy_mask, structure=structure, iterations=2)
+    
+    return segm_deblend_opt, num_deblend_segs_main_blob, parent_galaxy_mask, not_parent_galaxy_mask, nearest_deblend_dist_pix
     

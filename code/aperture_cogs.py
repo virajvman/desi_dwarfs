@@ -19,12 +19,15 @@ from matplotlib.colors import LogNorm
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 import pickle
+from astropy.table import Table
 from matplotlib.colors import Normalize
 from photutils.background import Background2D, MedianBackground
 from photutils.segmentation import detect_sources
 from photutils.segmentation import make_2dgaussian_kernel
 from astropy.convolution import convolve
 import matplotlib.patches as patches
+from isolate_galaxy_mask import get_isolate_galaxy_mask
+from alternative_photometry_methods import mags_to_flux, flux_to_mag
 
 def set_pixels_within_distance(arr, center, radius, value):
     """
@@ -80,7 +83,7 @@ def find_nearest_island(segment_map_v2,fiber_xpix, fiber_ypix):
         segment_map_v2 = set_pixels_within_distance(segment_map_v2, (fiber_ypix, fiber_xpix), 2/0.262, island_num)
         #the source center remains the same
 
-        IF THIS IS FLAGGED, WE JUST USE THE PHOTOMETRY OF THE TRACTOR SOURCE!!
+        #TODO :IF THIS IS FLAGGED, WE JUST USE THE PHOTOMETRY OF THE TRACTOR SOURCE!! DO WE NEED THIS??
         
     else:
         island_num = all_segs_notbg[ np.argmin(all_dists_segpixs) ]
@@ -112,31 +115,33 @@ def measure_elliptical_aperture_area_fraction(image_shape, ell_aper_obj):
     return fraction
 
 
-def get_elliptical_aperture(segment_data, stellar_mask, id_num,sigma = 3):
+def get_elliptical_aperture(segment_mask, sigma = 3, aperture_mask = None, id_num = None ):
     '''
-    Function that takes in the main segment and a star mask and fits an elliptical aperture to it.
+    Function that takes in a segment mask and fits an aperture to it!
 
     Note that the sizes etc. obtained here does not have much to do with actual size of the galaxy. We are just using this to get some fiducial size and 
-    and to scale the aperture. 
+    and to scale the aperture. If we wanted light weighted aperture, we would have to work with the actual image and not the pixel mask.
     
     '''
+
+    if id_num is not None:
+        segment_mask_v2 = np.copy(segment_mask)
+        segment_mask_v2[segment_mask != id_num] = 0
+        segment_mask_v2[segment_mask == id_num] = 1
+        segment_mask = segment_mask_v2
     
-    segment_data_v2 = np.copy(segment_data)
-    ##we set everything else to zero except for our id num of reference
-    segment_data_v2[segment_data != id_num] = 0
-    segment_data_v2[segment_data == id_num] = 1
-
-    #all pixels that are in stars are masked so that the aperture is not larger than it should be if it is blended with a star
-    segment_data_v2[stellar_mask] = 0
-
-    if np.sum( segment_data_v2) == 0:
-        #in case source is too close to the star, then we do not code to crash so we unmask it again
-        segment_data_v2[stellar_mask] = 1
-
-    #we can set everything in the star mask to be zero as well
+    if aperture_mask is not None:
+        segment_mask[aperture_mask] = 0
+        if np.sum( segment_mask) == 0:
+            #in case source is too close to the star, then we do not code to crash so we unmask it again
+            segment_mask[aperture_mask] = 1
+        
+    
+    #segment_mask is a binary mask.
+    
     
     #use this trick to get properties of the main segment 
-    cat = data_properties(segment_data_v2, mask=None)
+    cat = data_properties(segment_mask, mask=None)
 
     columns = ['label', 'xcentroid', 'ycentroid', 'semimajor_sigma',
                'semiminor_sigma', 'orientation']
@@ -152,7 +157,7 @@ def get_elliptical_aperture(segment_data, stellar_mask, id_num,sigma = 3):
         
     aperture = EllipticalAperture(xypos, a, b, theta=theta)
 
-    area_fraction = measure_elliptical_aperture_area_fraction(segment_data_v2.shape, aperture)
+    area_fraction = measure_elliptical_aperture_area_fraction(segment_mask.shape, aperture)
 
     return aperture, area_fraction, xypos, [cat.semimajor_sigma.value, b/a, theta]
     
@@ -269,64 +274,83 @@ def fit_cog(r_data, m_data, p0, bounds=None, maxfev=1200, filler=np.nan):
         return np.full(len(p0), filler), np.full(len(p0), filler), np.nan, np.nan
 
 
-def get_new_segment(data_no_blend, fiber_xpix, fiber_ypix, tot_noise_rms,  npixels_min, threshold_rms_scale, aperture_mask):
+
+def find_largest_blob(segment_map):
     '''
-    In this function, we construct a new segmentation map with the blended sources removed and so we can estimate the aperture more robustly.
+    Function that finds the largest blob!!
+    '''
 
-    Instead of keeping all parameters the same, we will increase the smoothing so we can better esimate the shape of the aperture 
-    and avoid any weird splitting effects
+    # The areas (number of pixels) of each segment
+    areas = segment_map.areas  # numpy array of pixel counts per segment
+    
+    # Find index of the largest one
+    largest_idx = areas.argmax()
 
-    We read the tot_noise_rms created from the aperture_photo run
+    # Get the corresponding segment ID number
+    largest_id = segment_map.labels[largest_idx]
 
-    source_xpix/ypix are the pixel locations of the DESI fiber source
+    if largest_id == 0:
+        raise ValueError("The background is being assigned the largest segment!")
+
+    #use this to construct the mask of just the largest blob
+    segment_map_data = segment_map.data
+    largest_blob_mask = (segment_map_data == largest_id)
+
+    return largest_blob_mask.astype(int), largest_id
+    
+
+def get_new_segment(data, fiber_xpix, fiber_ypix, tot_noise_rms,  npixels_min, threshold_rms_scale, aperture_mask):
+    '''
+    In this function, the goal is to identify the number of segments that are found in the latest reconstructed segment. If lots of segments are found, we flag that as possible bad photo
+    For z<0.01 sources, we also use this to estimate the aperture!
     '''
     #combine the g+r+z 
-    tot_data = np.sum(data_no_blend, axis=0)
+    tot_data = np.sum(data, axis=0)
     
     masked_data = np.copy(tot_data)
     #we set the aperture mask values to be very low so masked pixels are not identified as part of the segment
-    masked_data[aperture_mask] = -1e10
+    masked_data[aperture_mask] = 0 #-1e10
 
     threshold = threshold_rms_scale * tot_noise_rms
 
-    kernel_small = make_2dgaussian_kernel(3.0, size=5)  # FWHM = 3.0
-    
-    #we find that this is a better way to get the aperture and also allows us to potentially find weird sources if multiple segments are found!
-    #if multiple are found we will choose the one closest to our galaxy!
-    kernel = make_2dgaussian_kernel(15, size=29)  # FWHM = 3.0
-    
+    kernel = make_2dgaussian_kernel(3.0, size=5)  # FWHM = 3.0
+    kernel_smooth = make_2dgaussian_kernel(15, size=29)  # FWHM = 3.0
+
     convolved_tot_data = convolve( masked_data, kernel )
-    
-    convolved_tot_data_small = convolve( masked_data, kernel_small )
+    convolved_tot_data_smooth = convolve( masked_data, kernel_smooth )
 
+    #we will definitely find somewhere here!
     segment_map_new = detect_sources(convolved_tot_data, threshold, npixels=npixels_min) 
-
-    cog_num_seg_smooth = len(np.unique(segment_map_new.data)) - 1
-    
-    #we will just use this segmentation map to count how many segments we find!
-    segment_map_new_small= detect_sources(convolved_tot_data_small, threshold, npixels=npixels_min) 
-    cog_num_seg_small = len(np.unique(segment_map_new_small.data)) - 1
-    
     #if we do not find anything, that is good to know!!
     if segment_map_new is None:
-        return None
-        
-    segment_map_new_v2 = np.copy(segment_map_new.data)
+        cog_num_seg = 0
+    else:
+        #we subtract 1 as there is the background
+        cog_num_seg = len(np.unique(segment_map_new.data)) - 1
 
-    #we will find the main segment!
-    island_num = segment_map_new.data[int(fiber_ypix),int(fiber_xpix)]
+    segment_map_smooth_new = detect_sources(convolved_tot_data_smooth, threshold, npixels=npixels_min) 
+    #if we do not find anything, that is good to know!!
+    if segment_map_smooth_new is None:
+        cog_num_seg_smooth = 0
+    else:
+        #we subtract 1 as there is the background
+        cog_num_seg_smooth = len(np.unique(segment_map_smooth_new.data)) - 1
 
-    #however, if there are multiple segments, we will choose the largest one!! and not necessarily the one that has our DESI fiber!
-    
-    #what happens if island num falls on another source??
-    if island_num == 0:
-        segment_map_new_v2, island_num, fiber_xpix, fiber_ypix = find_nearest_island(segment_map_new_v2, fiber_xpix, fiber_ypix)
-        
-    segment_map_new_v2[segment_map_new.data == island_num] = 2
-    #all other segments that are not background are called 1
-    segment_map_new_v2[(segment_map_new.data != island_num) & (segment_map_new.data > 0)] = 1
-    
-    return segment_map_new_v2, cog_num_seg_smooth, cog_num_seg_small
+    #####
+    #FIND THE BLOB ON WHICH WE WILL DO THE APERTURE FITTING
+    if cog_num_seg_smooth > 0:
+        #if a smooth component is found, we choose the largest smooth component
+        largest_blob, _ = find_largest_blob(segment_map_smooth_new)
+    else:
+        if cog_num_seg != 0:
+            #in this case as well, we will eventuall revert back to, but just push it forward through the aperture pipeline in case!
+            largest_blob, _ = find_largest_blob(segment_map_new)
+        else:
+            #we do not run COG at all and simply revert back to the tractor at the end!
+            largest_blob = None
+  
+
+    return largest_blob, cog_num_seg_smooth, cog_num_seg, segment_map_smooth_new
 
 
 def longest_run(mask):
@@ -390,9 +414,45 @@ def return_blank_values():
     
 
     return aper_mags_r4_blank, final_cog_mtot_blank, final_cog_mtot_err_blank, final_cog_params_blank, final_cog_params_err_blank, final_cog_chi2_blank, final_cog_dof_blank, areafrac_in_image_largest_aper_blank,  save_img_path_blank, decrease_cog_len_blank, decrease_cog_mag_blank, aper_world_pos_blank, aper_pix_pos_blank, aper_params_blank
-    
 
-def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_mags,save_path, subtract_source_pos, pcnn_val, npixels_min, threshold_rms_scale, wcs):
+    
+    
+def get_tractor_only_mag(non_parent_galaxy_mask, save_path):
+    '''
+    Function where we use the not-parent galaxy mask to get a tractor only mag!! If no not parent objects were found in the smooth deblended stage, we just add source flux without removing any more!
+    '''
+
+    ##using the non-parent galaxy mask, remove all the tractor sources that lie on that to get a tractor only photometry!!
+    parent_source_catalog = Table.read(save_path + "/parent_galaxy_sources.fits")
+
+    print(len(parent_source_catalog))
+    
+    #remove sources that lie on the non parent galaxy mask
+
+    #TODO: ONLY FOCUS ON SOURCES ON THE PARENT SEGMENT AS IT WILL CONTAIN MAJORITY OF THE SOURCES, DO NOT NEED TO JUST REMOVE OUTISDE MAIN DEBLEND BLOB
+    #TODO: In a step, save all the tractor source models of sources on the parent segment and so we can at the end flexibly make model iamges :) 
+    
+    not_parent_remove_mask = (non_parent_galaxy_mask[parent_source_catalog["ypix"].data.astype(int), parent_source_catalog["xpix"].data.astype(int)] == True)
+
+    parent_source_catalog = parent_source_catalog[~not_parent_remove_mask]
+
+    print(len(parent_source_catalog))
+    
+    parent_source_catalog.write( save_path + "/parent_galaxy_sources_FINAL.fits", overwrite=True)
+    
+    #in the mean time, measure the simplest photometry!
+    g_flux_corr = mags_to_flux(parent_source_catalog["mag_g"]) / parent_source_catalog["mw_transmission_g"]
+    r_flux_corr = mags_to_flux(parent_source_catalog["mag_r"]) / parent_source_catalog["mw_transmission_r"]
+    z_flux_corr = mags_to_flux(parent_source_catalog["mag_z"]) / parent_source_catalog["mw_transmission_z"]
+    
+    tot_g_mag = flux_to_mag(np.sum(g_flux_corr))
+    tot_r_mag = flux_to_mag(np.sum(r_flux_corr))
+    tot_z_mag = flux_to_mag(np.sum(z_flux_corr))
+
+    return [tot_g_mag, tot_r_mag, tot_z_mag], parent_source_catalog
+
+
+def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_mags,save_path, subtract_source_pos, pcnn_val, npixels_min, threshold_rms_scale, wcs, source_zred=None):
     '''
     In this function, we run the curve-of-growth (COG) analysis!
     '''
@@ -438,79 +498,124 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_m
     
     aperture_mask |= aperture_mask_2
 
-    #note that we will re-estimate the aperture based on the subtracted blend model! This will re-center the aperture better as the original segment 
-    #map will probably include other blended objects
-    segment_map_v2_new = get_new_segment(data_arr_no_bkg_no_blend, fiber_xpix, fiber_ypix, tot_noise_rms, npixels_min, threshold_rms_scale, aperture_mask)
+    #Note that the aperture mask already contains the star mask. Check the aperture_photo.py script
 
-
-    if segment_map_v2_new is None:
-        np.save(save_path + "/segment_map_final_cog.npy", np.zeros_like(data_arr[0]))
-    else:
-        np.save(save_path + "/segment_map_final_cog.npy", segment_map_v2_new)
-        
-    np.save(save_path + "/final_mask_cog.npy", star_mask | aperture_mask)
-
-    ##save the final model image here! This can be used for checking how stuff is looking!
     reconstruct_data = np.copy(data_arr_no_bkg_no_blend)
     reconstruct_data[:,aperture_mask] = 0
-    np.save(save_path + "/final_reconstruct_galaxy.npy", reconstruct_data)
-    #save this as a jpg file!
-    rgb_256 = process_img(reconstruct_data, cutout_size = 256, org_size = np.shape(data_arr)[1] )
+    np.save(save_path + "/final_reconstruct_galaxy_no_cog_mask.npy", reconstruct_data)
+   
+    ##get the current best estimate of the aperture blob
+    largest_blob, cog_num_seg_smooth, cog_num_seg, segment_map_smooth_new = get_new_segment(reconstruct_data, fiber_xpix, fiber_ypix, tot_noise_rms,  npixels_min, threshold_rms_scale, aperture_mask)
+
+    if source_zred < 0.01:
+        #we do not apply any isolate galaxy mask
+        #and just continue as usual with our COG approach
+        smooth_segment_found = True
+        parent_galaxy_mask = largest_blob
+        final_cog_mask = star_mask | aperture_mask
+
+    else:
+        rgb_img = sdss_rgb([data_arr[0],data_arr[1],data_arr[2]])
+        rgb_img_mask =  sdss_rgb([reconstruct_data[0], reconstruct_data [1], reconstruct_data [2]])
+        
+        #we construct the smooth galaxy mask using the r-band image of the latest reconstruction so far!
+        segm_smooth_deblend_opt, num_deblend_segs_main_blob, parent_galaxy_mask, non_parent_galaxy_mask, nearest_deblend_dist_pix = get_isolate_galaxy_mask(img_rgb = rgb_img, img_rgb_mask = rgb_img_mask, r_band_data=reconstruct_data[1], r_rms=noise_rms_perband[1], fiber_xpix=fiber_xpix, fiber_ypix=fiber_ypix, file_path=save_path, tgid=tgid, aperture_mask = aperture_mask )
+
+        if segm_smooth_deblend_opt is not None:
+            #a smooth segment was found!
+            smooth_segment_found = True
+            
+            if num_deblend_segs_main_blob > 1:
+                #if more than 1 deblended blobs were found, we use the non_parent_galaxy_mask for masking in COG
+                #and we will use the parent_galaxy_mask to isolate tractor sources!
+                
+                #we will use the parent_galaxy_mask to estimate the aperture!!
+
+                #only pixels that are in other deblended blobs and not the main deblend blob are true 
+                non_parent_galaxy_mask_for_cog = non_parent_galaxy_mask.astype(bool)
+            else:
+                #only 1 is found and we do not do anything and keep everything as is. 
+                #We just construct a mask full of Falses, as when we apply this, we will not be masking anything!
+                non_parent_galaxy_mask_for_cog = np.zeros_like(parent_galaxy_mask, dtype = bool) 
+                #we will still use the parent_galaxy_mask to estimate the aperture
+        else:
+            #no smooth segment was found. This means that we will be reverting to Tractor source photometry as our final source magnitude!            
+            smooth_segment_found = False
+
+            non_parent_galaxy_mask_for_cog = np.zeros_like(parent_galaxy_mask, dtype = bool) 
+
+            parent_galaxy_mask = largest_blob
+
+
+        #the star mask is already in the aperture_mask, but just included here for completeness.
+        #the non_parent_galaxy_mask_for_cog is the mask we will apply to the reconstruct data to get the final version!
+        final_cog_mask = star_mask | aperture_mask | non_parent_galaxy_mask_for_cog
+
+    #NOTE: the parent galaxy mask is a binary mask. 1 is on segment, 0 is bkg
+
+    tractor_only_mags, parent_source_catalog = get_tractor_only_mag(non_parent_galaxy_mask_for_cog, save_path)
+
+    reconstruct_data[:,final_cog_mask] = 0
+
+    #construct the reconstruct_data dictionary
+    reconstruct_data_dict = { "g": reconstruct_data[0], "r": reconstruct_data[1], "z": reconstruct_data[2] }
+
+    #save this all!!
+    rgb_512 = process_img(reconstruct_data, cutout_size = 512, org_size = np.shape(data_arr)[1] )
     rgb_128 = process_img(reconstruct_data, cutout_size = 128, org_size = np.shape(data_arr)[1] )
     rgb_reconstruct_full = process_img(reconstruct_data, cutout_size = None, org_size = np.shape(data_arr)[1] )
+        
+    np.save(save_path + "/final_mask_cog.npy", final_cog_mask  )
 
-    ##With this final reconstruced image, construct the smoothed deblended image to help with close galaxy contamination
+    if parent_galaxy_mask is None:
+        #basically, we will not run COG and just return here!!
+        np.save(save_path + "/parent_galaxy_segment_mask.npy", np.zeros_like(parent_galaxy_mask)   )
 
-    ##IF WE DO DETECT 1, WE WILL SAVE THE MASK THAT CONTAINS THE GALAXY OF INTEREST (CLOSEST DESI FIBER IF NOT ON IT) AND THEN SAVE ITS TRACTOR SOURCES AND THEN ITS MAGS!!
-
-    TO DO: Write a function that makes some diagnostic plots like these given a list of target ids!!
-
-    These should include all these plots that I have been making!
-    
-    TO DO: Using the final reconstruction, construct the smooth deblended mask and propagate that mask through the COG step!
-    Also, then construct an alternative photometry using the similar color sources on main blob and that just lie on the deblended segment mask!
-    
-
-    ##save some diagnostic images!
-    ax_256 = make_subplots(ncol=1,nrow = 1)
-    ax_256[0].set_title("Reconstructed Image 256x256",fontsize = 12)
-    ax_256[0].imshow(rgb_256, origin='lower')
-    ax_256[0].set_xlim([0,256])
-    ax_256[0].set_ylim([0,256])
-    ax_256[0].set_xticks([])
-    ax_256[0].set_yticks([])
-    plt.savefig(save_path + "/reconstruct_image_256.png",bbox_inches="tight")
-    plt.close()
-
-    ax_128 = make_subplots(ncol=1,nrow = 1)
-    ax_128[0].set_title("Reconstructed Image 128x128",fontsize = 12)
-    ax_128[0].imshow(rgb_128, origin='lower')
-    ax_128[0].set_xlim([0,128])
-    ax_128[0].set_ylim([0,128])
-    ax_128[0].set_xticks([])
-    ax_128[0].set_yticks([])
-    plt.savefig(save_path + "/reconstruct_image_128.png",bbox_inches="tight")
-    plt.close()
-
-    if segment_map_v2_new is None:
         print("--"*6)
-        print(f"TARGETID={tgid} has no detections and thus the segmentation map for COG is None.")
+        print(f"TARGETID={tgid} has no detections and thus the segmentation map for COG is None. COG will not be run.")
         print(f"{save_path}")
         print("--"*6)
         return_nans = return_blank_values()
         return return_nans
+    
+    else:        
+        parent_galaxy_mask = parent_galaxy_mask.astype(int)
         
-    else:
+        np.save(save_path + "/parent_galaxy_segment_mask.npy", parent_galaxy_mask)  
+
+        # TO DO: Write a function that makes some diagnostic plots like these given a list of target ids!!    
+        # Also, then construct an alternative photometry using the similar color sources on main blob and that just lie on the deblended segment mask!
         
-        fig,ax = make_subplots(ncol = 4, nrow = 2, row_spacing = 0.5,col_spacing=1.2, label_font_size = 17,plot_size = 3,direction = "horizontal", return_fig=True)
+        ##save some diagnostic images!
+        ax_256 = make_subplots(ncol=1,nrow = 1)
+        ax_256[0].set_title("Reconstructed Image 512x512",fontsize = 12)
+        ax_256[0].imshow(rgb_512, origin='lower')
+        ax_256[0].set_xlim([0,512])
+        ax_256[0].set_ylim([0,512])
+        ax_256[0].set_xticks([])
+        ax_256[0].set_yticks([])
+        plt.savefig(save_path + "/reconstruct_image_512.png",bbox_inches="tight")
+        plt.close()
+    
+        ax_128 = make_subplots(ncol=1,nrow = 1)
+        ax_128[0].set_title("Reconstructed Image 128x128",fontsize = 12)
+        ax_128[0].imshow(rgb_128, origin='lower')
+        ax_128[0].set_xlim([0,128])
+        ax_128[0].set_ylim([0,128])
+        ax_128[0].set_xticks([])
+        ax_128[0].set_yticks([])
+        plt.savefig(save_path + "/reconstruct_image_128.png",bbox_inches="tight")
+        plt.close()
+
+        
+        fig,ax = make_subplots(ncol = 5, nrow = 2, row_spacing = 0.5,col_spacing=1.2, label_font_size = 17,plot_size = 3,direction = "horizontal", return_fig=True)
     
         radii_scale = np.arange(1.25,4.25,0.25)
                 
         cog_mags = {"g":[], "r": [], "z": []}
-    
-    
+
         for scale_i in radii_scale:
-            aperture_for_phot_i, areafrac_in_image_i, xypos, aper_params = get_elliptical_aperture( segment_map_v2_new, star_mask | aperture_mask, 2, sigma = scale_i )
+            aperture_for_phot_i, areafrac_in_image_i, xypos, aper_params = get_elliptical_aperture( parent_galaxy_mask , sigma = scale_i )
     
             if scale_i == radii_scale[-1]:
                 areafrac_in_image_largest_aper = areafrac_in_image_i
@@ -528,7 +633,7 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_m
                 aperture_for_phot_i.plot(ax = ax[0], color = "k", lw = 1.25, ls = "dotted",alpha = 1)
     
             for bi in "grz":
-                phot_table_i = aperture_photometry(data_no_bkg_no_blend[bi] , aperture_for_phot_i, mask = aperture_mask)
+                phot_table_i = aperture_photometry( reconstruct_data_dict[bi] , aperture_for_phot_i, mask = aperture_mask)
                 #note that unlike the case in the aperture_photo, we are no longer subtracting the total flux of blended objects from aperture
                 #instead, we subtract the blended source model so we accurately doing the COG analysis!!
                 new_mag_i = 22.5 - 2.5*np.log10( phot_table_i["aperture_sum"].data[0] )
@@ -597,12 +702,12 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_m
         box_size = np.shape(data_arr)[1] 
     
         ##plot the rgb image of actual data 
-        ax_id = 4
+        ax_id = 5
         ax[ax_id].set_title("IMG",fontsize=12)
         rgb_img = sdss_rgb([data_arr[0],data_arr[1],data_arr[2]], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
         ax[ax_id].imshow(rgb_img, origin='lower',zorder = 0)
         
-        circle = patches.Circle( (fiber_xpix, fiber_ypix),7, color='orange', fill=False, linewidth=1,ls ="-",zorder = 1)
+        circle = patches.Circle( (fiber_xpix, fiber_ypix),7, color='limegreen', fill=False, linewidth=1,ls ="--",zorder = 1)
         ax[ax_id].add_patch(circle)
         ax[ax_id].set_xlim([0,box_size])
         ax[ax_id].set_ylim([0,box_size])
@@ -610,8 +715,8 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_m
         ax[ax_id].set_yticks([])
     
         ##plot rgb data of the bkg tractor model
-        ax_id = 5
-        ax[ax_id].set_title("BKG",fontsize = 12)
+        ax_id = 6
+        ax[ax_id].set_title("Tractor BKG model",fontsize = 12)
         rgb_bkg_model = sdss_rgb([tractor_bkg_model[0],tractor_bkg_model[1],tractor_bkg_model[2]], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
         ax[ax_id].imshow(rgb_bkg_model, origin='lower')
         ax[ax_id].set_xlim([0,box_size])
@@ -620,9 +725,8 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_m
         ax[ax_id].set_yticks([])
         
         
-    
         ##plot the rgb data - bkg tractor model
-        ax_id = 6
+        ax_id = 7
         rgb_img_m_bkg_m_blend_model = sdss_rgb([data_arr_no_bkg_no_blend[0],data_arr_no_bkg_no_blend[1],data_arr_no_bkg_no_blend[2]], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
         ax[ax_id].set_title("IMG - BKG - BLEND",fontsize = 12)
         ax[ax_id].imshow(rgb_img_m_bkg_m_blend_model, origin='lower')
@@ -632,34 +736,46 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_m
         ax[ax_id].set_yticks([])
     
         ##plotting the new segmentation map!
-        ax_id = 7
-        ax[ax_id].set_title("Segmentation Map",fontsize = 12)
-        ax[ax_id].imshow(segment_map_v2_new, origin='lower', cmap="tab20",
+        ax_id = 8
+        ax[ax_id].set_title("Smooth Segment Map",fontsize = 12)
+        if segment_map_smooth_new is None:
+            segment_map_smooth_new = np.ones_like(segment_map_smooth_new)
+        ax[ax_id].imshow(segment_map_smooth_new, origin='lower', cmap="tab20",
                        interpolation='nearest')
         ax[ax_id].set_xlim([0,box_size])
         ax[ax_id].set_ylim([0,box_size])
         ax[ax_id].set_xticks([])
         ax[ax_id].set_yticks([])
+
+        ax_id = 9
+        ax[ax_id].set_title("Final Parent Segment Map",fontsize = 12)
+        ax[ax_id].imshow(parent_galaxy_mask, origin='lower', cmap="Greys",
+                       interpolation='nearest',vmin=0,vmax=1, zorder = 0)
+
+        #overplot the tractor sources that lie on the final segment!
+        for i in range(len(parent_source_catalog)):
+            ax[ax_id].scatter( parent_source_catalog["xpix"][i] , parent_source_catalog["ypix"][i], s = 10, color = "r",zorder = 1)
     
+        ax[ax_id].set_xlim([0,box_size])
+        ax[ax_id].set_ylim([0,box_size])
+        ax[ax_id].set_xticks([])
+        ax[ax_id].set_yticks([])
+
+        
         ##for reference, make the g+r+z plot with the masked pixels and different apertures on it
         ax_id = 0
     
-        ax[ax_id].set_title(r"Sum$_{grz}$(IMG - BKG - BLEND)",fontsize = 12)
-        combine_img = data_arr_no_bkg_no_blend[0] + data_arr_no_bkg_no_blend[1] + data_arr_no_bkg_no_blend[2]
+        ax[ax_id].set_title(r"Sum$_{grz}$(Parent Reconstruct)",fontsize = 12)
+        combine_img = reconstruct_data[0] + reconstruct_data[1] + reconstruct_data[2]
         #setting the masked pixels to nans
-        combine_img[aperture_mask] = np.nan
+        combine_img[final_cog_mask] = np.nan
         
         #instead of lognorm, let us do linear scaling
         # norm_obj = LogNorm()
         norm_obj = Normalize(vmin=np.nanmin(combine_img), vmax=np.nanmax(combine_img)) 
         ax[ax_id].imshow(combine_img,origin="lower",norm=norm_obj,cmap = "viridis",zorder = 0)
         ax[ax_id].scatter( aper_xpos, aper_ypos, color = "darkorange",marker = "x")
-        
-        ##overplot the sources that we will be subtracting
-        # for w in range(len(subtract_source_pos["x"])):
-        #     ax[ax_id].scatter(subtract_source_pos["x"][w], subtract_source_pos["y"][w], color = "k", marker = subtract_source_pos["marker"][w],s= 20,zorder = 1)
-        
-        
+                
         ax[ax_id].set_xlim([0,box_size])
         ax[ax_id].set_ylim([0,box_size])
         ax[ax_id].set_xticks([])
@@ -705,33 +821,53 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_m
             
             ax[ax_id].set_ylim([ np.max(all_cogs) + 0.125,np.min(all_cogs) - 0.125  ] )
     
-    
-     
+
         ##show the cog summary numbers!!
+        
+        
         ax_id = 2
     
         spacing = 0.085
         start = 0.97
-        fsize = 12
+        fsize = 11.5
         ax[ax_id].text(0.05,start,f"Tractor-mag g = {tractor_mags['g']:.2f}",size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
         ax[ax_id].text(0.05,start - spacing*1,f"Aper-mag (R4) g = {cog_mags['g'][-1]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
         ax[ax_id].text(0.05,start - spacing*2,f"COG-mag g = {final_cog_params['g'][0]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*3,f"Trac-only-mag g = {tractor_only_mags[0]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
         
-        ax[ax_id].text(0.05,start - spacing*3,f"Tractor-mag r = {tractor_mags['r']:.2f}",size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-        ax[ax_id].text(0.05,start - spacing*4,f"Aper-mag (R4) r = {cog_mags['r'][-1]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-        ax[ax_id].text(0.05,start - spacing*5,f"COG-mag r= {final_cog_params['r'][0]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        
+        ax[ax_id].text(0.05,start - spacing*4,f"Tractor-mag r = {tractor_mags['r']:.2f}",size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*5,f"Aper-mag (R4) r = {cog_mags['r'][-1]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*6,f"COG-mag r= {final_cog_params['r'][0]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*7,f"Trac-only-mag r= {tractor_only_mags[1]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        
     
-        ax[ax_id].text(0.05,start - spacing*6,f"Tractor-mag z = {tractor_mags['z']:.2f}",size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-        ax[ax_id].text(0.05,start - spacing*7,f"Aper-mag (R4) z = {cog_mags['z'][-1]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-        ax[ax_id].text(0.05,start - spacing*8,f"COG-mag z = {final_cog_params['z'][0]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-        ax[ax_id].text(0.05,start - spacing*9,f"pCNN = {pcnn_val:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-    
+        ax[ax_id].text(0.05,start - spacing*8,f"Tractor-mag z = {tractor_mags['z']:.2f}",size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*9,f"Aper-mag (R4) z = {cog_mags['z'][-1]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*10,f"COG-mag z = {final_cog_params['z'][0]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*11,f"Trac-only-mag z = {tractor_only_mags[2]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        
+        # ax[ax_id].text(0.05,start - spacing*9,f"pCNN = {pcnn_val:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
     
         ##show the final summary figure
         ax_id = 3
         ax[ax_id].set_title("Reconstructed Galaxy",fontsize = 12)
         ax[ax_id].imshow(rgb_reconstruct_full, origin='lower',zorder = 0)
         ax[ax_id].scatter( aper_xpos, aper_ypos, color = "darkorange",marker = "x",zorder = 1)
+        ax[ax_id].set_xlim([0,box_size])
+        ax[ax_id].set_ylim([0,box_size])
+        ax[ax_id].set_xticks([])
+        ax[ax_id].set_yticks([])
+
+        ##show the final summary figure
+        ax_id = 4
+        ax[ax_id].set_title("Simple-Photo Galaxy",fontsize = 12)
+        #read in the simple photo mask!
+        simple_photo_mask = np.load(save_path + "/simplest_photometry_binary_mask.npy")
+        data_arr[:, simple_photo_mask == 0] = 0
+        rgb_img_simple = sdss_rgb([data_arr[0],data_arr[1],data_arr[2]], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
+       
+        ax[ax_id].imshow(rgb_img_simple, origin='lower',zorder = 0)
         ax[ax_id].set_xlim([0,box_size])
         ax[ax_id].set_ylim([0,box_size])
         ax[ax_id].set_xticks([])
@@ -749,12 +885,6 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_m
         return aper_mags_r4, final_cog_mtot, final_cog_mtot_err, final_cog_params, final_cog_params_err, final_cog_chi2, final_cog_dof, areafrac_in_image_largest_aper,  save_img_path, decrease_cog_len, decrease_cog_mag, [aper_ra_cen, aper_dec_cen], [aper_xpos, aper_ypos], aper_params
 
 
-def apply_large_deblend_mask():
-    '''
-    Function that applies the smooth, large deblend mask to remove two nearby galaxy contamination. We will also update the parent source catalog information here!
-    We will also include sources that are on the new main segment!
-    '''
-
 
 
 def run_cog_pipe(input_dict):
@@ -768,7 +898,8 @@ def run_cog_pipe(input_dict):
     npixels_min = input_dict["npixels_min"]
     threshold_rms_scale = input_dict["threshold_rms_scale"]
     wcs = input_dict["wcs"]
-
+    source_zred  = input_dict["redshift"]
+    
     #loading all the relevant data!
     segment_map_v2 = np.load(save_path + "/segment_map_v2.npy")
     star_mask = np.load(save_path + "/star_mask.npy")
@@ -783,7 +914,7 @@ def run_cog_pipe(input_dict):
 
     #feeding it to the cog function!
     ## MAYBE THIS RUN COGS FUNCTION IS NOT NEDED!
-    aper_mags_r4, final_cog_mags, final_cog_mags_err, final_cog_params, final_cog_params_err, final_cog_chi2, final_cog_dof, areafrac_in_image, save_img_path,  decrease_cog_len, decrease_cog_mag, aper_world_coord, aper_pix_coord, aper_params = run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, source_tgid, tractor_mags, save_path, subtract_source_pos, pcnn_val, npixels_min, threshold_rms_scale, wcs)
+    aper_mags_r4, final_cog_mags, final_cog_mags_err, final_cog_params, final_cog_params_err, final_cog_chi2, final_cog_dof, areafrac_in_image, save_img_path,  decrease_cog_len, decrease_cog_mag, aper_world_coord, aper_pix_coord, aper_params = run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, source_tgid, tractor_mags, save_path, subtract_source_pos, pcnn_val, npixels_min, threshold_rms_scale, wcs, source_zred = source_zred )
 
     if np.isnan(aper_world_coord[0]) and np.isnan(final_cog_mags[0]):     
         #the outputs was None!!

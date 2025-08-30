@@ -491,13 +491,15 @@ def compute_aperture_masses(shreds_table, rband_key="MAG_R_APERTURE_R375", gband
 
 
 
-def consolidate_photometry():
-    '''
-    Function that consolidates the different photometry measurements we have into a single best photometry column!
-    '''
+# def consolidate_photometry():
+#     '''
+#     Function that consolidates the different photometry measurements we have into a single best photometry column!
+#     '''
 
-    TODO: if PCNN < 0.5, we revert to the tractor photometry! The shredmaskbit should be within the certain star radius but not PCNN > 0.5
-    those values should be used with caution and but only if a significant fraction of the star is masked! So maybe not just based on star radius, but whether a significant fraction is masked, because if just teh desi source is masked then its fine!
+#     # TODO: if PCNN < 0.5, we revert to the tractor photometry! The shredmaskbit should be within the certain star radius but not PCNN > 0.5
+#     # those values should be used with caution and but only if a significant fraction of the star is masked! So maybe not just based on star radius, but whether a significant fraction is masked, because if just teh desi source is masked then its fine!
+
+#     return
 
     
     
@@ -547,7 +549,7 @@ if __name__ == '__main__':
     use_sample = args.use_sample
 
     if use_sample not in ["clean","sga","shred"]:
-        raise ValueError("Incorrect entry for use_sample. Correct entries are ["clean","sga","shred"]")
+        raise ValueError('Incorrect entry for use_sample. Correct entries are ["clean","sga","shred"]')
     
     no_cnn_cut = args.no_cnn_cut
     ncores = args.ncores

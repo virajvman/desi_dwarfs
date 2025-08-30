@@ -41,6 +41,8 @@ def flux_to_mag(flux, zeropoint=22.5):
 def find_nearest_island(segment_map, fiber_xpix,fiber_ypix):
     '''
     Function that finds the nearest segment and returns its index!!
+
+    Is a general function that we will use nuemerous times!
     '''
     
     all_xpixs, all_ypixs = np.meshgrid( np.arange(np.shape(segment_map)[0]), np.arange(np.shape(segment_map)[1]) )
@@ -135,7 +137,7 @@ def get_simplest_photometry(data_arr, r_rms, fiber_xpix, fiber_ypix, source_cat_
     for axi in ax:
         axi.set_xticks([])
         axi.set_yticks([])
-    fig.savefig(save_path + "/simplest_photometry_mask_image.npy")
+    fig.savefig(save_path + "/simplest_photometry_mask_image.png")
     plt.close(fig)
 
     #we will make a tractor model image with this sources later!

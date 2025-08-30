@@ -47,6 +47,7 @@ from aperture_cogs import get_elliptical_aperture, find_nearest_island
 from photutils.background import StdBackgroundRMS, MADStdBackgroundRMS
 from astropy.stats import SigmaClip
 from scipy.stats import skew, kurtosis
+from alternative_photometry_methods import get_simplest_photometry
 
 rootdir = '/global/u1/v/virajvm/'
 sys.path.append(os.path.join(rootdir, 'DESI2_LOWZ'))
@@ -66,9 +67,8 @@ def substitute_bad_mag(source_cat_f):
 
     for BAND in ("g", "r", "z"):
         source_cat_f[f"mag_{BAND}"] = np.nan_to_num(source_cat_f[f"mag_{BAND}"], nan=25)
-        source_cat_f[f"mag_{BAND}_err"] = np.nan_to_num(source_cat_f[f"mag_{BAND}"], nan=0)
+        source_cat_f[f"mag_{BAND}_err"] = np.nan_to_num(source_cat_f[f"mag_{BAND}_err"], nan=0)
         
-
     ##compute some color information and errors on source of interest
     source_cat_f["g-r"] = source_cat_f["mag_g"] - source_cat_f["mag_r"]
     source_cat_f["r-z"] = source_cat_f["mag_r"] - source_cat_f["mag_z"]
@@ -507,8 +507,8 @@ def run_aperture_pipe(input_dict):
         #rest all remains 0
 
         #constructing the fiducial aperture for doing photometry
-        aperture_for_phot, _, _,_ = get_elliptical_aperture( segment_map_v2, star_mask, 2, sigma = 3.5 )
-        aperture_for_phot_noscale, _, _,_ = get_elliptical_aperture( segment_map_v2, star_mask, 2, sigma = 1 )
+        aperture_for_phot, _, _,_ = get_elliptical_aperture( segment_map_v2, sigma = 3.5, aperture_mask = star_mask, id_num = 2  )
+        aperture_for_phot_noscale, _, _,_ = get_elliptical_aperture( segment_map_v2, sigma = 1, aperture_mask = star_mask, id_num = 2  )
 
         #given the saturated pixel mask and above aperture, what fraction of the pixels in the image are masked by this, and what fraction of pixels within the original R35 aperture are masked by this?
         aper_frac_mask_badpix = measure_elliptical_aperture_area_fraction_masked(data_arr[0].shape, good_pixel_mask, aperture_for_phot)
@@ -755,13 +755,16 @@ def run_aperture_pipe(input_dict):
         source_cat_nostars_inseg_inds = []
 
         source_cat_nostars_inseg = source_cat_inseg_signi[~is_star_inseg_signi]
+
+        source_cat_nostars_inseg_COPY = source_cat_nostars_inseg.copy()
+        source_cat_nostars_inseg_own = source_cat_nostars_inseg_COPY[ source_cat_nostars_inseg_COPY["separations"] == 0]
             
         if len(source_cat_inseg_signi) == 0:
             #nothing to do here!! That is there are no significant sources that we have to deal with in the color-color space
             pass
         else:
             #remove the very object that we are targeting from this!
-            source_cat_nostars_inseg = source_cat_nostars_inseg [ source_cat_nostars_inseg["separations"] > 0]
+            source_cat_nostars_inseg = source_cat_nostars_inseg[ source_cat_nostars_inseg["separations"] > 0]
 
             ##LOOKING AT NON-STELALR SOURCES
             if len(source_cat_nostars_inseg) > 0:
@@ -917,9 +920,15 @@ def run_aperture_pipe(input_dict):
         ##save the catalog of sources that are considered to be part of the galaxy!
         #-> save the source catalog for objects that lie on the main segment are not being removed by the color cuts!
         # Build boolean mask: True means "keep"
+        
         galaxy_sources_mask = np.ones(len(source_cat_nostars_inseg), dtype=bool)
-        galaxy_sources_mask[source_cat_nostars_inseg_inds] = False
-        source_cat_galaxy_objs = source_cat_nostars_inseg[galaxy_sources_masks]
+        
+        if len(source_cat_nostars_inseg_inds) > 0:
+            galaxy_sources_mask[source_cat_nostars_inseg_inds] = False
+            
+        source_cat_galaxy_objs = source_cat_nostars_inseg[galaxy_sources_mask]
+        #add back the original source that DESI targeted!!
+        source_cat_galaxy_objs = vstack([source_cat_galaxy_objs, source_cat_nostars_inseg_own])
         #save this catalog!
         source_cat_galaxy_objs.write( save_path + "/parent_galaxy_sources.fits", overwrite=True)
         ##NOTE!! we will have to update this again based on the second deblending step we do in the last step!
