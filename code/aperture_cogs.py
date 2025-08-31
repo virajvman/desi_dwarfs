@@ -29,6 +29,13 @@ import matplotlib.patches as patches
 from isolate_galaxy_mask import get_isolate_galaxy_mask
 from alternative_photometry_methods import mags_to_flux, flux_to_mag
 
+def mean_surface_brightness(mag, ellip_area):
+    '''
+    Function to compute surface brightness. We will use this in the r-band data and the input is the area in arcsec2 of the ellipse in which we are measuring the rough photo
+    '''
+    return mag + 2.5*np.log10(ellip_area)
+
+
 def set_pixels_within_distance(arr, center, radius, value):
     """
     Set all pixels in `arr` within `radius` of `center` to `value`.
@@ -75,15 +82,10 @@ def find_nearest_island(segment_map_v2,fiber_xpix, fiber_ypix):
 
     #get distance in arcsec
     if np.min(all_dists_segpixs)*0.262 > 10:
-        #if the closest island is more than 10 arcsecs away, we think this source is not associated with our source
-        #we manually drop a source and call that our source!
+        #IF THE DISTANCE IS MORE THAN 10'', then we just revert back to the original tractor source!
+        #This is an arbitrary distance cutoff. For smaller distances, we will be keeping tabs on the distance for reference
 
-        #we use this island number as will possibly be conflating with any other source in the image!
-        island_num = 999999
-        segment_map_v2 = set_pixels_within_distance(segment_map_v2, (fiber_ypix, fiber_xpix), 2/0.262, island_num)
-        #the source center remains the same
-
-        #TODO :IF THIS IS FLAGGED, WE JUST USE THE PHOTOMETRY OF THE TRACTOR SOURCE!! DO WE NEED THIS??
+        return None, None, None, None, np.nan
         
     else:
         island_num = all_segs_notbg[ np.argmin(all_dists_segpixs) ]
@@ -95,8 +97,7 @@ def find_nearest_island(segment_map_v2,fiber_xpix, fiber_ypix):
         fiber_xpix = xpix_new
         fiber_ypix = ypix_new
         
-
-    return segment_map_v2, island_num, fiber_xpix, fiber_ypix
+    return segment_map_v2, island_num, fiber_xpix, fiber_ypix, np.min(all_dists_segpixs)
 
 
 def measure_elliptical_aperture_area_fraction(image_shape, ell_aper_obj):
@@ -348,9 +349,40 @@ def get_new_segment(data, fiber_xpix, fiber_ypix, tot_noise_rms,  npixels_min, t
         else:
             #we do not run COG at all and simply revert back to the tractor at the end!
             largest_blob = None
-  
 
-    return largest_blob, cog_num_seg_smooth, cog_num_seg, segment_map_smooth_new
+
+    ##estimate a very simple apertyre on this largest blob
+    if largest_blob is not None:
+        #there does exist a smooth blob.
+        largest_blob_temp = np.copy(largest_blob)
+        
+        #estimate aperture and then scale it by 2. Measure average surface brightness within this
+        aperture_temp, _,_,aper_param_temp = get_elliptical_aperture(largest_blob_temp, sigma = 2)
+
+        #if I save this aperture, how easy is it to plot it back?
+        
+        #measure photometry within this rough aperture!
+        phot_temp_g = aperture_photometry( data[0] , aperture_temp, mask = aperture_mask)
+        phot_temp_r = aperture_photometry( data[1] , aperture_temp, mask = aperture_mask)
+        phot_temp_z = aperture_photometry( data[2] , aperture_temp, mask = aperture_mask)
+
+        g_mag_temp = 22.5 - 2.5*np.log10( phot_temp_g["aperture_sum"].data[0] )
+        r_mag_temp = 22.5 - 2.5*np.log10( phot_temp_r["aperture_sum"].data[0] )
+        z_mag_temp = 22.5 - 2.5*np.log10( phot_temp_z["aperture_sum"].data[0] )
+
+        
+        #get the area of this aperture in arcsec^2 so convert the pixel sizes to arcsec! Area = pi*a*b
+        aper_temp_area = np.pi * (aper_param_temp[0]*0.262) * (aper_param_temp[0]*aper_param_temp[1]*0.262)
+        
+        g_mu_rough = mean_surface_brightness( g_mag_temp,  aper_temp_area )
+        r_mu_rough = mean_surface_brightness( r_mag_temp,  aper_temp_area )
+        z_mu_rough = mean_surface_brightness( z_mag_temp,  aper_temp_area )
+        
+    else:
+        r_mur_rough = 0
+        z_mur_rough = 0
+
+    return largest_blob, cog_num_seg_smooth, cog_num_seg, segment_map_smooth_new, [g_mu_rough, r_mu_rough, z_mu_rough]
 
 
 def longest_run(mask):
@@ -388,36 +420,8 @@ def detect_cog_decrease(cog_mags_bi):
     
     return length, drop_mag
 
-
-def return_blank_values():
-    '''
-    Function that will return blank values for the run_cogs function
-    '''
-
-    aper_mags_r4_blank = [np.nan] * 3
-    final_cog_mtot_blank = [np.nan] * 3
-    final_cog_mtot_err_blank = [np.nan] * 3
-    final_cog_params_blank = None
-    final_cog_params_err_blank = None
-
-    final_cog_chi2_blank = [np.nan] * 3
-    final_cog_dof_blank = [np.nan] * 3
-    areafrac_in_image_largest_aper_blank = np.nan
-    areafrac_in_image_largest_aper_blank = np.nan
-    save_img_path_blank = ""
-    decrease_cog_len_blank = [np.nan] * 3
-    decrease_cog_mag_blank = [np.nan] * 3
-    aper_world_pos_blank = [np.nan, np.nan]
-    aper_pix_pos_blank = [np.nan, np.nan]
-
-    aper_params_blank = [np.nan, np.nan, np.nan]
     
-
-    return aper_mags_r4_blank, final_cog_mtot_blank, final_cog_mtot_err_blank, final_cog_params_blank, final_cog_params_err_blank, final_cog_chi2_blank, final_cog_dof_blank, areafrac_in_image_largest_aper_blank,  save_img_path_blank, decrease_cog_len_blank, decrease_cog_mag_blank, aper_world_pos_blank, aper_pix_pos_blank, aper_params_blank
-
-    
-    
-def get_tractor_only_mag(non_parent_galaxy_mask, save_path):
+def get_tractor_only_mag(parent_galaxy_mask, save_path, width, tgid):
     '''
     Function where we use the not-parent galaxy mask to get a tractor only mag!! If no not parent objects were found in the smooth deblended stage, we just add source flux without removing any more!
     '''
@@ -425,34 +429,403 @@ def get_tractor_only_mag(non_parent_galaxy_mask, save_path):
     ##using the non-parent galaxy mask, remove all the tractor sources that lie on that to get a tractor only photometry!!
     parent_source_catalog = Table.read(save_path + "/parent_galaxy_sources.fits")
 
-    print(len(parent_source_catalog))
-    
-    #remove sources that lie on the non parent galaxy mask
+    #only include sources that lie on the main segment as identified by the parent galaxy_mask
 
-    #TODO: ONLY FOCUS ON SOURCES ON THE PARENT SEGMENT AS IT WILL CONTAIN MAJORITY OF THE SOURCES, DO NOT NEED TO JUST REMOVE OUTISDE MAIN DEBLEND BLOB
-    #TODO: In a step, save all the tractor source models of sources on the parent segment and so we can at the end flexibly make model iamges :) 
-    
-    not_parent_remove_mask = (non_parent_galaxy_mask[parent_source_catalog["ypix"].data.astype(int), parent_source_catalog["xpix"].data.astype(int)] == True)
+    parent_keep_mask = (parent_galaxy_mask[parent_source_catalog["ypix"].data.astype(int), parent_source_catalog["xpix"].data.astype(int)] == True)
 
-    parent_source_catalog = parent_source_catalog[~not_parent_remove_mask]
+    #and always include the source of target!
+    source_target = (parent_source_catalog["separations"] < 1)
 
-    print(len(parent_source_catalog))
+    parent_source_catalog_f = parent_source_catalog[parent_keep_mask | source_target]
+
+    if len(parent_source_catalog_f) == 0:
+        print(f"No parent sources found hmm : {len(parent_source_catalog_f)}, {tgid}, {len(parent_source_catalog)}")
+        #there is this one weird example 39627783936151447 where the source that is targeted is in Gaia DR2, but is clearly a small, extended galaxy.
+        #just return nans :) 
+        return [np.nan, np.nan, np.nan], parent_source_catalog_f
+        
+    ##MAKE RGB IMAGE OF THE TRACTOR ONLY RECONSTRUCTION
+    ##with these remaining sources, we can combine their source models in the folder to get the model!
+    total_model = np.zeros((3, width, width))
+    for pi in range(len(parent_source_catalog_f)):
+        objidi = parent_source_catalog_f["source_objid_new"].data[pi]
+        tractor_model_path = save_path + f"/tractor_models/tractor_parent_source_model_{objidi}.npy"
+        #load it!
+        model_i = np.load(tractor_model_path)
+        total_model += model_i
+    ##save the final parent galaxy tractor only model
+    rgb_data = sdss_rgb(total_model, ["g","r","z"])
+    fig, ax = plt.subplots(1, 1, figsize=(8, 8))
+    ax.set_title("Parent Galaxy Tractor Only Model",fontsize = 13)
+    ax.imshow(rgb_data, origin="lower")
+    fig.savefig(f"{save_path}/parent_galaxy_tractor_only_reconstruction.png")
+    plt.close(fig)
     
-    parent_source_catalog.write( save_path + "/parent_galaxy_sources_FINAL.fits", overwrite=True)
+    parent_source_catalog_f.write( save_path + "/parent_galaxy_sources_FINAL.fits", overwrite=True)
     
     #in the mean time, measure the simplest photometry!
-    g_flux_corr = mags_to_flux(parent_source_catalog["mag_g"]) / parent_source_catalog["mw_transmission_g"]
-    r_flux_corr = mags_to_flux(parent_source_catalog["mag_r"]) / parent_source_catalog["mw_transmission_r"]
-    z_flux_corr = mags_to_flux(parent_source_catalog["mag_z"]) / parent_source_catalog["mw_transmission_z"]
+    g_flux_corr = mags_to_flux(parent_source_catalog_f["mag_g"]) / parent_source_catalog_f["mw_transmission_g"]
+    r_flux_corr = mags_to_flux(parent_source_catalog_f["mag_r"]) / parent_source_catalog_f["mw_transmission_r"]
+    z_flux_corr = mags_to_flux(parent_source_catalog_f["mag_z"]) / parent_source_catalog_f["mw_transmission_z"]
     
     tot_g_mag = flux_to_mag(np.sum(g_flux_corr))
     tot_r_mag = flux_to_mag(np.sum(r_flux_corr))
     tot_z_mag = flux_to_mag(np.sum(z_flux_corr))
 
-    return [tot_g_mag, tot_r_mag, tot_z_mag], parent_source_catalog
+    return [tot_g_mag, tot_r_mag, tot_z_mag], parent_source_catalog_f
 
 
-def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_mags,save_path, subtract_source_pos, pcnn_val, npixels_min, threshold_rms_scale, wcs, source_zred=None):
+
+def cog_fitting_subfunction(same_input_dict,reconstruct_galaxy_dict, parent_galaxy_mask, final_cog_mask,  img_flag = None):
+    '''
+    The function that actually runs the cog fitting. We will compute two kinds of COG mags: both with and without the smooth parent blob mask.
+
+    The reconstruct_data_dict is the specific kind of data we are running with !
+
+    The parent_galaxy_mask is the mask on which we estimate the aperture
+    final_cog_mask here is just for visualization purposes, but is the total mask of all pixels that we mask in our cog analysis. It is already applied to the data_dict
+
+    '''
+
+    data_arr = same_input_dict["data_arr"]
+    tgid = same_input_dict["tgid"]
+    save_path = same_input_dict["save_path"]
+    parent_source_catalog = same_input_dict["parent_source_catalog"]
+    tractor_only_mags = same_input_dict["tractor_only_mags"]
+    tractor_dr9_mags = same_input_dict["tractor_dr9_mags"]
+    tractor_bkg_model = same_input_dict["tractor_bkg_model"]
+    data_arr_no_bkg_no_blend = same_input_dict["data_arr_no_bkg_no_blend"]
+    segment_map_smooth_new = same_input_dict["segment_map_smooth_new"]
+    wcs = same_input_dict["wcs"]
+    fiber_xpix = same_input_dict["fiber_xpix"]
+    fiber_ypix = same_input_dict["fiber_ypix"]
+        
+    # TO DO: Write a function that makes some diagnostic plots like these given a list of target ids!!    
+
+    fig,ax = make_subplots(ncol = 5, nrow = 2, row_spacing = 0.5,col_spacing=1.2, label_font_size = 17,plot_size = 3,direction = "horizontal", return_fig=True)
+
+    radii_scale = np.arange(1.25,4.25,0.25)
+            
+    cog_mags = {"g":[], "r": [], "z": []}
+
+    for scale_i in radii_scale:
+        aperture_for_phot_i, areafrac_in_image_i, xypos, aper_params = get_elliptical_aperture( parent_galaxy_mask , sigma = scale_i )
+
+        if scale_i == radii_scale[-1]:
+            areafrac_in_image_largest_aper = areafrac_in_image_i
+
+            #for the xy pos should not change at all between different scale and we just save it at the end
+            aper_xpos = xypos[0]
+            aper_ypos = xypos[1]
+            
+        #we only plot it at the edge cases
+        if scale_i == 2:
+            aperture_for_phot_i.plot(ax = ax[0], color = "k", lw = 1.25, ls = "-",alpha = 1)
+        if scale_i == 3:
+            aperture_for_phot_i.plot(ax = ax[0], color = "k", lw = 1.25, ls = "--",alpha = 1)
+        if scale_i == 4:
+            aperture_for_phot_i.plot(ax = ax[0], color = "k", lw = 1.25, ls = "dotted",alpha = 1)
+
+        for bi in "grz":
+            phot_table_i = aperture_photometry( reconstruct_galaxy_dict[bi] , aperture_for_phot_i)
+            #mask is not needed here as the data is already masked!
+            #note that unlike the case in the aperture_photo, we are no longer subtracting the total flux of blended objects from aperture
+            #instead, we subtract the blended source model so we accurately doing the COG analysis!!
+            new_mag_i = 22.5 - 2.5*np.log10( phot_table_i["aperture_sum"].data[0] )
+            cog_mags[bi].append(new_mag_i)
+
+    #convert this xy position into a ra,dec position using wcs of the image. Also, save the xy position
+    aper_ra_cen, aper_dec_cen, _ = wcs.all_pix2world(aper_xpos, aper_ypos, 0, 1)
+    
+    ##fit the parametric form to these data points
+    final_cog_params = {}
+    final_cog_params_err = {}
+    final_cog_chi2 = []
+    final_cog_dof = []
+    decrease_cog_len = []
+    decrease_cog_mag = []
+    
+    for bi in "grz":
+        #for the initial guess, mtot, m0, alpha_1, r_0, alpha_2
+        if np.isnan(cog_mags[bi][-1]):
+            guess_mag = 17
+            guess_low = 10
+            guess_high = 25
+        else:
+            guess_mag = cog_mags[bi][-1]
+            guess_low = guess_mag - 1
+            guess_high = guess_mag + 1
+        
+        p0 = [guess_mag, 2.0, 0.5, 1.5, 3]
+        
+        bounds = ([guess_low, 0, 0, 0.1, 0], [guess_high, 10, 10, 10, 10])
+
+        #construct a flag if the cog mags are decreasing!
+        cog_decrease_len, cog_decrease_mag = detect_cog_decrease(np.array(cog_mags[bi]))
+
+        decrease_cog_len.append(cog_decrease_len)
+        decrease_cog_mag.append(cog_decrease_mag)
+
+        popt, perr, chi2, dof = fit_cog(radii_scale, np.array(cog_mags[bi]), p0, bounds=bounds, maxfev=1200, filler=np.nan)
+
+        #note that popt returns the all the parameter values!
+        #we will separately save the final mags too
+        
+        final_cog_params[bi] = popt
+        final_cog_params_err[bi] = perr
+        final_cog_chi2.append(chi2)
+        final_cog_dof.append(dof)
+    
+    #this list contains the final magnitudes!
+    final_cog_mtot = []
+    final_cog_mtot_err = []
+
+    for bi in "grz":
+        final_cog_mtot.append( final_cog_params[bi][0] )
+        final_cog_mtot_err.append( final_cog_params_err[bi][0] )
+            
+    ##if the optimal fits were not found, 
+    
+    box_size = np.shape(data_arr)[1] 
+
+    ##plot the rgb image of actual data 
+    ax_id = 5
+    ax[ax_id].set_title("IMG",fontsize=12)
+    rgb_img = sdss_rgb([data_arr[0],data_arr[1],data_arr[2]], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
+    ax[ax_id].imshow(rgb_img, origin='lower',zorder = 0)
+    
+    circle = patches.Circle( (fiber_xpix, fiber_ypix),7, color='limegreen', fill=False, linewidth=1,ls ="--",zorder = 1)
+    ax[ax_id].add_patch(circle)
+    ax[ax_id].set_xlim([0,box_size])
+    ax[ax_id].set_ylim([0,box_size])
+    ax[ax_id].set_xticks([])
+    ax[ax_id].set_yticks([])
+
+    ##plot rgb data of the bkg tractor model
+    ax_id = 6
+    ax[ax_id].set_title("Tractor BKG model",fontsize = 12)
+    rgb_bkg_model = sdss_rgb([tractor_bkg_model[0],tractor_bkg_model[1],tractor_bkg_model[2]], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
+    ax[ax_id].imshow(rgb_bkg_model, origin='lower')
+    ax[ax_id].set_xlim([0,box_size])
+    ax[ax_id].set_ylim([0,box_size])
+    ax[ax_id].set_xticks([])
+    ax[ax_id].set_yticks([])
+    
+    
+    ##plot the rgb data - bkg tractor model
+    ax_id = 7
+    rgb_img_m_bkg_m_blend_model = sdss_rgb([data_arr_no_bkg_no_blend[0],data_arr_no_bkg_no_blend[1],data_arr_no_bkg_no_blend[2]], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
+    ax[ax_id].set_title("IMG - BKG - BLEND",fontsize = 12)
+    ax[ax_id].imshow(rgb_img_m_bkg_m_blend_model, origin='lower')
+    ax[ax_id].set_xlim([0,box_size])
+    ax[ax_id].set_ylim([0,box_size])
+    ax[ax_id].set_xticks([])
+    ax[ax_id].set_yticks([])
+
+    ##plotting the new segmentation map!
+    ax_id = 8
+    ax[ax_id].set_title("Smooth Segment Map",fontsize = 12)
+    if segment_map_smooth_new is None:
+        segment_map_smooth_new = np.ones_like(data_arr[0])
+    else:
+        segment_map_smooth_new = segment_map_smooth_new.data
+    ax[ax_id].imshow(segment_map_smooth_new, origin='lower', cmap="tab20",
+                   interpolation='nearest')
+    ax[ax_id].set_xlim([0,box_size])
+    ax[ax_id].set_ylim([0,box_size])
+    ax[ax_id].set_xticks([])
+    ax[ax_id].set_yticks([])
+
+    ax_id = 9
+    ax[ax_id].set_title("Final Parent Segment Map",fontsize = 12)
+    ax[ax_id].imshow(parent_galaxy_mask, origin='lower', cmap="Greys",
+                   interpolation='nearest',vmin=0,vmax=1, zorder = 0)
+
+    #overplot the tractor sources that lie on the final segment!
+    for i in range(len(parent_source_catalog)):
+        ax[ax_id].scatter( parent_source_catalog["xpix"][i] , parent_source_catalog["ypix"][i], s = 10, color = "r",zorder = 1)
+
+    ax[ax_id].set_xlim([0,box_size])
+    ax[ax_id].set_ylim([0,box_size])
+    ax[ax_id].set_xticks([])
+    ax[ax_id].set_yticks([])
+
+    
+    ##for reference, make the g+r+z plot with the masked pixels and different apertures on it
+    ax_id = 0
+
+    ax[ax_id].set_title(r"Sum$_{grz}$(Parent Reconstruct)",fontsize = 12)
+    combine_img = reconstruct_galaxy_dict["g"] + reconstruct_galaxy_dict["r"] + reconstruct_galaxy_dict["z"]
+    #setting the masked pixels to nans
+    combine_img[final_cog_mask] = np.nan
+    #instead of lognorm, let us do linear scaling
+    # norm_obj = LogNorm()
+    norm_obj = Normalize(vmin=np.nanmin(combine_img), vmax=np.nanmax(combine_img)) 
+    ax[ax_id].imshow(combine_img,origin="lower",norm=norm_obj,cmap = "viridis",zorder = 0)
+    ax[ax_id].scatter( aper_xpos, aper_ypos, color = "darkorange",marker = "x")
+            
+    ax[ax_id].set_xlim([0,box_size])
+    ax[ax_id].set_ylim([0,box_size])
+    ax[ax_id].set_xticks([])
+    ax[ax_id].set_yticks([])
+    
+    ##make the cog plot!
+    ax_id = 1
+
+    all_cogs = np.concatenate( (cog_mags["g"],cog_mags["r"],cog_mags["z"]) )
+    all_cogs = all_cogs[ ~np.isinf(all_cogs) & ~np.isnan(all_cogs)]
+
+    rgrid = np.linspace(1,5,100)
+
+    if len(all_cogs) > 0:
+        ax[ax_id].scatter(radii_scale, cog_mags["g"],color = "#1E88E5",zorder = 1)
+        if ~np.isnan(final_cog_params["g"][0]):
+            ax[ax_id].plot(rgrid, cog_function(rgrid, *final_cog_params["g"]), color = "#1E88E5",lw =1,zorder = 1  )
+
+        ax[ax_id].scatter(radii_scale, cog_mags["r"],color = "#FFC107",zorder = 1)
+        
+        if ~np.isnan(final_cog_params["r"][0]):
+            ax[ax_id].plot(rgrid, cog_function(rgrid, *final_cog_params["r"]), color = "#FFC107",lw =1,zorder = 1  )
+        
+        ax[ax_id].scatter(radii_scale, cog_mags["z"],color = "#D81B60",zorder = 1)
+        
+        if ~np.isnan(final_cog_params["z"][0]):
+            ax[ax_id].plot(rgrid, cog_function(rgrid, *final_cog_params["z"]), color = "#D81B60",lw =1 ,zorder = 1 )
+
+        spacing = 0.3
+        ypos = np.min(all_cogs) - 0.125 + 0.1
+
+        ax[ax_id].set_title(f"Chi2 : {final_cog_chi2[0]:.2f},{final_cog_chi2[1]:.2f},{final_cog_chi2[2]:.2f}")
+        
+        ax[ax_id].text(1.15, ypos, "g", weight="bold", color = "#1E88E5",fontsize = 16)
+        ax[ax_id].text(1.15 + 0.32, ypos, "r", weight="bold", color = "#FFC107",fontsize = 16)
+        ax[ax_id].text(1.15 + 2*spacing, ypos, "z", weight="bold", color = "#D81B60",fontsize = 16)
+
+        ax[ax_id].set_ylabel(r"$m(<r)$ mag",fontsize = 14)
+        ax[ax_id].set_xlim([1, 5])
+        ax[ax_id].vlines(x = 2, ymin=np.min(all_cogs) - 0.25, ymax = np.max(all_cogs) + 0.25, color = "k",ls = "-",lw = 1, alpha = 0.75, zorder = 0)
+        ax[ax_id].vlines(x = 3, ymin=np.min(all_cogs) - 0.25, ymax = np.max(all_cogs) + 0.25, color = "k",ls = "--",lw = 1, alpha = 0.75,zorder = 0)
+        ax[ax_id].vlines(x = 4, ymin=np.min(all_cogs) - 0.25, ymax = np.max(all_cogs) + 0.25, color = "k",ls = "dotted",lw = 1, alpha = 0.75, zorder = 0)
+        
+        ax[ax_id].set_ylim([ np.max(all_cogs) + 0.125,np.min(all_cogs) - 0.125  ] )
+
+
+    ##show the cog summary numbers!!
+    
+    
+    ax_id = 2
+
+    spacing = 0.085
+    start = 0.97
+    fsize = 11.5
+    ax[ax_id].text(0.05,start,f"Trac-DR9-mag g = {tractor_dr9_mags['g']:.2f}",size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+    ax[ax_id].text(0.05,start - spacing*1,f"Aper-mag (R4) g = {cog_mags['g'][-1]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+    ax[ax_id].text(0.05,start - spacing*2,f"COG-mag g = {final_cog_params['g'][0]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+    ax[ax_id].text(0.05,start - spacing*3,f"Trac-only-mag g = {tractor_only_mags[0]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+    
+    
+    ax[ax_id].text(0.05,start - spacing*4,f"Trac-DR9-mag r = {tractor_dr9_mags['r']:.2f}",size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+    ax[ax_id].text(0.05,start - spacing*5,f"Aper-mag (R4) r = {cog_mags['r'][-1]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+    ax[ax_id].text(0.05,start - spacing*6,f"COG-mag r= {final_cog_params['r'][0]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+    ax[ax_id].text(0.05,start - spacing*7,f"Trac-only-mag r= {tractor_only_mags[1]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+    
+
+    ax[ax_id].text(0.05,start - spacing*8,f"Trac-DR9-mag z = {tractor_dr9_mags['z']:.2f}",size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+    ax[ax_id].text(0.05,start - spacing*9,f"Aper-mag (R4) z = {cog_mags['z'][-1]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+    ax[ax_id].text(0.05,start - spacing*10,f"COG-mag z = {final_cog_params['z'][0]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+    ax[ax_id].text(0.05,start - spacing*11,f"Trac-only-mag z = {tractor_only_mags[2]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+    
+    # ax[ax_id].text(0.05,start - spacing*9,f"pCNN = {pcnn_val:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+
+    ##show the final summary figure
+    ax_id = 3
+    ax[ax_id].set_title("Reconstructed Galaxy",fontsize = 12)
+    rgb_reconstruct_full = process_img( [reconstruct_galaxy_dict["g"],reconstruct_galaxy_dict["r"],reconstruct_galaxy_dict["z"]], cutout_size = None, org_size = np.shape(data_arr)[1] )
+    
+    ax[ax_id].imshow(rgb_reconstruct_full, origin='lower',zorder = 0)
+    ax[ax_id].scatter( aper_xpos, aper_ypos, color = "darkorange",marker = "x",zorder = 1)
+    ax[ax_id].set_xlim([0,box_size])
+    ax[ax_id].set_ylim([0,box_size])
+    ax[ax_id].set_xticks([])
+    ax[ax_id].set_yticks([])
+
+    ##show the final summary figure
+    ax_id = 4
+    ax[ax_id].set_title("Simple-Photo Galaxy",fontsize = 12)
+    #read in the simple photo mask!
+    simple_photo_mask = np.load(save_path + "/simplest_photometry_binary_mask.npy")
+    data_arr[:, simple_photo_mask == 0] = 0
+    rgb_img_simple = sdss_rgb([data_arr[0],data_arr[1],data_arr[2]], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
+   
+    ax[ax_id].imshow(rgb_img_simple, origin='lower',zorder = 0)
+    ax[ax_id].set_xlim([0,box_size])
+    ax[ax_id].set_ylim([0,box_size])
+    ax[ax_id].set_xticks([])
+    ax[ax_id].set_yticks([])
+
+    ##saving this image :0
+    save_img_path = save_path + f"/cog_summary{img_flag}.png"
+    plt.savefig( save_img_path ,bbox_inches="tight")
+    # plt.savefig(f"/pscratch/sd/v/virajvm/temp_cog_plots/cog_{tgid}.png" ,bbox_inches="tight")
+    plt.close()
+
+    aper_mags_r425 = [ cog_mags["g"][-1], cog_mags["r"][-1], cog_mags["z"][-1] ] 
+
+
+    ##MW EXTINCTION CORRECTING THE MAGNITUDES!
+
+    #if the mags are nans, they will just carry through everything!!
+    #Correcting mags for MW extinction
+
+    mw_trans = np.load(save_path + "/source_cat_obs_transmission.npy")
+
+    cog_mags_mwc = []
+    for i in range(3):
+        cog_mag_i = final_cog_mtot[i] + 2.5 * np.log10(mw_trans[i])
+        cog_mags_mwc.append(cog_mag_i)
+        
+    aper_mags_r425_mwc = []
+    for i in range(3):
+        aper_mag_i = aper_mags_r425[i] + 2.5 * np.log10(mw_trans[i])
+        aper_mags_r425_mwc.append(aper_mag_i)
+
+    #saving the magnitudes locally in folder
+    np.save(save_path + f"/new_cog_mags{img_flag}.npy", cog_mags_mwc)
+
+    np.save(save_path + f"/aperture_mags_R4{img_flag}.npy", aper_mags_r425_mwc)
+
+    #we are returning dictionaries here
+    return_dict = {
+        "aper_r425_mags": aper_mags_r425_mwc,
+        "cog_mags": cog_mags_mwc,
+        "cog_mags_err": final_cog_mtot_err,
+        "cog_params_g": final_cog_params["g"],
+        "cog_params_g_err": final_cog_params_err["g"],
+        "cog_params_r": final_cog_params["r"],
+        "cog_params_r_err": final_cog_params_err["r"], 
+        "cog_params_z": final_cog_params["z"],
+        "cog_params_z_err": final_cog_params_err["z"],
+        "cog_chi2" :final_cog_chi2, 
+        "cog_dof" :final_cog_dof,
+        "cog_decrease_len" : decrease_cog_len,
+        "cog_decrease_mag" : decrease_cog_mag, 
+        "aper_r425_frac_in_image" :areafrac_in_image_largest_aper,
+        "img_path" :save_img_path,
+        "aper_radec_cen" : [aper_ra_cen, aper_dec_cen],
+        "aper_xy_pix_cen" :  [aper_xpos, aper_ypos], 
+        "aper_params" : aper_params}
+    
+    return return_dict
+
+        #     "cog_params_g":  cog_output_dict["cog_params"]["g"],
+    #     "cog_params_r":  cog_output_dict["cog_params"]["r"],
+    #     "cog_params_z":  cog_output_dict["cog_params"]["z"],
+    #     "cog_params_g_err": cog_output_dict["cog_params_err"]["g"],
+    #     "cog_params_r_err": cog_output_dict["cog_params_err"]["r"],
+    #     "cog_params_z_err": cog_output_dict["cog_params_err"]["z"],
+
+
+def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_dr9_mags,save_path, subtract_source_pos, pcnn_val, npixels_min, threshold_rms_scale, wcs, source_zred=None, source_radec=None):
     '''
     In this function, we run the curve-of-growth (COG) analysis!
     '''
@@ -505,7 +878,12 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_m
     np.save(save_path + "/final_reconstruct_galaxy_no_cog_mask.npy", reconstruct_data)
    
     ##get the current best estimate of the aperture blob
-    largest_blob, cog_num_seg_smooth, cog_num_seg, segment_map_smooth_new = get_new_segment(reconstruct_data, fiber_xpix, fiber_ypix, tot_noise_rms,  npixels_min, threshold_rms_scale, aperture_mask)
+    largest_blob, cog_num_seg_smooth, cog_num_seg, segment_map_smooth_new, mu_rough = get_new_segment(reconstruct_data, fiber_xpix, fiber_ypix, tot_noise_rms,  npixels_min, threshold_rms_scale, aperture_mask)
+
+    #note that it is possible for the largest blob to be None!
+
+    ##estimate the surface brightness of this segment_map_smooth_new aperture galaxy! With a simple cut in surface brightness, only galaxies below that will get this 
+    #additional optimal deblending cut!
 
     if source_zred < 0.01:
         #we do not apply any isolate galaxy mask
@@ -513,13 +891,17 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_m
         smooth_segment_found = True
         parent_galaxy_mask = largest_blob
         final_cog_mask = star_mask | aperture_mask
+        jaccard_img_path = None
+        num_deblend_segs_main_blob = 1
+        nearest_deblend_dist_pix = 0
 
     else:
         rgb_img = sdss_rgb([data_arr[0],data_arr[1],data_arr[2]])
         rgb_img_mask =  sdss_rgb([reconstruct_data[0], reconstruct_data [1], reconstruct_data [2]])
+
         
         #we construct the smooth galaxy mask using the r-band image of the latest reconstruction so far!
-        segm_smooth_deblend_opt, num_deblend_segs_main_blob, parent_galaxy_mask, non_parent_galaxy_mask, nearest_deblend_dist_pix = get_isolate_galaxy_mask(img_rgb = rgb_img, img_rgb_mask = rgb_img_mask, r_band_data=reconstruct_data[1], r_rms=noise_rms_perband[1], fiber_xpix=fiber_xpix, fiber_ypix=fiber_ypix, file_path=save_path, tgid=tgid, aperture_mask = aperture_mask )
+        segm_smooth_deblend_opt, num_deblend_segs_main_blob, parent_galaxy_mask, non_parent_galaxy_mask, nearest_deblend_dist_pix, jaccard_img_path = get_isolate_galaxy_mask(img_rgb = rgb_img, img_rgb_mask = rgb_img_mask, r_band_data=reconstruct_data[1], r_rms=noise_rms_perband[1], fiber_xpix=fiber_xpix, fiber_ypix=fiber_ypix, file_path=save_path, tgid=tgid, aperture_mask = aperture_mask, pcnn_val = pcnn_val, radec=source_radec, mu_rough = mu_rough )
 
         if segm_smooth_deblend_opt is not None:
             #a smooth segment was found!
@@ -539,7 +921,7 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_m
                 non_parent_galaxy_mask_for_cog = np.zeros_like(parent_galaxy_mask, dtype = bool) 
                 #we will still use the parent_galaxy_mask to estimate the aperture
         else:
-            #no smooth segment was found. This means that we will be reverting to Tractor source photometry as our final source magnitude!            
+            #no smooth segment was found. This means that we will be reverting to Tractor source photometry OR the original unsmoothed segment map as our final source magnitude!            
             smooth_segment_found = False
 
             non_parent_galaxy_mask_for_cog = np.zeros_like(parent_galaxy_mask, dtype = bool) 
@@ -553,339 +935,173 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_m
 
     #NOTE: the parent galaxy mask is a binary mask. 1 is on segment, 0 is bkg
 
-    tractor_only_mags, parent_source_catalog = get_tractor_only_mag(non_parent_galaxy_mask_for_cog, save_path)
+    #this is a mask without any of the deblending step
+    final_cog_mask_no_isolate_mask = star_mask | aperture_mask 
+
+    #we make two copies of image, one with the smooth blob mask applied and one with it!
+    reconstruct_data_no_smooth_mask = np.copy(reconstruct_data)
+    reconstruct_data_no_smooth_mask_dict = { "g": reconstruct_data_no_smooth_mask[0], "r": reconstruct_data_no_smooth_mask[1], "z": reconstruct_data_no_smooth_mask[2] }
 
     reconstruct_data[:,final_cog_mask] = 0
-
     #construct the reconstruct_data dictionary
     reconstruct_data_dict = { "g": reconstruct_data[0], "r": reconstruct_data[1], "z": reconstruct_data[2] }
 
     #save this all!!
     rgb_512 = process_img(reconstruct_data, cutout_size = 512, org_size = np.shape(data_arr)[1] )
     rgb_128 = process_img(reconstruct_data, cutout_size = 128, org_size = np.shape(data_arr)[1] )
-    rgb_reconstruct_full = process_img(reconstruct_data, cutout_size = None, org_size = np.shape(data_arr)[1] )
+
+    ##save some diagnostic images!
+    ax_256 = make_subplots(ncol=1,nrow = 1)
+    ax_256[0].set_title("Reconstructed Image 512x512",fontsize = 12)
+    ax_256[0].imshow(rgb_512, origin='lower')
+    ax_256[0].set_xlim([0,512])
+    ax_256[0].set_ylim([0,512])
+    ax_256[0].set_xticks([])
+    ax_256[0].set_yticks([])
+    plt.savefig(save_path + "/reconstruct_image_512.png",bbox_inches="tight")
+    plt.close()
+
+    ax_128 = make_subplots(ncol=1,nrow = 1)
+    ax_128[0].set_title("Reconstructed Image 128x128",fontsize = 12)
+    ax_128[0].imshow(rgb_128, origin='lower')
+    ax_128[0].set_xlim([0,128])
+    ax_128[0].set_ylim([0,128])
+    ax_128[0].set_xticks([])
+    ax_128[0].set_yticks([])
+    plt.savefig(save_path + "/reconstruct_image_128.png",bbox_inches="tight")
+    plt.close()
         
     np.save(save_path + "/final_mask_cog.npy", final_cog_mask  )
 
+
+    #example template empty dictionary used in case outputs are nans
+    EMPTY_COG_DICT = {
+            "aper_r425_mags": 3*[np.nan],
+            "cog_mags": [np.nan] * 3,
+            "cog_mags_err": [np.nan] * 3,
+            "cog_params_g": 5*[np.nan],
+            "cog_params_g_err": 5*[np.nan],
+            "cog_params_r": 5*[np.nan],
+            "cog_params_r_err": 5*[np.nan], 
+            "cog_params_z": 5*[np.nan],
+            "cog_params_z_err": 5*[np.nan],
+            "cog_chi2" :[np.nan] * 3, 
+            "cog_dof" :[np.nan] * 3,
+            "aper_r425_frac_in_image" :np.nan,
+            "img_path" : None,
+            "cog_decrease_len" : [np.nan] * 3,
+            "cog_decrease_mag" : [np.nan] * 3, 
+            "aper_radec_cen" : [np.nan, np.nan],
+            "aper_xy_pix_cen" :  [np.nan, np.nan], 
+            "aper_params" : [np.nan] * 3 ,
+        }
+
+
     if parent_galaxy_mask is None:
-        #basically, we will not run COG and just return here!!
+        #basically, we will not run COG and just return here!! 
         np.save(save_path + "/parent_galaxy_segment_mask.npy", np.zeros_like(parent_galaxy_mask)   )
 
         print("--"*6)
-        print(f"TARGETID={tgid} has no detections and thus the segmentation map for COG is None. COG will not be run.")
+        print(f"TARGETID={tgid} has no detections and thus the segmentation map for COG is None. COG will not be run. We will revert to original Tractor mags!")
         print(f"{save_path}")
         print("--"*6)
-        return_nans = return_blank_values()
-        return return_nans
+
+        FINAL_COG_DICT = {}
+
+        ##adding the cog_isolate params
+        for ki in EMPTY_COG_DICT.keys():
+            FINAL_COG_DICT[ki] = EMPTY_COG_DICT[ki]
+
+        #adding the cog no isoalte params
+        for ki in EMPTY_COG_DICT.keys():
+            FINAL_COG_DICT[ki + "_no_isolate_mask"] = EMPTY_COG_DICT[ki]
+
+        #adding the other params
+        FINAL_COG_DICT["jaccard_path"] = None
+        FINAL_COG_DICT["deblend_smooth_num_seg"] = num_deblend_segs_main_blob 
+        FINAL_COG_DICT["deblend_smooth_dist_pix"] =  np.nan
+        FINAL_COG_DICT["tractor_parent_mask_mags"] = [np.nan, np.nan, np.nan]
+        FINAL_COG_DICT["revert_to_org_tractor"] = True
+        FINAL_COG_DICT["aper_r2_mus_no_isolate_mask"] = mu_rough
+        
+        return FINAL_COG_DICT
     
-    else:        
+    else:       
+        ##save the tractor only mags!!
+        tractor_only_mags, parent_source_catalog = get_tractor_only_mag(parent_galaxy_mask, save_path, np.shape(data_arr)[1], tgid )
+        
         parent_galaxy_mask = parent_galaxy_mask.astype(int)
         
         np.save(save_path + "/parent_galaxy_segment_mask.npy", parent_galaxy_mask)  
 
-        # TO DO: Write a function that makes some diagnostic plots like these given a list of target ids!!    
-        # Also, then construct an alternative photometry using the similar color sources on main blob and that just lie on the deblended segment mask!
-        
-        ##save some diagnostic images!
-        ax_256 = make_subplots(ncol=1,nrow = 1)
-        ax_256[0].set_title("Reconstructed Image 512x512",fontsize = 12)
-        ax_256[0].imshow(rgb_512, origin='lower')
-        ax_256[0].set_xlim([0,512])
-        ax_256[0].set_ylim([0,512])
-        ax_256[0].set_xticks([])
-        ax_256[0].set_yticks([])
-        plt.savefig(save_path + "/reconstruct_image_512.png",bbox_inches="tight")
-        plt.close()
     
-        ax_128 = make_subplots(ncol=1,nrow = 1)
-        ax_128[0].set_title("Reconstructed Image 128x128",fontsize = 12)
-        ax_128[0].imshow(rgb_128, origin='lower')
-        ax_128[0].set_xlim([0,128])
-        ax_128[0].set_ylim([0,128])
-        ax_128[0].set_xticks([])
-        ax_128[0].set_yticks([])
-        plt.savefig(save_path + "/reconstruct_image_128.png",bbox_inches="tight")
-        plt.close()
+        ##RUNNING THE TWO KINDS OF COG PHOTOMETRY!! One with mask, and one without mask!
+        #Note, only the last 3 functions and img_flag will be changing. everything else will be kept the same.
 
+        same_input_dict = {
+            "data_arr": data_arr,
+            "tgid": tgid,
+            "save_path": save_path,
+            "parent_source_catalog": parent_source_catalog,
+            "tractor_only_mags": tractor_only_mags,
+            "tractor_dr9_mags": tractor_dr9_mags,
+            "tractor_bkg_model": tractor_bkg_model,
+            "data_arr_no_bkg_no_blend": data_arr_no_bkg_no_blend,
+            "segment_map_smooth_new": segment_map_smooth_new,
+            "wcs": wcs,
+            "fiber_xpix": fiber_xpix,
+            "fiber_ypix": fiber_ypix
+        }
         
-        fig,ax = make_subplots(ncol = 5, nrow = 2, row_spacing = 0.5,col_spacing=1.2, label_font_size = 17,plot_size = 3,direction = "horizontal", return_fig=True)
-    
-        radii_scale = np.arange(1.25,4.25,0.25)
-                
-        cog_mags = {"g":[], "r": [], "z": []}
-
-        for scale_i in radii_scale:
-            aperture_for_phot_i, areafrac_in_image_i, xypos, aper_params = get_elliptical_aperture( parent_galaxy_mask , sigma = scale_i )
-    
-            if scale_i == radii_scale[-1]:
-                areafrac_in_image_largest_aper = areafrac_in_image_i
-    
-                #for the xy pos should not change at all between different scale and we just save it at the end
-                aper_xpos = xypos[0]
-                aper_ypos = xypos[1]
-                
-            #we only plot it at the edge cases
-            if scale_i == 2:
-                aperture_for_phot_i.plot(ax = ax[0], color = "k", lw = 1.25, ls = "-",alpha = 1)
-            if scale_i == 3:
-                aperture_for_phot_i.plot(ax = ax[0], color = "k", lw = 1.25, ls = "--",alpha = 1)
-            if scale_i == 4:
-                aperture_for_phot_i.plot(ax = ax[0], color = "k", lw = 1.25, ls = "dotted",alpha = 1)
-    
-            for bi in "grz":
-                phot_table_i = aperture_photometry( reconstruct_data_dict[bi] , aperture_for_phot_i, mask = aperture_mask)
-                #note that unlike the case in the aperture_photo, we are no longer subtracting the total flux of blended objects from aperture
-                #instead, we subtract the blended source model so we accurately doing the COG analysis!!
-                new_mag_i = 22.5 - 2.5*np.log10( phot_table_i["aperture_sum"].data[0] )
-                cog_mags[bi].append(new_mag_i)
-    
-    
-        #convert this xy position into a ra,dec position using wcs of the image. Also, save the xy position
-        aper_ra_cen, aper_dec_cen, _ = wcs.all_pix2world(aper_xpos, aper_ypos, 0, 1)
+        cog_isolate_dict = cog_fitting_subfunction(same_input_dict, reconstruct_data_dict, parent_galaxy_mask, final_cog_mask, img_flag = "")
         
-        ##fit the parametric form to these data points
-        final_cog_params = {}
-        final_cog_params_err = {}
-        final_cog_chi2 = []
-        final_cog_dof = []
-        decrease_cog_len = []
-        decrease_cog_mag = []
+        #as a reminder, larget_blob is the pixel mask of the largest blob identified in the g+r+z smooth segmentation done in get_new_segment. It does not have
+        #if source_zred < 0.01, we are not doing the separate deblending anyways, and so need to run it all over again!
         
-        
-        for bi in "grz":
-            #for the initial guess, mtot, m0, alpha_1, r_0, alpha_2
-            if np.isnan(cog_mags[bi][-1]):
-                guess_mag = 17
-                guess_low = 10
-                guess_high = 25
-            else:
-                guess_mag = cog_mags[bi][-1]
-                guess_low = guess_mag - 1
-                guess_high = guess_mag + 1
+        if largest_blob is not None and source_zred > 0.01:
+            cog_NO_isolate_dict = cog_fitting_subfunction(same_input_dict,reconstruct_data_no_smooth_mask_dict, largest_blob, final_cog_mask_no_isolate_mask,  img_flag = "_no_isolate")
+        else:
+            cog_NO_isolate_dict = {}
+            #we want to return nans
+            for ki in EMPTY_COG_DICT.keys():
+                cog_NO_isolate_dict[ki] = EMPTY_COG_DICT[ki]
             
-            p0 = [guess_mag, 2.0, 0.5, 1.5, 3]
-            
-            bounds = ([guess_low, 0, 0, 0.1, 0], [guess_high, 10, 10, 10, 10])
-    
-            #construct a flag if the cog mags are decreasing!
-            cog_decrease_len, cog_decrease_mag = detect_cog_decrease(np.array(cog_mags[bi]))
-    
-            decrease_cog_len.append(cog_decrease_len)
-            decrease_cog_mag.append(cog_decrease_mag)
-    
-            popt, perr, chi2, dof = fit_cog(radii_scale, np.array(cog_mags[bi]), p0, bounds=bounds, maxfev=1200, filler=np.nan)
-    
-            #note that popt returns the all the parameter values!
-            #we will separately save the final mags too
-            
-            final_cog_params[bi] = popt
-            final_cog_params_err[bi] = perr
-            final_cog_chi2.append(chi2)
-            final_cog_dof.append(dof)
+        #initializing the final dictionary to be returned
+        ##vv the keys in the above dicts returning by the cog_fitting_subfunction command
+        # "aper_r425_mags": aper_mags_r4,
+        # "cog_mags": final_cog_mtot,
+        # "cog_mags_err": final_cog_mtot_err,
+        # "cog_params": final_cog_params,
+        # "cog_params_err": final_cog_params_err,
+        # "cog_chi2" :final_cog_chi2, 
+        # "cog_dof" :final_cog_dof,
+        # "cog_decrease_len" : decrease_cog_len,
+        # "cog_decrease_mag" : decrease_cog_mag, 
+        # "aper_r425_frac_in_image" :areafrac_in_image_largest_aper,
+        # "save_img_path" :save_img_path,
+        # "aper_radec_cen" : [aper_ra_cen, aper_dec_cen],
+        # "aper_xy_pix_cen" :  [aper_xpos, aper_ypos], 
+        # "aper_params" : aper_params}
         
-        #this list contains the final magnitudes!
-        #if the cog optimization did not work, we just look at the magnitude in the largest aperture radius
-        final_cog_mtot = []
-        final_cog_mtot_err = []
-            
-        for bi in "grz":
-            if np.isnan(final_cog_params[bi][0]):
-                #the cog optimization did not work
-                final_cog_mtot.append( cog_mags[bi][-1] )
-                final_cog_mtot_err.append( np.nan )
-            else:
-                final_cog_mtot.append( final_cog_params[bi][0] )
-                final_cog_mtot_err.append( final_cog_params_err[bi][0] )
-                
-        ##if the optimal fits were not found, 
-        
-        box_size = np.shape(data_arr)[1] 
-    
-        ##plot the rgb image of actual data 
-        ax_id = 5
-        ax[ax_id].set_title("IMG",fontsize=12)
-        rgb_img = sdss_rgb([data_arr[0],data_arr[1],data_arr[2]], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
-        ax[ax_id].imshow(rgb_img, origin='lower',zorder = 0)
-        
-        circle = patches.Circle( (fiber_xpix, fiber_ypix),7, color='limegreen', fill=False, linewidth=1,ls ="--",zorder = 1)
-        ax[ax_id].add_patch(circle)
-        ax[ax_id].set_xlim([0,box_size])
-        ax[ax_id].set_ylim([0,box_size])
-        ax[ax_id].set_xticks([])
-        ax[ax_id].set_yticks([])
-    
-        ##plot rgb data of the bkg tractor model
-        ax_id = 6
-        ax[ax_id].set_title("Tractor BKG model",fontsize = 12)
-        rgb_bkg_model = sdss_rgb([tractor_bkg_model[0],tractor_bkg_model[1],tractor_bkg_model[2]], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
-        ax[ax_id].imshow(rgb_bkg_model, origin='lower')
-        ax[ax_id].set_xlim([0,box_size])
-        ax[ax_id].set_ylim([0,box_size])
-        ax[ax_id].set_xticks([])
-        ax[ax_id].set_yticks([])
-        
-        
-        ##plot the rgb data - bkg tractor model
-        ax_id = 7
-        rgb_img_m_bkg_m_blend_model = sdss_rgb([data_arr_no_bkg_no_blend[0],data_arr_no_bkg_no_blend[1],data_arr_no_bkg_no_blend[2]], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
-        ax[ax_id].set_title("IMG - BKG - BLEND",fontsize = 12)
-        ax[ax_id].imshow(rgb_img_m_bkg_m_blend_model, origin='lower')
-        ax[ax_id].set_xlim([0,box_size])
-        ax[ax_id].set_ylim([0,box_size])
-        ax[ax_id].set_xticks([])
-        ax[ax_id].set_yticks([])
-    
-        ##plotting the new segmentation map!
-        ax_id = 8
-        ax[ax_id].set_title("Smooth Segment Map",fontsize = 12)
-        if segment_map_smooth_new is None:
-            segment_map_smooth_new = np.ones_like(segment_map_smooth_new)
-        ax[ax_id].imshow(segment_map_smooth_new, origin='lower', cmap="tab20",
-                       interpolation='nearest')
-        ax[ax_id].set_xlim([0,box_size])
-        ax[ax_id].set_ylim([0,box_size])
-        ax[ax_id].set_xticks([])
-        ax[ax_id].set_yticks([])
+        FINAL_COG_DICT = {}
 
-        ax_id = 9
-        ax[ax_id].set_title("Final Parent Segment Map",fontsize = 12)
-        ax[ax_id].imshow(parent_galaxy_mask, origin='lower', cmap="Greys",
-                       interpolation='nearest',vmin=0,vmax=1, zorder = 0)
+        ##adding the cog_isolate params
+        for ki in EMPTY_COG_DICT.keys():
+            FINAL_COG_DICT[ki] = cog_isolate_dict[ki]
 
-        #overplot the tractor sources that lie on the final segment!
-        for i in range(len(parent_source_catalog)):
-            ax[ax_id].scatter( parent_source_catalog["xpix"][i] , parent_source_catalog["ypix"][i], s = 10, color = "r",zorder = 1)
-    
-        ax[ax_id].set_xlim([0,box_size])
-        ax[ax_id].set_ylim([0,box_size])
-        ax[ax_id].set_xticks([])
-        ax[ax_id].set_yticks([])
+        for ki in EMPTY_COG_DICT.keys():
+            FINAL_COG_DICT[ki + "_no_isolate_mask"] = cog_NO_isolate_dict[ki]
+
+        FINAL_COG_DICT["jaccard_path"] = jaccard_img_path
+        FINAL_COG_DICT["deblend_smooth_num_seg"] = num_deblend_segs_main_blob 
+        FINAL_COG_DICT["deblend_smooth_dist_pix"] =  nearest_deblend_dist_pix
+        FINAL_COG_DICT["tractor_parent_mask_mags"] = tractor_only_mags
+        FINAL_COG_DICT["revert_to_org_tractor"] = False
+        FINAL_COG_DICT["aper_r2_mus_no_isolate_mask"] = mu_rough
+        
+        return FINAL_COG_DICT
 
         
-        ##for reference, make the g+r+z plot with the masked pixels and different apertures on it
-        ax_id = 0
-    
-        ax[ax_id].set_title(r"Sum$_{grz}$(Parent Reconstruct)",fontsize = 12)
-        combine_img = reconstruct_data[0] + reconstruct_data[1] + reconstruct_data[2]
-        #setting the masked pixels to nans
-        combine_img[final_cog_mask] = np.nan
-        
-        #instead of lognorm, let us do linear scaling
-        # norm_obj = LogNorm()
-        norm_obj = Normalize(vmin=np.nanmin(combine_img), vmax=np.nanmax(combine_img)) 
-        ax[ax_id].imshow(combine_img,origin="lower",norm=norm_obj,cmap = "viridis",zorder = 0)
-        ax[ax_id].scatter( aper_xpos, aper_ypos, color = "darkorange",marker = "x")
-                
-        ax[ax_id].set_xlim([0,box_size])
-        ax[ax_id].set_ylim([0,box_size])
-        ax[ax_id].set_xticks([])
-        ax[ax_id].set_yticks([])
-        
-        ##make the cog plot!
-        ax_id = 1
-    
-        all_cogs = np.concatenate( (cog_mags["g"],cog_mags["r"],cog_mags["z"]) )
-        all_cogs = all_cogs[ ~np.isinf(all_cogs) & ~np.isnan(all_cogs)]
-    
-        rgrid = np.linspace(1,5,100)
-    
-        if len(all_cogs) > 0:
-            ax[ax_id].scatter(radii_scale, cog_mags["g"],color = "#1E88E5",zorder = 1)
-            if ~np.isnan(final_cog_params["g"][0]):
-                ax[ax_id].plot(rgrid, cog_function(rgrid, *final_cog_params["g"]), color = "#1E88E5",lw =1,zorder = 1  )
-    
-            ax[ax_id].scatter(radii_scale, cog_mags["r"],color = "#FFC107",zorder = 1)
-            
-            if ~np.isnan(final_cog_params["r"][0]):
-                ax[ax_id].plot(rgrid, cog_function(rgrid, *final_cog_params["r"]), color = "#FFC107",lw =1,zorder = 1  )
-            
-            ax[ax_id].scatter(radii_scale, cog_mags["z"],color = "#D81B60",zorder = 1)
-            
-            if ~np.isnan(final_cog_params["z"][0]):
-                ax[ax_id].plot(rgrid, cog_function(rgrid, *final_cog_params["z"]), color = "#D81B60",lw =1 ,zorder = 1 )
-    
-            spacing = 0.3
-            ypos = np.min(all_cogs) - 0.125 + 0.1
-    
-            ax[ax_id].set_title(f"Chi2 : {final_cog_chi2[0]:.2f},{final_cog_chi2[1]:.2f},{final_cog_chi2[2]:.2f}")
-            
-            ax[ax_id].text(1.15, ypos, "g", weight="bold", color = "#1E88E5",fontsize = 16)
-            ax[ax_id].text(1.15 + 0.32, ypos, "r", weight="bold", color = "#FFC107",fontsize = 16)
-            ax[ax_id].text(1.15 + 2*spacing, ypos, "z", weight="bold", color = "#D81B60",fontsize = 16)
-    
-            ax[ax_id].set_ylabel(r"$m(<r)$ mag",fontsize = 14)
-            ax[ax_id].set_xlim([1, 5])
-            ax[ax_id].vlines(x = 2, ymin=np.min(all_cogs) - 0.25, ymax = np.max(all_cogs) + 0.25, color = "k",ls = "-",lw = 1, alpha = 0.75, zorder = 0)
-            ax[ax_id].vlines(x = 3, ymin=np.min(all_cogs) - 0.25, ymax = np.max(all_cogs) + 0.25, color = "k",ls = "--",lw = 1, alpha = 0.75,zorder = 0)
-            ax[ax_id].vlines(x = 4, ymin=np.min(all_cogs) - 0.25, ymax = np.max(all_cogs) + 0.25, color = "k",ls = "dotted",lw = 1, alpha = 0.75, zorder = 0)
-            
-            ax[ax_id].set_ylim([ np.max(all_cogs) + 0.125,np.min(all_cogs) - 0.125  ] )
-    
-
-        ##show the cog summary numbers!!
-        
-        
-        ax_id = 2
-    
-        spacing = 0.085
-        start = 0.97
-        fsize = 11.5
-        ax[ax_id].text(0.05,start,f"Tractor-mag g = {tractor_mags['g']:.2f}",size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-        ax[ax_id].text(0.05,start - spacing*1,f"Aper-mag (R4) g = {cog_mags['g'][-1]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-        ax[ax_id].text(0.05,start - spacing*2,f"COG-mag g = {final_cog_params['g'][0]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-        ax[ax_id].text(0.05,start - spacing*3,f"Trac-only-mag g = {tractor_only_mags[0]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-        
-        
-        ax[ax_id].text(0.05,start - spacing*4,f"Tractor-mag r = {tractor_mags['r']:.2f}",size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-        ax[ax_id].text(0.05,start - spacing*5,f"Aper-mag (R4) r = {cog_mags['r'][-1]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-        ax[ax_id].text(0.05,start - spacing*6,f"COG-mag r= {final_cog_params['r'][0]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-        ax[ax_id].text(0.05,start - spacing*7,f"Trac-only-mag r= {tractor_only_mags[1]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-        
-    
-        ax[ax_id].text(0.05,start - spacing*8,f"Tractor-mag z = {tractor_mags['z']:.2f}",size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-        ax[ax_id].text(0.05,start - spacing*9,f"Aper-mag (R4) z = {cog_mags['z'][-1]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-        ax[ax_id].text(0.05,start - spacing*10,f"COG-mag z = {final_cog_params['z'][0]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-        ax[ax_id].text(0.05,start - spacing*11,f"Trac-only-mag z = {tractor_only_mags[2]:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-        
-        # ax[ax_id].text(0.05,start - spacing*9,f"pCNN = {pcnn_val:.2f}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-    
-        ##show the final summary figure
-        ax_id = 3
-        ax[ax_id].set_title("Reconstructed Galaxy",fontsize = 12)
-        ax[ax_id].imshow(rgb_reconstruct_full, origin='lower',zorder = 0)
-        ax[ax_id].scatter( aper_xpos, aper_ypos, color = "darkorange",marker = "x",zorder = 1)
-        ax[ax_id].set_xlim([0,box_size])
-        ax[ax_id].set_ylim([0,box_size])
-        ax[ax_id].set_xticks([])
-        ax[ax_id].set_yticks([])
-
-        ##show the final summary figure
-        ax_id = 4
-        ax[ax_id].set_title("Simple-Photo Galaxy",fontsize = 12)
-        #read in the simple photo mask!
-        simple_photo_mask = np.load(save_path + "/simplest_photometry_binary_mask.npy")
-        data_arr[:, simple_photo_mask == 0] = 0
-        rgb_img_simple = sdss_rgb([data_arr[0],data_arr[1],data_arr[2]], ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
-       
-        ax[ax_id].imshow(rgb_img_simple, origin='lower',zorder = 0)
-        ax[ax_id].set_xlim([0,box_size])
-        ax[ax_id].set_ylim([0,box_size])
-        ax[ax_id].set_xticks([])
-        ax[ax_id].set_yticks([])
-    
-        ##saving this image :0
-        save_img_path = save_path + "/cog_summary.png"
-        plt.savefig( save_img_path ,bbox_inches="tight")
-        # plt.savefig(f"/pscratch/sd/v/virajvm/temp_cog_plots/cog_{tgid}.png" ,bbox_inches="tight")
-        plt.close()
-    
-        aper_mags_r4 = [ cog_mags["g"][-1], cog_mags["r"][-1], cog_mags["z"][-1] ] 
-    
-        #we are returning dictionaries here
-        return aper_mags_r4, final_cog_mtot, final_cog_mtot_err, final_cog_params, final_cog_params_err, final_cog_chi2, final_cog_dof, areafrac_in_image_largest_aper,  save_img_path, decrease_cog_len, decrease_cog_mag, [aper_ra_cen, aper_dec_cen], [aper_xpos, aper_ypos], aper_params
-
-
-
 
 def run_cog_pipe(input_dict):
     '''
@@ -899,88 +1115,56 @@ def run_cog_pipe(input_dict):
     threshold_rms_scale = input_dict["threshold_rms_scale"]
     wcs = input_dict["wcs"]
     source_zred  = input_dict["redshift"]
+    source_ra  = input_dict["ra"] 
+    source_dec  = input_dict["dec"]
     
     #loading all the relevant data!
     segment_map_v2 = np.load(save_path + "/segment_map_v2.npy")
     star_mask = np.load(save_path + "/star_mask.npy")
     aperture_mask = np.load(save_path + "/aperture_mask.npy") #this aperture mask already contains the mask for the saturated pixels.
-    tractor_mags_arr = np.load(save_path + "/tractor_mags.npy")
-    tractor_mags = { "g": tractor_mags_arr[0], "r": tractor_mags_arr[1], "z": tractor_mags_arr[2]  }
-    mw_trans = np.load(save_path + "/source_cat_obs_transmission.npy")
+    tractor_dr9_mags_arr = np.load(save_path + "/tractor_mags.npy")
+    tractor_dr9_mags = { "g": tractor_dr9_mags_arr[0], "r": tractor_dr9_mags_arr[1], "z": tractor_dr9_mags_arr[2]  }
+
 
     with open(save_path + '/subtract_source_pos.pkl', 'rb') as f:
         subtract_source_pos = pickle.load(f)
 
-
     #feeding it to the cog function!
-    ## MAYBE THIS RUN COGS FUNCTION IS NOT NEDED!
-    aper_mags_r4, final_cog_mags, final_cog_mags_err, final_cog_params, final_cog_params_err, final_cog_chi2, final_cog_dof, areafrac_in_image, save_img_path,  decrease_cog_len, decrease_cog_mag, aper_world_coord, aper_pix_coord, aper_params = run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, source_tgid, tractor_mags, save_path, subtract_source_pos, pcnn_val, npixels_min, threshold_rms_scale, wcs, source_zred = source_zred )
-
-    if np.isnan(aper_world_coord[0]) and np.isnan(final_cog_mags[0]):     
-        #the outputs was None!!
-        return {
-        "aper_mags_r4": 3*[np.nan],
-        "cog_mags": 3*[np.nan],
-        "cog_mags_err": 3*[np.nan],
-        "params_g": 5*[np.nan],
-        "params_r": 5*[np.nan],
-        "params_z": 5*[np.nan],
-        "params_g_err": 5*[np.nan],
-        "params_r_err": 5*[np.nan],
-        "params_z_err": 5*[np.nan],
-        "img_path": None,
-        "cog_chi2" : 3*[np.nan], 
-        "cog_dof" : 3*[np.nan],
-        "areafrac_in_image": np.nan,
-        "cog_decrease_len": 3*[np.nan], 
-        "cog_decrease_mag": 3*[np.nan],
-        "aper_ra_cen": np.nan,
-        "aper_dec_cen": np.nan,
-        "aper_xpix_cen": np.nan,
-        "aper_ypix_cen": np.nan,
-        "aper_params": 3*[np.nan]}
-
-
-    else:
-        #mw extinction correcting the magnitudes!
-        cog_mag_g = final_cog_mags[0] + 2.5 * np.log10(mw_trans[0])
-        cog_mag_r = final_cog_mags[1] + 2.5 * np.log10(mw_trans[1])
-        cog_mag_z = final_cog_mags[2] + 2.5 * np.log10(mw_trans[2])
+    cog_output_dict = run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, source_tgid, tractor_dr9_mags, save_path, subtract_source_pos, pcnn_val, npixels_min, threshold_rms_scale, wcs, source_zred = source_zred, source_radec = [source_ra, source_dec] )
     
-        all_aper_mags_r4 = []
-        for i in range(3):
-            aper_mag_i = aper_mags_r4[i] + 2.5 * np.log10(mw_trans[i])
-            all_aper_mags_r4.append(aper_mag_i)
-    
-        #saving the magnitudes locally in folder
-        cog_mags = [cog_mag_g, cog_mag_r, cog_mag_z]
-        np.save(save_path + "/new_cog_mags.npy", cog_mags)
-    
-        np.save(save_path + "/aperture_mags_R4.npy", all_aper_mags_r4)
-        
-        #we return these final cog mags and append them to the catalog
-        #we are expanding out the dictionaries as we do not want to returns dicts
-        return {
-        "aper_mags_r4": all_aper_mags_r4,
-        "cog_mags": cog_mags,
-        "cog_mags_err": final_cog_mags_err,
-        "params_g": final_cog_params["g"],
-        "params_r": final_cog_params["r"],
-        "params_z": final_cog_params["z"],
-        "params_g_err": final_cog_params_err["g"],
-        "params_r_err": final_cog_params_err["r"],
-        "params_z_err": final_cog_params_err["z"],
-        "img_path": save_img_path,
-        "cog_chi2" : final_cog_chi2, 
-        "cog_dof" : final_cog_dof,
-        "areafrac_in_image": areafrac_in_image,
-        "cog_decrease_len": decrease_cog_len, 
-        "cog_decrease_mag": decrease_cog_mag,
-        "aper_ra_cen": aper_world_coord[0],
-        "aper_dec_cen": aper_world_coord[1],
-        "aper_xpix_cen": aper_pix_coord[0],
-        "aper_ypix_cen": aper_pix_coord[1],
-        "aper_params": aper_params}
-     
-    
+    ##NOTE: ALL THE MAGS RETURNED HERE ARE MW EXTINCTION CORRECTED
 
+    return cog_output_dict
+    
+    # return {
+    #     "aper_r425_mags": all_aper_mags_r425,
+    #     "cog_mags": cog_mags,
+    #     "cog_mags_err": cog_output_dict["cog_mtot_err"],
+    #     "cog_params_g":  cog_output_dict["cog_params"]["g"],
+    #     "cog_params_r":  cog_output_dict["cog_params"]["r"],
+    #     "cog_params_z":  cog_output_dict["cog_params"]["z"],
+    #     "cog_params_g_err": cog_output_dict["cog_params_err"]["g"],
+    #     "cog_params_r_err": cog_output_dict["cog_params_err"]["r"],
+    #     "cog_params_z_err": cog_output_dict["cog_params_err"]["z"],
+    #     "img_path": cog_output_dict["save_img_path"],
+    #     "cog_chi2" : cog_output_dict["cog_chi2"], 
+    #     "cog_dof" : cog_output_dict["cog_dof"],
+    #     "aper_r425_frac_in_image": cog_output_dict["aper_r425_frac_in_image"],
+    #     "cog_decrease_len": cog_output_dict["cog_decrease_len"], 
+    #     "cog_decrease_mag": cog_output_dict["cog_decrease_len"],
+    #     "aper_ra_cen": cog_output_dict["aper_radec_cen"][0],
+    #     "aper_dec_cen": cog_output_dict["aper_radec_cen"][1],
+    #     "aper_xpix_cen": cog_output_dict["aper_xy_pix_cen"][0],
+    #     "aper_ypix_cen": cog_output_dict["aper_xy_pix_cen"][1],
+    #     "aper_params": cog_output_dict["aper_params"],
+    #     "jaccard_path": cog_output_dict["jaccard_img_path"],
+    #     "deblend_smooth_num_seg": cog_output_dict["deblend_smooth_num_seg"],
+    #     "deblend_smooth_dist_pix": cog_output_dict["deblend_smooth_dist_pix"],
+    #     "tractor_parent_mask_mags": cog_output_dict["parent_tractor_only_mags"],
+    #     "revert_to_org_tractor": cog_output_dict["revert_to_org_tractor"] 
+    # }
+
+
+    
+    
+    

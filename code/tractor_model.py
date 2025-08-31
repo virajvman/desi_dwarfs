@@ -11,6 +11,7 @@ import numpy as np
 from astropy.io import fits
 from tractor.tractortime import TAITime
 from astrometry.util.util import Tan
+import warnings
 from legacypipe.survey import LegacySurveyWcs, ConstantFitsWcs
 from astropy.wcs import WCS
 from legacypipe.survey import wcs_for_brick, BrickDuck
@@ -246,8 +247,8 @@ def save_rgb_single_panel(data_arr, file_path, image_name=None):
     rgb_data = sdss_rgb(data_arr, ["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03)
 
     fig, ax = plt.subplots(1, 1, figsize=(8, 8))
-    ax[0].set_title("MODEL",fontsize = 13)
-    ax[0].imshow(rgb_data, origin="lower")
+    ax.set_title("MODEL",fontsize = 13)
+    ax.imshow(rgb_data, origin="lower")
     plt.savefig(f"{file_path}/{image_name}.png")
     plt.close()
 
@@ -367,9 +368,9 @@ def get_blended_remove_sources(i, ra, dec, tgid, file_path, img_path, width,pixs
         #if this source has a missing psfsize then we assume an average psfsize from the catalog
         ave_psfsize_dict = { "g": np.mean(tractor.get("psfsize_g")), "r": np.mean(tractor.get("psfsize_r")),  "z": np.mean(tractor.get("psfsize_z"))    }
         
-        if len(tractor_blend_re) != 0:
-                
+        if len(tractor_blend_re) != 0:    
             wcs = make_custom_wcs(ra, dec, width, pixscale)
+
             
             mod = build_model_image(tractor_blend_re, wcs, ave_psfsize_dict, mean_psf=True)
             
@@ -388,48 +389,74 @@ def get_blended_remove_sources(i, ra, dec, tgid, file_path, img_path, width,pixs
 def get_main_blob_sources(i, ra, dec, tgid, file_path, img_path, width, pixscale=0.262,testing=False):
     '''
     Function that gets all the tractor sources for things on the main blob that are considered to be the galaxy of interest!
-    The goal is that we will use this as a model image for our parent galaxy and just add up the component magnitudes to get the total photometry
+    The goal is that we will use this as a model image for our parent galaxy and just add up the component magnitudes to get the total photometry.
+
+    The models for individual sources are stored separately and in a folder
     '''
 
-    tractor = load_tractor(file_path)
+    parent_source_file = file_path + "/parent_galaxy_sources.fits"
+
+    if os.path.exists(parent_source_file):
+        tractor = load_tractor(file_path)
     
-    parent_source_cat = Table.read(file_path + "/parent_galaxy_sources.fits")
-
-    ps_ras = parent_source_cat["ra"]
-    ps_decs = parent_source_cat["dec"]
+        #we will be saving models for all these sources!
+        parent_source_cat = Table.read(parent_source_file)
     
-    #we need to get all the pixel locations of these sources given the wcs and see which ones lie on the main segment
-    #sources not on the main segment will be on a zero!
-    ra_all = tractor.get("ra")
-    dec_all = tractor.get("dec")
+        ps_ras = parent_source_cat["ra"]
+        ps_decs = parent_source_cat["dec"]
+        
+        #we need to get all the pixel locations of these sources given the wcs and see which ones lie on the main segment
+        #sources not on the main segment will be on a zero!
+        ra_all = tractor.get("ra")
+        dec_all = tractor.get("dec")
+    
+        #find all the sources that match the blend_remove_cat objects!
+        c = SkyCoord(ra= ps_ras* u.degree, dec= ps_decs*u.degree )
+        catalog = SkyCoord(ra=ra_all*u.degree, dec=dec_all*u.degree )
+        idx, d2d, d3d = c.match_to_catalog_sky(catalog)
+    
+        #get the indices of objects in the ra_all catalog that match and have zero separation!
+        parent_source_inds = idx[d2d.arcsec == 0]
+    
+        if len(parent_source_inds) != len(ps_ras):
+            raise ValueError(f"Inconsistent number of sources in parent galaxy : {len(parent_source_inds)}, {len(ps_ras)} for {tgid}")
+    
+        tractor_parent = tractor[parent_source_inds]
 
-    #find all the sources that match the blend_remove_cat objects!
-    c = SkyCoord(ra= ps_ras* u.degree, dec= ps_decs*u.degree )
-    catalog = SkyCoord(ra=ra_all*u.degree, dec=dec_all*u.degree )
-    idx, d2d, d3d = c.match_to_catalog_sky(catalog)
+        ave_psfsize_dict = { "g": np.mean(tractor_parent.get("psfsize_g")), "r": np.mean(tractor_parent.get("psfsize_r")),  "z": np.mean(tractor_parent.get("psfsize_z"))    }
+    
+        tractor_save_dir = file_path + "/tractor_models"
+        
+        os.makedirs(tractor_save_dir, exist_ok=True)
+    
+        if len(tractor_parent) != 0:
 
-    #get the indices of objects in the ra_all catalog that match and have zero separation!
-    parent_source_inds = idx[d2d.arcsec == 0]
-
-    if len(parent_source_inds) != len(ps_ras):
-        raise ValueError(f"Inconsistent number of sources in parent galaxy : {len(parent_source_inds}, {len(ps_ras)} for {tgid}")
-
-    tractor_parent = tractor[parent_source_inds]
-
-    ave_psfsize_dict = { "g": np.mean(tractor_parent.get("psfsize_g")), "r": np.mean(tractor_parent.get("psfsize_r")),  "z": np.mean(tractor_parent.get("psfsize_z"))    }
-
-    if len(tractor_blend_re) != 0:
-        wcs = make_custom_wcs(ra, dec, width, pixscale)
-        mod = build_model_image(tractor_parent, wcs, ave_psfsize_dict, mean_psf=True)
-        np.save(f"{file_path}/tractor_parent_galaxy_model.npy", mod)
-
-        #save just this model galaxy image!
-        save_rgb_single_panel(mod, file_path, image_name="tractor_parent_galaxy_model")
+            max_ra_diff = np.max(np.abs(tractor_parent.get("ra") - parent_source_cat["ra"]))
+            if max_ra_diff > 0:
+                raise ValueError(f"Inconsistent RA values in get_main_blob_sources : {max_ra_diff}")
+                
+            wcs = make_custom_wcs(ra, dec, width, pixscale)
+            
+            total_model = np.zeros((3, width, width))
+            
+            #loop through each source model image!
+            for k in range(len(tractor_parent)):
+                mod = build_model_image(tractor_parent[k], wcs, ave_psfsize_dict, mean_psf=True)
+                total_model += mod
+                np.save(f"{tractor_save_dir}/tractor_parent_source_model_{parent_source_cat["source_objid_new"].data[k]:d}.npy", mod)
+    
+            #save the total combined image for reference!
+            save_rgb_single_panel(total_model, file_path, image_name="tractor_parent_galaxy_model_presmooth_mask")
+    
+        else:
+            print(f"The parent source catalog existed for {tgid}, but no sources remain after parent mask.")
+            
+            #there were no sources to subtract and so we can save an empty array!
+            # np.save(f"{file_path}/tractor_parent_galaxy_model.npy", np.zeros((3, width, width))  )
+            pass
 
     else:
-        #there were no sources to subtract and so we can save an empty array!
-        np.save(f"{file_path}/tractor_parent_galaxy_model.npy", np.zeros((3, width, width))  )
-
+        print(f"The parent source catalog file did not exist for {tgid}! Skipping tractor model generation")
     
     return
 
@@ -465,6 +492,7 @@ def argument_parser():
     result.add_argument('-sample', dest='sample', type=str, default = "BGS_BRIGHT") 
     result.add_argument('-img_source',dest='img_source', action = "store_true")  
     result.add_argument('-bkg_source',dest='bkg_source', action = "store_true")    
+    result.add_argument('-max_num',dest='max_num',type = int, default= 100000 )  
     result.add_argument('-blend_remove_source',dest='blend_remove_source', action = "store_true")  
     result.add_argument('-parent_galaxy',dest='parent_galaxy', action = "store_true")    
     
@@ -473,6 +501,8 @@ def argument_parser():
 
 if __name__ == '__main__': 
 
+    from astropy.units import UnitsWarning
+    warnings.filterwarnings("ignore", category=UnitsWarning)
 
     # read in command line arguments
     args = argument_parser().parse_args()
@@ -483,6 +513,8 @@ if __name__ == '__main__':
     bkg_source = args.bkg_source
     blend_remove_source = args.blend_remove_source
     parent_galaxy = args.parent_galaxy
+    max_num = args.max_num
+    
     
     print(f"Reading the sample = {use_sample}")
 
@@ -495,7 +527,9 @@ if __name__ == '__main__':
 
     print(f"Reading the sample = {sample}")
     dwarf_cat = dwarf_cat[dwarf_cat["SAMPLE"] == sample]
-   
+
+    dwarf_cat = dwarf_cat[:max_num]
+
     print(len(dwarf_cat))
     total = len(dwarf_cat)
 

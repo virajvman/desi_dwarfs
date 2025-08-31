@@ -133,7 +133,7 @@ def find_contrast_run(ncontrast, all_jacc_desi, all_jacc_largest, thresh=0.95, r
     return None, np.nan  # nothing found
 
 
-def find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_map, nlevel_val = 4,save_path = None):
+def find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_map, nlevel_val = 4,save_path = None, pcnn_val=None,radec=None, tgid=None, mu_rough=None):
     '''
     In this function, we find the optimal ncontrast value with which we will deblend.
     We also save a plot regarding this!!
@@ -144,23 +144,30 @@ def find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_ma
     all_jacc_largest = []
 
     #this originally used to be 0.05
-    ncontrast = np.arange(0.001,0.2,0.01)
+    ncontrast = np.arange(0.05,0.2,0.01)
 
-    fig,ax = make_subplots(ncol = 4 , nrow = 6, return_fig = True,row_spacing = 0.1,col_spacing = 0.1,plot_size = 1.5)
+    fig,ax = make_subplots(ncol = 4 , nrow = 5, return_fig = True,row_spacing = 0.1,col_spacing = 0.1,plot_size = 1.5)
 
     for axi in ax:
         axi.set_xticks([])
         axi.set_yticks([])
 
     ##plot the rgb image too
-    ax[-4].set_title(f"grz image",fontsize = 10)
+    ax[-4].set_title(f"{tgid}",fontsize = 8)
     ax[-4].imshow(img_rgb,origin="lower")
 
-    ax[-3].set_title(f"latest reconstruct grz image",fontsize = 10)
+    #enter ra,dec text here!
+    ax[-4].text(0.5,0.9, "(%.3f,%.3f)"%(radec[0], radec[1]) ,color = "white",fontsize = 8,
+               ha="center",va="center",transform = ax[-4].transAxes)
+
+    ax[-3].set_title(f"Reconstruct",fontsize = 8)
     ax[-3].imshow(img_rgb_mask,origin="lower")
 
+    ax[-2].set_title(f"PCNN = {pcnn_val:.2f}",fontsize = 8)
     #plot the smoothed segment that is being deblended
     ax[-2].imshow(segment_map.data,cmap = "tab10",origin="lower")
+
+    
 
     for i in range(len(ncontrast)):
         segm_deblend_ni_map = deblend_sources(convolved_tot_data,segment_map,
@@ -184,9 +191,6 @@ def find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_ma
         all_segm_deblends.append( segm_deblend_ni_map )
 
         ##make a plot with this!
-
-
-
         
     all_jacc_desi = np.array(all_jacc_desi)
     all_jacc_largest = np.array(all_jacc_largest)
@@ -199,8 +203,8 @@ def find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_ma
     #     print(ncontrast)
 
 
-    #if we do not find any, we should just stick with the largest 0.2 value!
-    _, ncontrast_opt = find_contrast_run(ncontrast, all_jacc_desi, all_jacc_largest, thresh=0.95, run_len=5)
+    #if we do not find any, we should just stick with the largest 0.2 value! we need to find at least 6 or more consecutive 
+    _, ncontrast_opt = find_contrast_run(ncontrast, all_jacc_desi, all_jacc_largest, thresh=0.95, run_len=6)
 
     segm_deblend_optimal = deblend_sources(convolved_tot_data,segment_map,
                                        npixels=10,nlevels=nlevel_val, contrast=ncontrast_opt,
@@ -210,15 +214,15 @@ def find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_ma
         ncontrast_opt = 0.2
 
     #now plot the most optimal ncontrast value!!
+    ax[-1].set_title(f"mus = {mu_rough[0]:.1f}, {mu_rough[1]:.1f}, {mu_rough[2]:.1f}",fontsize = 8)
     ax[-1].imshow(segm_deblend_optimal.data,cmap ="tab20",origin="lower")
 
-    plt.savefig(save_path + f"/jaccard_smoothing_nlevel_{nlevel_val}.png",bbox_inches="tight")
+    jaccard_img_path = save_path + f"/jaccard_smoothing_nlevel_{nlevel_val}.png"
+    
+    plt.savefig(jaccard_img_path,bbox_inches="tight")
     plt.close()
     
-    return ncontrast_opt
-
-
-
+    return ncontrast_opt, jaccard_img_path
 
 def process_deblend_image(segment_map, segm_deblend, fiber_xpix, fiber_ypix):
     '''
@@ -279,7 +283,7 @@ def process_deblend_image(segment_map, segm_deblend, fiber_xpix, fiber_ypix):
     return segm_deblend_v3, num_deblend_segs_main_blob, parent_galaxy_mask.astype(int), not_parent_galaxy_mask,  nearest_deblend_dist_pix, lie_on_smooth_segment
 
 
-def get_isolate_galaxy_mask(img_rgb=None, img_rgb_mask=None, r_band_data=None, r_rms=None, fiber_xpix=None, fiber_ypix=None, file_path=None,  tgid=None, aperture_mask=None ):
+def get_isolate_galaxy_mask(img_rgb=None, img_rgb_mask=None, r_band_data=None, r_rms=None, fiber_xpix=None, fiber_ypix=None, file_path=None,  tgid=None, aperture_mask=None, pcnn_val=None, radec=None, mu_rough = None):
     '''
     Function that returns the deblended segment used for isolating the parent galaxy. 
     Note that this function is only run when z > 0.01, and that flag is applied in the aperture_cogs.py script when this function is called
@@ -299,15 +303,16 @@ def get_isolate_galaxy_mask(img_rgb=None, img_rgb_mask=None, r_band_data=None, r
     convolved_tot_data = convolve( r_band_data, kernel )
     
     segment_map = detect_sources(convolved_tot_data, threshold, npixels=npixels_min) 
-    segment_map_data = segment_map.data
 
     #we want sources where we detect something!! If we do not detect anything, we return a non valyue
-    if np.max(segment_map_data) == 0:
+    if segment_map is None:
         print(f"Nothing found in this smooth segmentation: {tgid}! Returning Nones. In such cases, we will revert back to the tractor photometry!")
         
-        return None, None, None, None, None
+        return None, 0, None, None, np.nan, None
     else:
-        ncontrast_opt = find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_map, nlevel_val = 4, save_path = file_path)
+        segment_map_data = segment_map.data
+
+        ncontrast_opt, jaccard_img_path = find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_map, nlevel_val = 4, save_path = file_path, pcnn_val=pcnn_val, radec=radec, tgid=tgid, mu_rough = mu_rough )
         
         segm_deblend_opt = deblend_sources(convolved_tot_data,segment_map,
                                            npixels=npixels_min,nlevels=4, contrast=ncontrast_opt,
@@ -328,5 +333,5 @@ def get_isolate_galaxy_mask(img_rgb=None, img_rgb_mask=None, r_band_data=None, r
     structure = np.ones((3, 3), dtype=bool)
     not_parent_galaxy_mask = binary_dilation(not_parent_galaxy_mask, structure=structure, iterations=2)
     
-    return segm_deblend_opt, num_deblend_segs_main_blob, parent_galaxy_mask, not_parent_galaxy_mask, nearest_deblend_dist_pix
+    return segm_deblend_opt, num_deblend_segs_main_blob, parent_galaxy_mask, not_parent_galaxy_mask, nearest_deblend_dist_pix, jaccard_img_path
     

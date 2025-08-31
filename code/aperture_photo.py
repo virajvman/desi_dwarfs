@@ -66,8 +66,8 @@ def substitute_bad_mag(source_cat_f):
     '''
 
     for BAND in ("g", "r", "z"):
-        source_cat_f[f"mag_{BAND}"] = np.nan_to_num(source_cat_f[f"mag_{BAND}"], nan=25)
-        source_cat_f[f"mag_{BAND}_err"] = np.nan_to_num(source_cat_f[f"mag_{BAND}_err"], nan=0)
+        source_cat_f[f"mag_{BAND}"] = np.array(np.nan_to_num(source_cat_f[f"mag_{BAND}"], nan=25))
+        source_cat_f[f"mag_{BAND}_err"] = np.array(np.nan_to_num(source_cat_f[f"mag_{BAND}_err"], nan=0))
         
     ##compute some color information and errors on source of interest
     source_cat_f["g-r"] = source_cat_f["mag_g"] - source_cat_f["mag_r"]
@@ -199,7 +199,6 @@ def run_aperture_pipe(input_dict):
     mask_arr = input_dict["mask_data"]
     invvar_arr = input_dict["invvar_data"]
     source_cat_f = input_dict["source_cat"]
-    org_mag_g = input_dict["org_mag_g"]
     overwrite = input_dict["overwrite"]
     pcnn_val = input_dict["pcnn_val"]
     npixels_min = input_dict["npixels_min"]
@@ -308,18 +307,25 @@ def run_aperture_pipe(input_dict):
     if overwrite == False:
         try:
             new_mags = np.load(save_path + "/aper_r35_mags.npy")
-            org_mags = np.load(save_path + "/org_mags.npy")
 
-            return {
+            raise ValueError("The correct outputs will not be outputted if overwrite is False!")
+
+            output_dict = {
                     "closest_star_dist": closest_star_dist,
                     "closest_star_mag": closest_star_mag,
-                    "fidu_aper_mags": new_mags,
-                    "org_mags": org_mags,
+                    "aper_r35_mags": 3*[np.nan],
                     "save_path": save_path,
-                    "save_summary_png": save_summary_png,
-                    "img_path": img_path,
+                    "save_summary_png": None,
+                    "img_path": None,
+                    "closest_star_norm_dist": closest_star_norm_dist,
+                    "lie_on_segment_island": False,
+                    "aper_frac_mask_badpix": np.nan, 
+                    "img_frac_mask_badpix":  np.nan,
+                    "simple_photo_mags": 3*[np.nan], 
+                    "simple_photo_island_dist_pix": np.nan
                 }
-            # return closest_star_dist, closest_star_mag, new_mags, org_mags, save_path, save_summary_png, img_path
+
+            return output_dict
             
         except:
             do_i_run = True
@@ -377,7 +383,8 @@ def run_aperture_pipe(input_dict):
 
             ##getting some properties of the bkg
             sigma_clip = SigmaClip(sigma=5.0,maxiters=3)
-            clipped_data_v2 = sigma_clip(data[bii])
+            clipped_ma = sigma_clip(data[bii])
+            clipped_data_v2 = clipped_ma.compressed() 
    
             bkg_properties_dict[bii] = {
                     "mean": np.mean(clipped_data_v2),
@@ -431,11 +438,37 @@ def run_aperture_pipe(input_dict):
         #this is possible if the source was located in the very faint extremeties which is possible for ELGs
 
         lie_on_segment_island = 1
+        min_dist_pix = 0
         if island_num == 0:
             lie_on_segment_island = 0
             print_stage(f"Following source does not lie on a segment island, TGID:{source_tgid}")
             #finds the nearest island within 10'' and associates it with that
-            segment_map_v2, island_num, fiber_xpix, fiber_ypix = find_nearest_island(segment_map_v2, fiber_xpix, fiber_ypix)
+            segment_map_v2, island_num, fiber_xpix, fiber_ypix, min_dist_pix = find_nearest_island(segment_map_v2, fiber_xpix, fiber_ypix)
+
+            if island_num is None:
+                print_stage(f"Following source being skipped for aperture photo: TGID:{source_tgid}")
+                #we will just be returning to the original tractor mag from DR9 and no aperture and COG for this!
+                output_dict = {
+                        "closest_star_dist": closest_star_dist,
+                        "closest_star_mag": closest_star_mag,
+                        "aper_r35_mags": 3*[np.nan],
+                        "tractor_dr9_mags": 3*[np.nan],
+                        "save_path": save_path,
+                        "save_summary_png": None,
+                        "img_path": None,
+                        "closest_star_norm_dist": closest_star_norm_dist,
+                        "lie_on_segment_island": lie_on_segment_island,
+                        "first_min_dist_island_pix" : min_dist_pix,
+                        "aper_frac_mask_badpix": np.nan, 
+                        "img_frac_mask_badpix":  np.nan,
+                        "simple_photo_mags": 3*[np.nan], 
+                        "simple_photo_island_dist_pix": np.nan,
+                    }
+ 
+                return output_dict
+            
+
+                
     
         #define the aperture that will be used for plotting the bright star
         #these should be in the pixel coordinates
@@ -660,7 +693,6 @@ def run_aperture_pipe(input_dict):
         source_mag_r_mwc = source_mag_r  + 2.5 * np.log10(source_cat_obs["mw_transmission_r"])
         source_mag_z_mwc = source_mag_z  + 2.5 * np.log10(source_cat_obs["mw_transmission_z"])
 
-
         ####
         source_cat_inseg_signi = source_cat_f[ in_main_islands ]
         #updating the source type masks
@@ -757,6 +789,8 @@ def run_aperture_pipe(input_dict):
         source_cat_nostars_inseg = source_cat_inseg_signi[~is_star_inseg_signi]
 
         source_cat_nostars_inseg_COPY = source_cat_nostars_inseg.copy()
+        #we include only the ==0 objects here because those are the ones being removed below
+        #there sometimes be floating point errors resulting in non-zero separations, but they will persist through the catalog 
         source_cat_nostars_inseg_own = source_cat_nostars_inseg_COPY[ source_cat_nostars_inseg_COPY["separations"] == 0]
             
         if len(source_cat_inseg_signi) == 0:
@@ -769,7 +803,6 @@ def run_aperture_pipe(input_dict):
             ##LOOKING AT NON-STELALR SOURCES
             if len(source_cat_nostars_inseg) > 0:
 
-                #what to do if the errors are nans?
                 gr_err_nostars_inseg = source_cat_nostars_inseg["g-r_err"].data
                 gr_err_nostars_inseg[ np.isnan(gr_err_nostars_inseg) ] = 0
 
@@ -927,13 +960,20 @@ def run_aperture_pipe(input_dict):
             galaxy_sources_mask[source_cat_nostars_inseg_inds] = False
             
         source_cat_galaxy_objs = source_cat_nostars_inseg[galaxy_sources_mask]
-        #add back the original source that DESI targeted!!
         source_cat_galaxy_objs = vstack([source_cat_galaxy_objs, source_cat_nostars_inseg_own])
+
+        # if len(source_cat_nostars_inseg_own) != 1:
+        #     print(f"Number of targeted sources not equal to 1! : {source_tgid}, {len(source_cat_nostars_inseg_own)}, {np.min(source_cat_galaxy_objs['separations'])}")
+
         #save this catalog!
+        #before saving this let us add a column of unique object ids to identify them 
+        source_cat_galaxy_objs["source_objid_new"] = np.arange(len(source_cat_galaxy_objs))
         source_cat_galaxy_objs.write( save_path + "/parent_galaxy_sources.fits", overwrite=True)
+        
         ##NOTE!! we will have to update this again based on the second deblending step we do in the last step!
         ##These catalogs contain the pixel positions so we can use that if need be!
-
+        #^the above catalog contains sources that satisfy the color cuts! The simple photo sources are saved as part of the below function
+        
         #we run the simplest photometry here!!
         simplest_photo_mags, simplest_photo_island_dist_pix  = get_simplest_photometry(data_arr,  noise_dict["r"], fiber_xpix, fiber_ypix, source_cat_f[~is_star], save_path,source_zred=None)
 
@@ -1217,20 +1257,20 @@ def run_aperture_pipe(input_dict):
         return {
                 "closest_star_dist": closest_star_dist,
                 "closest_star_mag": closest_star_mag,
-                "fidu_aper_mags": fidu_aper_mags,
-                "org_mags": org_mags,
+                "aper_r35_mags": fidu_aper_mags,
                 "save_path": save_path,
                 "save_summary_png": save_summary_png,
                 "img_path": img_path,
+                "tractor_dr9_mags": org_mags,
                 "closest_star_norm_dist": closest_star_norm_dist,
                 "lie_on_segment_island": lie_on_segment_island,
+                "first_min_dist_island_pix" : min_dist_pix,
                 "aper_frac_mask_badpix": aper_frac_mask_badpix, 
                 "img_frac_mask_badpix":  img_frac_mask_badpix,
-                "simplest_photo_mags": simplest_photo_mags, 
-                "simplest_photo_island_dist_pix": simplest_photo_island_dist_pix
+                "simple_photo_mags": simplest_photo_mags, 
+                "simple_photo_island_dist_pix": simplest_photo_island_dist_pix
             }
         
-        # return closest_star_dist, closest_star_mag, fidu_aper_mags, org_mags, save_path, save_summary_png, img_path
 
 
 

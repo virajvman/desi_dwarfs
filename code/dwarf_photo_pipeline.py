@@ -501,8 +501,17 @@ def compute_aperture_masses(shreds_table, rband_key="MAG_R_APERTURE_R375", gband
 
 #     return
 
+def filter_saveimgs_paths(results, flag):
+    final_cog_saveimgs = []
     
-    
+    for r in results:
+        if r[flag] is None:
+            final_cog_saveimgs.append(None)
+        else:
+            final_cog_saveimgs.append(r[flag])
+            
+    return final_cog_saveimgs
+
     
 if __name__ == '__main__':
     import warnings
@@ -808,8 +817,8 @@ if __name__ == '__main__':
             if use_sample == "clean":
                 pcnn_val_k = -99
             else:
-                # pcnn_val_k = shreds_focus["PCNN_FRAGMENT"][k]
-                pcnn_val_k = -99
+                pcnn_val_k = shreds_focus["PCNN_FRAGMENT"][k]
+                # pcnn_val_k = -99
             
             sample_str_i = shreds_focus["SAMPLE"][k]
 
@@ -883,7 +892,7 @@ if __name__ == '__main__':
                 # import shutil
                 # shutil.copy(img_path_k, save_path_k + "/")
     
-            temp_dict = {"tgid":tgid_k, "ra":ra_k, "dec":dec_k, "redshift":redshift_k, "save_path":save_path_k, "img_path":img_path_k, "wcs": wcs , "image_data": data_arr, "mask_data": mask_arr, "invvar_data": invvar_arr, "source_cat": source_cat_f, "index":k , "org_mag_g": shreds_focus["MAG_G"][k], "overwrite": overwrite_bool, "image_size" :  box_size,
+            temp_dict = {"tgid":tgid_k, "ra":ra_k, "dec":dec_k, "redshift":redshift_k, "save_path":save_path_k, "img_path":img_path_k, "wcs": wcs , "image_data": data_arr, "mask_data": mask_arr, "invvar_data": invvar_arr, "source_cat": source_cat_f, "index":k , "org_mags": [ shreds_focus["MAG_G"][k], shreds_focus["MAG_R"][k], shreds_focus["MAG_Z"][k] ] , "overwrite": overwrite_bool, "image_size" :  box_size,
                         "bright_star_info": (bstar_ra, bstar_dec, bstar_radius, bstar_fdist, bstar_mag), "sga_info": (sga_dist, sga_ndist), 
                         "pcnn_val": pcnn_val_k,  "npixels_min": npixels_min, "threshold_rms_scale": threshold_rms_scale}
     
@@ -899,9 +908,11 @@ if __name__ == '__main__':
     
         all_aper_saveimgs = []
         all_cog_saveimgs = []
+        all_jaccard_saveimgs = []
         #a boolean mask for objects that we want to save in a different pdf!
         special_plot_mask = []
-            
+        all_jaccard_num_seg = []
+        
         #if nchunks = 1, then it just returns the entire original list as 1 list
         #LOOPING OVER ALL THE CHUNKS!!
         for chunk_i in range(nchunks):
@@ -956,8 +967,11 @@ if __name__ == '__main__':
 
                 final_close_star_dists = np.array([r["closest_star_norm_dist"] for r in results])
                 final_close_star_maxmags  = np.array([r["closest_star_mag"] for r in results])
-                final_fidu_aper_mags     = np.vstack([r["fidu_aper_mags"] for r in results])  # if same shape
-                final_org_mags           = np.vstack([r["org_mags"] for r in results])  
+                final_aper_r35_mags     = np.vstack([r["aper_r35_mags"] for r in results])  # if same shape
+                final_simple_mags     = np.vstack([r["simple_photo_mags"] for r in results]) 
+                final_simple_island_dist_pix     = np.vstack([r["simple_photo_island_dist_pix"] for r in results])
+                
+                final_trac_mags           = np.vstack([r["tractor_dr9_mags"] for r in results]) 
                 
                 final_save_paths         = [r["save_path"] for r in results]
                 on_segment_island        = np.array([r["lie_on_segment_island"] for r in results])
@@ -966,14 +980,13 @@ if __name__ == '__main__':
 
                 aper_frac_mask_badpix = [r["aper_frac_mask_badpix"] for r in results]
                 img_frac_mask_badpix = [r["img_frac_mask_badpix"] for r in results]
-                
+
                 if chunk_i == 0:
                     print_stage("Example outputs from aperture pipeline")
-                    print("fidu aper mags shape : ",final_fidu_aper_mags.shape)
+                    print("fidu aper mags shape : ",final_aper_r35_mags.shape)
                     print("final close star_dists shape : ", final_close_star_dists.shape)
                     #print some values for testing
-                    print("aper_mags : ", final_fidu_aper_mags[0])
-                    print("org_mags : ", final_org_mags[0])
+                    print("aper_mags : ", final_aper_r35_mags[0])
                     print("aper frac mask badpix : ", aper_frac_mask_badpix[0] )
                     print("img frac mask badpix : ", img_frac_mask_badpix[0] )
                     
@@ -987,27 +1000,38 @@ if __name__ == '__main__':
                 ##if within 1.5 of the stellar radius and the star is within 45 arcsecs of ths source
                 special_plot_mask += list( (shreds_focus_i["STARFDIST"] < 1.5) & (shreds_focus_i["STARDIST_DEG"]*3600 < 45) )
                 
-        
+                
+
                 #check that the org mags make sense
-                print("Maximum Abs difference between org mags = ",np.max( np.abs(final_org_mags[:,0] - shreds_focus_i["MAG_G"]) ))
+                print("Maximum Abs difference between org mags = ",np.max( np.abs(final_trac_mags[:,0] - shreds_focus_i["MAG_G"]) ))
+                print("Median Abs difference between org mags = ",np.median( np.abs(final_trac_mags[:,0] - shreds_focus_i["MAG_G"]) ))
+                
+                #check that the org mags make sense
+                # print("Maximum Abs difference between org mags = ",np.max( np.abs(final_org_mags[:,0] - shreds_focus_i["MAG_G"]) ))
                 
                 shreds_focus_i["NEAREST_STAR_NORM_DIST"] = final_close_star_dists
                 shreds_focus_i["NEAREST_STAR_MAX_MAG"] = final_close_star_maxmags
 
-                shreds_focus_i["MAG_G_APERTURE_R375"] = final_fidu_aper_mags[:,0]
-                shreds_focus_i["MAG_R_APERTURE_R375"] = final_fidu_aper_mags[:,1]
-                shreds_focus_i["MAG_Z_APERTURE_R375"] = final_fidu_aper_mags[:,2]
+                shreds_focus_i["APER_R35_MAG_G"] = final_aper_r35_mags[:,0]
+                shreds_focus_i["APER_R35_MAG_R"] = final_aper_r35_mags[:,1]
+                shreds_focus_i["APER_R35_MAG_Z"] = final_aper_r35_mags[:,2]
 
                 shreds_focus_i["SAVE_PATH"] = final_save_paths 
-                shreds_focus_i["APER_SOURCE_ON_SEGMENT"] = on_segment_island.astype(bool)
+                shreds_focus_i["APER_SOURCE_ON_ORG_BLOB"] = on_segment_island.astype(bool)
                 shreds_focus_i["IMAGE_FITS_PATH"] = all_img_data_paths
 
-                shreds_focus_i["APER_R35_MASK_PIX_FRAC"] = aper_frac_mask_badpix
+                shreds_focus_i["APER_R35_FRAC_MASK_PIX"] = aper_frac_mask_badpix
                 shreds_focus_i["IMAGE_MASK_PIX_FRAC"] = img_frac_mask_badpix
+
+                shreds_focus_i["SIMPLE_PHOTO_MAG_G"] = final_simple_mags[:,0]
+                shreds_focus_i["SIMPLE_PHOTO_MAG_R"] = final_simple_mags[:,1]
+                shreds_focus_i["SIMPLE_PHOTO_MAG_Z"] = final_simple_mags[:,2]
+
+                shreds_focus_i["SIMPLE_BLOB_DIST_PIX"] = final_simple_island_dist_pix
                 
                 print("Compute aperture-photometry based stellar masses now!")
 
-                shreds_focus_i = compute_aperture_masses(shreds_focus_i, rband_key="MAG_R_APERTURE_R375", gband_key="MAG_G_APERTURE_R375", z_key="Z", output_key="LOGM_SAGA_APERTURE_R375")
+                shreds_focus_i = compute_aperture_masses(shreds_focus_i, rband_key="APER_R35_MAG_R", gband_key="APER_R35_MAG_G", z_key="Z", output_key="LOGM_SAGA_APER_R35")
                     
                 #then save this file!
                 if tgids_list is None:
@@ -1034,67 +1058,90 @@ if __name__ == '__main__':
                 ### saving the results of the photometry pipeline
         
                 # Each element of results is:
-                # [0] cog_mags             
-                # [1] final_cog_mags_err    
-                # [2] final_cog_params_g    --> list of cog fit parameters  
-                # [3] final_cog_params_r     
-                # [4] final_cog_params_z     
-                # [5] final_cog_params_g_err  
-                # [6] final_cog_params_r_err  
-                # [7] final_cog_params_z_err 
-                # [8] save_img_path   
+                # "aper_r425_mags": all_aper_mags_r425,
+                # "cog_mags": cog_mags,
+                # "cog_mags_err": final_cog_mags_err,
+                # "cog_params_g":  cog_output_dict["cog_params"]["g"],
+                # "cog_params_r":  cog_output_dict["cog_params"]["r"],
+                # "cog_params_z":  cog_output_dict["cog_params"]["z"],
+                # "cog_params_g_err": cog_output_dict["cog_params_err"]["g"],
+                # "cog_params_r_err": cog_output_dict["cog_params_err"]["r"],
+                # "cog_params_z_err": cog_output_dict["cog_params_err"]["z"],
+                # "img_path": cog_output_dict["save_img_path"],
+                # "cog_chi2" : cog_output_dict["cog_chi2"], 
+                # "cog_dof" : cog_output_dict["cog_dof"],
+                # "aper_r425_frac_in_image": cog_output_dict["aper_r425_frac_in_image"],
+                # "cog_decrease_len": cog_output_dict["cog_decrease_len"], 
+                # "cog_decrease_mag": cog_output_dict["cog_decrease_len"],
+                # "aper_ra_cen": cog_output_dict["aper_radec_cen"][0],
+                # "aper_dec_cen": cog_output_dict["aper_radec_cen"][1],
+                # "aper_xpix_cen": cog_output_dict["aper_xy_pix_cen"][0],
+                # "aper_ypix_cen": cog_output_dict["aper_xy_pix_cen"][1],
+                # "aper_params": cog_output_dict["aper_params"],
+                # "jaccard_path": cog_output_dict["jaccard_img_path"],
+                # "deblend_smooth_num_seg": cog_output_dict["deblend_smooth_num_seg"],
+                # "deblend_smooth_dist_pix": cog_output_dict["deblend_smooth_dist_pix"],
+                # "tractor_parent_mask_mags": cog_output_dict["parent_tractor_only_mags"],
+                # "revert_to_org_tractor": cog_output_dict["revert_to_org_tractor"] 
 
                 # Stack the elements appropriately
-                final_aper_mags_r4    = np.vstack([r["aper_mags_r4"] for r in results])
+                final_aper_r425_mags    = np.vstack([r["aper_r425_mags"] for r in results])
                 final_cog_mags        = np.vstack([r["cog_mags"] for r in results])
                 final_cog_mags_err    = np.array([r["cog_mags_err"] for r in results])
                 
-                final_cog_params_g     = np.vstack([r["params_g"] for r in results])
-                final_cog_params_r     = np.vstack([r["params_r"] for r in results])
-                final_cog_params_z     = np.vstack([r["params_z"] for r in results])
+                final_cog_params_g     = np.vstack([r["cog_params_g"] for r in results])
+                final_cog_params_r     = np.vstack([r["cog_params_r"] for r in results])
+                final_cog_params_z     = np.vstack([r["cog_params_z"] for r in results])
                 
-                final_cog_params_g_err = np.vstack([r["params_g_err"] for r in results])
-                final_cog_params_r_err = np.vstack([r["params_r_err"] for r in results])
-                final_cog_params_z_err = np.vstack([r["params_z_err"] for r in results])
+                final_cog_params_g_err = np.vstack([r["cog_params_g_err"] for r in results])
+                final_cog_params_r_err = np.vstack([r["cog_params_r_err"] for r in results])
+                final_cog_params_z_err = np.vstack([r["cog_params_z_err"] for r in results])
+    
 
-                final_cog_saveimgs = []
-                for r in results:
-                    if r["img_path"] is None:
-                        final_cog_saveimgs.append(None)
-                    else:
-                        final_cog_saveimgs.append(r["img_path"])
-
-                final_cog_aper_areafrac_in = np.array([r["areafrac_in_image"] for r in results])
+                
+                final_aper_r425_frac_in_image = np.array([r["aper_r425_frac_in_image"] for r in results])
 
                 final_cog_chi2 = np.vstack( [r["cog_chi2"] for r in results] )
                 final_cog_dof = np.vstack( [r["cog_dof"] for r in results] )
 
-                final_cog_mag_decrease_len = np.vstack( [r["cog_decrease_len"] for r in results] )
-                final_cog_mag_decrease_mag = np.vstack( [r["cog_decrease_mag"] for r in results] )
+                final_cog_decrease_len = np.vstack( [r["cog_decrease_len"] for r in results] )
+                final_cog_decrease_mag = np.vstack( [r["cog_decrease_mag"] for r in results] )
 
-                final_cog_aper_params = np.vstack( [r["aper_params"] for r in results] )
+                final_aper_params = np.vstack( [r["aper_params"] for r in results] )
                 
                 #collect the aper center infno
-                final_cog_apercen_ra = np.array([ r["aper_ra_cen"] for r in results])
-                final_cog_apercen_dec = np.array([ r["aper_dec_cen"] for r in results])
-                final_cog_apercen_xpix = np.array([ r["aper_xpix_cen"] for r in results])
-                final_cog_apercen_ypix = np.array([ r["aper_ypix_cen"] for r in results])
+                final_apercen_radec = np.vstack([ r["aper_radec_cen"] for r in results])
+                final_apercen_xy_pix = np.vstack([ r["aper_xy_pix_cen"] for r in results])
+                
+                # final_apercen_dec = np.array([ r["aper_dec_cen"] for r in results])
+                # final_apercen_ypix = np.array([ r["aper_ypix_cen"] for r in results])
+
+                final_deblend_smooth_num_seg = np.array([ r["deblend_smooth_num_seg"] for r in results])
+                final_deblend_smooth_dist_pix = np.array([ r["deblend_smooth_dist_pix"] for r in results])
+                final_revert_to_org_tractor = np.array([ r["revert_to_org_tractor"] for r in results])
+
+                final_tractor_parent_mask_mags = np.vstack([ r["tractor_parent_mask_mags"] for r in results])
+
+                #add the image paths to the total lists
+
+                final_cog_saveimgs = filter_saveimgs_paths(results, "img_path")
+                final_jaccard_saveimgs = filter_saveimgs_paths(results, "jaccard_path")
                 
                 all_cog_saveimgs += final_cog_saveimgs
-
+                all_jaccard_saveimgs += final_jaccard_saveimgs
+                
                 if chunk_i == 0:
                     print_stage("Example outputs from cog pipeline")
-                    print("final aper mags R4 shape : ",final_aper_mags_r4.shape)
+                    print("final aper mags R4 shape : ",final_aper_r425_mags.shape)
                     print("final cog mags shape : ",final_cog_mags.shape)
                     print("final cog chi2 mags shape : ",final_cog_chi2.shape)
-                    
                     print("final cog params g-band shape : ",final_cog_mags.shape)
                     #print some values for testing
                     print("cog_mags : ", final_cog_mags[0])
                     print("cog_mags_err : ", final_cog_mags_err[0])
                     print("cog params g : ",final_cog_params_g[0])
                     print("cog params g err  : ", final_cog_params_g_err[0])
-                    print("cog aper frac-in-image : ", final_cog_aper_areafrac_in[0] )
+                    print("cog aper frac-in-image : ", final_aper_r425_frac_in_image[0] )
                     print("cog saveimg : ", final_cog_saveimgs[0])
                     print("---"*5)
                     
@@ -1113,68 +1160,86 @@ if __name__ == '__main__':
                 except NameError:
                     raise RuntimeError("Missing variable: 'shreds_focus_i'. Did you forget to run `run_aper()`? This would be the case if you are running this on a few TGIDs.")
 
-                shreds_focus_i["MAG_G_APERTURE_COG"] = final_cog_mags[:,0]
-                shreds_focus_i["MAG_R_APERTURE_COG"] = final_cog_mags[:,1]
-                shreds_focus_i["MAG_Z_APERTURE_COG"] = final_cog_mags[:,2]
+                shreds_focus_i["COG_MAG_G"] = final_cog_mags[:,0]
+                shreds_focus_i["COG_MAG_R"] = final_cog_mags[:,1]
+                shreds_focus_i["COG_MAG_Z"] = final_cog_mags[:,2]
 
-                shreds_focus_i["G_APERTURE_COG_CHI2"] = final_cog_chi2[:,0]
-                shreds_focus_i["R_APERTURE_COG_CHI2"] = final_cog_chi2[:,1]
-                shreds_focus_i["Z_APERTURE_COG_CHI2"] = final_cog_chi2[:,2]
+                shreds_focus_i["COG_CHI2_G"] = final_cog_chi2[:,0]
+                shreds_focus_i["COG_CHI2_R"] = final_cog_chi2[:,1]
+                shreds_focus_i["COG_CHI2_Z"] = final_cog_chi2[:,2]
 
-                shreds_focus_i["G_APERTURE_COG_DOF"] = final_cog_chi2[:,0]
-                shreds_focus_i["R_APERTURE_COG_DOF"] = final_cog_chi2[:,1]
-                shreds_focus_i["Z_APERTURE_COG_DOF"] = final_cog_chi2[:,2]
+                shreds_focus_i["COG_DOF_G"] = final_cog_chi2[:,0]
+                shreds_focus_i["COG_DOF_R"] = final_cog_chi2[:,1]
+                shreds_focus_i["COG_DOF_Z"] = final_cog_chi2[:,2]
 
                 
+                shreds_focus_i["APER_R425_MAG_G"] = final_aper_r425_mags[:,0]
+                shreds_focus_i["APER_R425_MAG_R"] = final_aper_r425_mags[:,1]
+                shreds_focus_i["APER_R425_MAG_Z"] = final_aper_r425_mags[:,2]
+
+                shreds_focus_i["COG_MAG_G_ERR"] = final_cog_mags_err[:,0]
+                shreds_focus_i["COG_MAG_R_ERR"]  = final_cog_mags_err[:,1]
+                shreds_focus_i["COG_MAG_Z_ERR"]  = final_cog_mags_err[:,2]
+
+                shreds_focus_i["TRACTOR_PARENT_MASK_MAG_G"] = final_tractor_parent_mask_mags[:,0]
+                shreds_focus_i["TRACTOR_PARENT_MASK_MAG_R"] = final_tractor_parent_mask_mags[:,1]
+                shreds_focus_i["TRACTOR_PARENT_MASK_MAG_Z"] = final_tractor_parent_mask_mags[:,2]
+
+                shreds_focus_i["DEBLEND_SMOOTH_NUM_BLOB"] = final_deblend_smooth_num_seg
+                shreds_focus_i["DEBLEND_SMOOTH_BLOB_PIX_DIST"] = final_deblend_smooth_dist_pix
+                shreds_focus_i["REVERT_TO_OLD_TRACTOR"] = final_revert_to_org_tractor
                 
-                shreds_focus_i["MAG_G_APERTURE_R4"] = final_aper_mags_r4[:,0]
-                shreds_focus_i["MAG_R_APERTURE_R4"] = final_aper_mags_r4[:,1]
-                shreds_focus_i["MAG_Z_APERTURE_R4"] = final_aper_mags_r4[:,2]
-
-                shreds_focus_i["MAG_G_APERTURE_COG_ERR"] = final_cog_mags_err[:,0]
-                shreds_focus_i["MAG_R_APERTURE_COG_ERR"] = final_cog_mags_err[:,1]
-                shreds_focus_i["MAG_Z_APERTURE_COG_ERR"] = final_cog_mags_err[:,2]
-
                 ##adding the lists to the astropy table!
 
                 # Create an astropy Column with object dtype to hold variable-length array
-                col_cog_params_g = Column(final_cog_params_g, name='MAG_G_APERTURE_COG_PARAMS')
-                col_cog_params_r = Column(final_cog_params_r, name='MAG_R_APERTURE_COG_PARAMS')
-                col_cog_params_z = Column(final_cog_params_z, name='MAG_Z_APERTURE_COG_PARAMS')
+                col_cog_params_g = Column(final_cog_params_g, name="COG_PARAMS_G")
+                col_cog_params_r = Column(final_cog_params_r, name="COG_PARAMS_R")
+                col_cog_params_z = Column(final_cog_params_z, name="COG_PARAMS_Z")
                 # Add the column to the table
                 shreds_focus_i.add_column(col_cog_params_g)
                 shreds_focus_i.add_column(col_cog_params_r)
                 shreds_focus_i.add_column(col_cog_params_z)
 
-                col_cog_params_err_g = Column(final_cog_params_g_err, name='MAG_G_APERTURE_COG_PARAMS_ERR')
-                col_cog_params_err_r = Column(final_cog_params_r_err, name='MAG_R_APERTURE_COG_PARAMS_ERR')
-                col_cog_params_err_z = Column(final_cog_params_z_err, name='MAG_Z_APERTURE_COG_PARAMS_ERR')
+                col_cog_params_err_g = Column(final_cog_params_g_err, name='COG_PARAMS_ERR_G')
+                col_cog_params_err_r = Column(final_cog_params_r_err, name='COG_PARAMS_ERR_R')
+                col_cog_params_err_z = Column(final_cog_params_z_err, name='COG_PARAMS_ERR_Z')
                 # Add the column to the table
                 shreds_focus_i.add_column(col_cog_params_err_g)
                 shreds_focus_i.add_column(col_cog_params_err_r)
                 shreds_focus_i.add_column(col_cog_params_err_z)
 
-                col_cog_mag_decrease_len = Column(final_cog_mag_decrease_len, name='COG_DECREASE_MAX_LEN')
-                col_cog_mag_decrease_mag = Column(final_cog_mag_decrease_mag, name='COG_DECREASE_MAX_MAG')
+                col_cog_decrease_len = Column(final_cog_decrease_len, name='COG_DECREASE_MAX_LEN')
+                col_cog_decrease_mag = Column(final_cog_decrease_mag, name='COG_DECREASE_MAX_MAG')
                 # Add the column to the table
-                shreds_focus_i.add_column(col_cog_mag_decrease_len)
-                shreds_focus_i.add_column(col_cog_mag_decrease_mag)
+                shreds_focus_i.add_column(col_cog_decrease_len)
+                shreds_focus_i.add_column(col_cog_decrease_mag)
 
-                shreds_focus_i["COG_MAXAPER_FRAC_IN"] = final_cog_aper_areafrac_in 
+                shreds_focus_i["APER_R425_FRAC_IN_IMG"] = final_aper_r425_frac_in_image
 
-                shreds_focus_i["COG_APER_CEN_RA"] = final_cog_apercen_ra
-                shreds_focus_i["COG_APER_CEN_DEC"] = final_cog_apercen_dec
-                shreds_focus_i["COG_APER_CEN_XPIX"] = final_cog_apercen_xpix
-                shreds_focus_i["COG_APER_CEN_YPIX"] = final_cog_apercen_ypix
+                col_aper_radec_cen = Column(final_apercen_radec, name='APER_CEN_RADEC')
+                col_aper_xy_pix_cen = Column(final_apercen_xy_pix, name='APER_CEN_XY_PIX')
+                # Add the column to the table
+                shreds_focus_i.add_column(col_aper_radec_cen)
+                shreds_focus_i.add_column(col_aper_xy_pix_cen)
+            
+                # shreds_focus_i["APER_CEN_RA"] = final_apercen_ra
+                # shreds_focus_i["APER_CEN_DEC"] = final_apercen_dec
+                # shreds_focus_i["APER_CEN_XPIX"] = final_apercen_xpix
+                # shreds_focus_i["APER_CEN_YPIX"] = final_apercen_ypix
 
-                col_cog_aper_params = Column(final_cog_aper_params, name='COG_APER_PARAMS')
+                TODO: MAKE SURE ALL THE RELEVANT COLUMNS ARE BEING ADDED TO THE CATALOG AT THE END!!
+                THEN RUN SGA, AND MAKE THOSE PLOTS AND FIND WHICH MU CUT WORKS BEST!! AND IN APPENDIX ADD PLOTS ON HOW THE COMPARISON 
+                IS FOR WITH AND WITHOUT THESE CUTS AND SOME EXAMPLE
+
+                col_cog_aper_params = Column(final_aper_params, name='APER_PARAMS')
                 shreds_focus_i.add_column(col_cog_aper_params)
                 
                 #Get the cog based stellar mass
-                shreds_focus_i = compute_aperture_masses(shreds_focus_i, rband_key="MAG_R_APERTURE_COG", gband_key="MAG_G_APERTURE_COG", z_key="Z", output_key="LOGM_SAGA_APERTURE_COG")
+                shreds_focus_i = compute_aperture_masses(shreds_focus_i, rband_key="COG_MAG_R", gband_key="COG_MAG_G", z_key="Z", output_key="LOGM_SAGA_COG")
 
                 #add the shred maskbits to the catalog
-                shreds_focus_i = create_shred_maskbits(shreds_focus_i)
+                ##TODO: This step will done in a different script when we are combining all the shred catalogs into one!! MAKE A SCRIPT FOR THAT
+                # shreds_focus_i = create_shred_maskbits(shreds_focus_i)
                 
                 if tgids_list is None:
                     save_table( shreds_focus_i, file_save)   
@@ -1230,16 +1295,32 @@ if __name__ == '__main__':
 
     if tgids_list is None and run_aper:
         print("Saving aperture photometry imgs")
-        make_scroll_pdf(all_aper_saveimgs, save_sample_path, summary_scroll_file_name, special_plot_mask, max_num=500, type_str="aper",all_aper_saveimgs2=None)
+        make_scroll_pdf(all_aper_saveimgs, save_sample_path, summary_scroll_file_name, special_plot_mask, max_num=250, type_str="aper",all_aper_saveimgs2=None)
 
     if tgids_list is None and run_cog:
         print("Saving COG aperture photometry imgs")
         
-        make_scroll_pdf(all_cog_saveimgs, save_sample_path, summary_scroll_file_name, special_plot_mask, max_num=500, type_str="cog",all_aper_saveimgs2=None)
+        make_scroll_pdf(all_cog_saveimgs, save_sample_path, summary_scroll_file_name, special_plot_mask, max_num=250, type_str="cog",all_aper_saveimgs2=None)
         
     if tgids_list is None and run_cog and run_aper:
         print("Saving COG and aperture photometry imgs")
-        make_scroll_pdf(all_aper_saveimgs, save_sample_path, summary_scroll_file_name, special_plot_mask, max_num=500, type_str="apercog",all_aper_saveimgs2=all_cog_saveimgs)
+        make_scroll_pdf(all_aper_saveimgs, save_sample_path, summary_scroll_file_name, special_plot_mask, max_num=250, type_str="apercog",all_aper_saveimgs2=all_cog_saveimgs)
+
+    ##save a scrollable pdf of all the jaccard pngs!
+    if tgids_list is None and run_cog:
+        print("Saving jaccard score imgs")
+        make_scroll_pdf(all_jaccard_saveimgs, save_sample_path, summary_scroll_file_name, None, max_num=250, type_str="jaccard",all_aper_saveimgs2=None)
+
+
+
+        
+    if tgids_list is None and run_cog:
+        print("Saving special jaccard score imgs")
+        
+        special_jaccard_mask = (shreds_focus_combine_aper["DEBLEND_SMOOTH_NUM_BLOB"].data > 1)
+
+        make_scroll_pdf(all_jaccard_saveimgs, save_sample_path, summary_scroll_file_name, special_jaccard_mask, max_num=250, type_str="jaccard",all_aper_saveimgs2=None)
+        
 
     
 
