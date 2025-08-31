@@ -456,22 +456,17 @@ def process_bricks_parallel(brick_dict):
         else:
             list(executor.map(get_relevant_files_aper, brick_dict))
 
-    
-def compute_aperture_masses(shreds_table, rband_key="MAG_R_APERTURE_R375", gband_key="MAG_G_APERTURE_R375", z_key="Z", output_key="LOGM_SAGA_APERTURE_R375"):
+
+
+def compute_aperture_masses(
+    shreds_table, 
+    rband_key="MAG_R_APERTURE_R375", 
+    gband_key="MAG_G_APERTURE_R375", 
+    z_key="Z", 
+    output_key="LOGM_SAGA_APERTURE_R375"
+):
     """
     Compute new aperture-photometry-based stellar masses using g - r color, r-band magnitude, and redshift.
-
-    Parameters
-    ----------
-    shreds_table : astropy Table, Input table with aperture magnitudes and redshift.
-    rband_key : str, Column name for r-band aperture magnitude.
-    gband_key : str, Column name for g-band aperture magnitude.
-    z_key : str, Column name for redshift.
-    output_key : str, Name of the output column to store log stellar masses.
-
-    Returns
-    -------
-    shreds_table : astropy Table, Modified in-place (and also returned) with a new column containing log stellar masses.
     """
     rmag_aper = shreds_table[rband_key].data
     gr_aper = shreds_table[gband_key].data - rmag_aper
@@ -480,14 +475,57 @@ def compute_aperture_masses(shreds_table, rband_key="MAG_R_APERTURE_R375", gband
 
     all_mstar_aper = np.full(len(shreds_table), np.nan)
 
-    if len(shreds_table) == 1:
-        print("Note, as computing for a single object, not bothering to compute stellar mass in case")
+    valid_mask = ~nan_mask
+    if valid_mask.sum() == 0:
+        # Nothing to compute
+        print(f"Warning: no valid entries for {output_key}, filling with NaN.")
+    elif len(shreds_table) == 1:
+        # Single object special case
+        print("Note: computing for a single object, skipping stellar mass calculation.")
     else:
-        mstar_aper_nonan = get_stellar_mass(gr_aper[~nan_mask], rmag_aper[~nan_mask], shreds_table[z_key][~nan_mask])
-        all_mstar_aper[~nan_mask] = mstar_aper_nonan
+        mstar_aper_nonan = get_stellar_mass(
+            gr_aper[valid_mask],
+            rmag_aper[valid_mask],
+            shreds_table[z_key][valid_mask],
+        )
+        all_mstar_aper[valid_mask] = mstar_aper_nonan
 
     shreds_table[output_key] = all_mstar_aper
     return shreds_table
+
+
+    
+# def compute_aperture_masses(shreds_table, rband_key="MAG_R_APERTURE_R375", gband_key="MAG_G_APERTURE_R375", z_key="Z", output_key="LOGM_SAGA_APERTURE_R375"):
+#     """
+#     Compute new aperture-photometry-based stellar masses using g - r color, r-band magnitude, and redshift.
+
+#     Parameters
+#     ----------
+#     shreds_table : astropy Table, Input table with aperture magnitudes and redshift.
+#     rband_key : str, Column name for r-band aperture magnitude.
+#     gband_key : str, Column name for g-band aperture magnitude.
+#     z_key : str, Column name for redshift.
+#     output_key : str, Name of the output column to store log stellar masses.
+
+#     Returns
+#     -------
+#     shreds_table : astropy Table, Modified in-place (and also returned) with a new column containing log stellar masses.
+#     """
+#     rmag_aper = shreds_table[rband_key].data
+#     gr_aper = shreds_table[gband_key].data - rmag_aper
+
+#     nan_mask = np.isnan(rmag_aper) | np.isnan(shreds_table[gband_key].data)
+
+#     all_mstar_aper = np.full(len(shreds_table), np.nan)
+
+#     if len(shreds_table) == 1:
+#         print("Note, as computing for a single object, not bothering to compute stellar mass in case")
+#     else:
+#         mstar_aper_nonan = get_stellar_mass(gr_aper[~nan_mask], rmag_aper[~nan_mask], shreds_table[z_key][~nan_mask])
+#         all_mstar_aper[~nan_mask] = mstar_aper_nonan
+
+#     shreds_table[output_key] = all_mstar_aper
+#     return shreds_table
 
 
 
@@ -1017,6 +1055,9 @@ if __name__ == '__main__':
                 shreds_focus_i["APER_R35_MAG_Z"] = final_aper_r35_mags[:,2]
 
                 shreds_focus_i["SAVE_PATH"] = final_save_paths 
+                #the file path to the aper summary image
+                shreds_focus_i["SAVE_SUMMARY_APER_PATH"] = final_image_paths
+                
                 shreds_focus_i["APER_SOURCE_ON_ORG_BLOB"] = on_segment_island.astype(bool)
                 shreds_focus_i["IMAGE_FITS_PATH"] = all_img_data_paths
 
@@ -1084,44 +1125,54 @@ if __name__ == '__main__':
                 # "tractor_parent_mask_mags": cog_output_dict["parent_tractor_only_mags"],
                 # "revert_to_org_tractor": cog_output_dict["revert_to_org_tractor"] 
 
-                # Stack the elements appropriately
+                #ADDING COG MAGS WHEN USING ISOLATE MASK
                 final_aper_r425_mags    = np.vstack([r["aper_r425_mags"] for r in results])
                 final_cog_mags        = np.vstack([r["cog_mags"] for r in results])
                 final_cog_mags_err    = np.array([r["cog_mags_err"] for r in results])
-                
                 final_cog_params_g     = np.vstack([r["cog_params_g"] for r in results])
                 final_cog_params_r     = np.vstack([r["cog_params_r"] for r in results])
                 final_cog_params_z     = np.vstack([r["cog_params_z"] for r in results])
-                
                 final_cog_params_g_err = np.vstack([r["cog_params_g_err"] for r in results])
                 final_cog_params_r_err = np.vstack([r["cog_params_r_err"] for r in results])
                 final_cog_params_z_err = np.vstack([r["cog_params_z_err"] for r in results])
-    
-
-                
                 final_aper_r425_frac_in_image = np.array([r["aper_r425_frac_in_image"] for r in results])
-
                 final_cog_chi2 = np.vstack( [r["cog_chi2"] for r in results] )
                 final_cog_dof = np.vstack( [r["cog_dof"] for r in results] )
-
                 final_cog_decrease_len = np.vstack( [r["cog_decrease_len"] for r in results] )
                 final_cog_decrease_mag = np.vstack( [r["cog_decrease_mag"] for r in results] )
-
                 final_aper_params = np.vstack( [r["aper_params"] for r in results] )
-                
-                #collect the aper center infno
                 final_apercen_radec = np.vstack([ r["aper_radec_cen"] for r in results])
                 final_apercen_xy_pix = np.vstack([ r["aper_xy_pix_cen"] for r in results])
-                
-                # final_apercen_dec = np.array([ r["aper_dec_cen"] for r in results])
-                # final_apercen_ypix = np.array([ r["aper_ypix_cen"] for r in results])
 
+                #ADDING COG MAGS WITHOUT ISOLATE MASK
+                final_aper_r425_mags_no_isolate_mask    = np.vstack([r["aper_r425_mags_no_isolate_mask"] for r in results])
+                final_cog_mags_no_isolate_mask        = np.vstack([r["cog_mags_no_isolate_mask"] for r in results])
+                final_cog_mags_err_no_isolate_mask    = np.array([r["cog_mags_err_no_isolate_mask"] for r in results])
+                final_cog_params_g_no_isolate_mask     = np.vstack([r["cog_params_g_no_isolate_mask"] for r in results])
+                final_cog_params_r_no_isolate_mask     = np.vstack([r["cog_params_r_no_isolate_mask"] for r in results])
+                final_cog_params_z_no_isolate_mask     = np.vstack([r["cog_params_z_no_isolate_mask"] for r in results])
+                final_cog_params_g_err_no_isolate_mask = np.vstack([r["cog_params_g_err_no_isolate_mask"] for r in results])
+                final_cog_params_r_err_no_isolate_mask = np.vstack([r["cog_params_r_err_no_isolate_mask"] for r in results])
+                final_cog_params_z_err_no_isolate_mask = np.vstack([r["cog_params_z_err_no_isolate_mask"] for r in results])
+                final_aper_r425_frac_in_image_no_isolate_mask = np.array([r["aper_r425_frac_in_image_no_isolate_mask"] for r in results])
+                final_cog_chi2_no_isolate_mask = np.vstack( [r["cog_chi2_no_isolate_mask"] for r in results] )
+                final_cog_dof_no_isolate_mask = np.vstack( [r["cog_dof_no_isolate_mask"] for r in results] )
+                final_cog_decrease_len_no_isolate_mask = np.vstack( [r["cog_decrease_len_no_isolate_mask"] for r in results] )
+                final_cog_decrease_mag_no_isolate_mask = np.vstack( [r["cog_decrease_mag_no_isolate_mask"] for r in results] )
+                final_aper_params_no_isolate_mask = np.vstack( [r["aper_params_no_isolate_mask"] for r in results] )
+                final_apercen_radec_no_isolate_mask = np.vstack([ r["aper_radec_cen_no_isolate_mask"] for r in results])
+                final_apercen_xy_pix_no_isolate_mask = np.vstack([ r["aper_xy_pix_cen_no_isolate_mask"] for r in results])
+          
+                ##THESE ARE COG OUTPUTS THAT ARE COMMON TO ALL!
                 final_deblend_smooth_num_seg = np.array([ r["deblend_smooth_num_seg"] for r in results])
                 final_deblend_smooth_dist_pix = np.array([ r["deblend_smooth_dist_pix"] for r in results])
                 final_revert_to_org_tractor = np.array([ r["revert_to_org_tractor"] for r in results])
-
                 final_tractor_parent_mask_mags = np.vstack([ r["tractor_parent_mask_mags"] for r in results])
 
+                #the mu grz values useful in identifying when a galaxy is too LSB to use the smooth deblending params
+                final_aper_r2_mus_no_isolate_mask = np.vstack([ r["aper_r2_mus_no_isolate_mask"] for r in results ]  )
+
+                
                 #add the image paths to the total lists
 
                 final_cog_saveimgs = filter_saveimgs_paths(results, "img_path")
@@ -1160,27 +1211,27 @@ if __name__ == '__main__':
                 except NameError:
                     raise RuntimeError("Missing variable: 'shreds_focus_i'. Did you forget to run `run_aper()`? This would be the case if you are running this on a few TGIDs.")
 
+                ##these are columns to be added per band
                 shreds_focus_i["COG_MAG_G"] = final_cog_mags[:,0]
                 shreds_focus_i["COG_MAG_R"] = final_cog_mags[:,1]
                 shreds_focus_i["COG_MAG_Z"] = final_cog_mags[:,2]
 
-                shreds_focus_i["COG_CHI2_G"] = final_cog_chi2[:,0]
-                shreds_focus_i["COG_CHI2_R"] = final_cog_chi2[:,1]
-                shreds_focus_i["COG_CHI2_Z"] = final_cog_chi2[:,2]
-
-                shreds_focus_i["COG_DOF_G"] = final_cog_chi2[:,0]
-                shreds_focus_i["COG_DOF_R"] = final_cog_chi2[:,1]
-                shreds_focus_i["COG_DOF_Z"] = final_cog_chi2[:,2]
-
+                shreds_focus_i["COG_MAG_G_NO_ISOLATE_MASK"] = final_cog_mags_no_isolate_mask[:,0]
+                shreds_focus_i["COG_MAG_R_NO_ISOLATE_MASK"] = final_cog_mags_no_isolate_mask[:,1]
+                shreds_focus_i["COG_MAG_Z_NO_ISOLATE_MASK"] = final_cog_mags_no_isolate_mask[:,2]
                 
                 shreds_focus_i["APER_R425_MAG_G"] = final_aper_r425_mags[:,0]
                 shreds_focus_i["APER_R425_MAG_R"] = final_aper_r425_mags[:,1]
                 shreds_focus_i["APER_R425_MAG_Z"] = final_aper_r425_mags[:,2]
 
-                shreds_focus_i["COG_MAG_G_ERR"] = final_cog_mags_err[:,0]
-                shreds_focus_i["COG_MAG_R_ERR"]  = final_cog_mags_err[:,1]
-                shreds_focus_i["COG_MAG_Z_ERR"]  = final_cog_mags_err[:,2]
+                shreds_focus_i["APER_R425_MAG_G_NO_ISOLATE_MASK"] = final_aper_r425_mags_no_isolate_mask[:,0]
+                shreds_focus_i["APER_R425_MAG_R_NO_ISOLATE_MASK"] = final_aper_r425_mags_no_isolate_mask[:,1]
+                shreds_focus_i["APER_R425_MAG_Z_NO_ISOLATE_MASK"] = final_aper_r425_mags_no_isolate_mask[:,2]
 
+                shreds_focus_i["APER_R425_FRAC_IN_IMG"] = final_aper_r425_frac_in_image
+                shreds_focus_i["APER_R425_FRAC_IN_IMG_NO_ISOLATE_MASK"] = final_aper_r425_frac_in_image_no_isolate_mask
+                
+                #these columns are common to both!
                 shreds_focus_i["TRACTOR_PARENT_MASK_MAG_G"] = final_tractor_parent_mask_mags[:,0]
                 shreds_focus_i["TRACTOR_PARENT_MASK_MAG_R"] = final_tractor_parent_mask_mags[:,1]
                 shreds_focus_i["TRACTOR_PARENT_MASK_MAG_Z"] = final_tractor_parent_mask_mags[:,2]
@@ -1188,54 +1239,60 @@ if __name__ == '__main__':
                 shreds_focus_i["DEBLEND_SMOOTH_NUM_BLOB"] = final_deblend_smooth_num_seg
                 shreds_focus_i["DEBLEND_SMOOTH_BLOB_PIX_DIST"] = final_deblend_smooth_dist_pix
                 shreds_focus_i["REVERT_TO_OLD_TRACTOR"] = final_revert_to_org_tractor
+              
+                ##these are columns that will arrays 
+                column_dict = {"COG_CHI2": final_cog_chi2,
+                              "COG_DOF": final_cog_dof,
+                              "COG_MAG_ERR" : final_cog_mags_err,
+                               "COG_PARAMS_G": final_cog_params_g,
+                               "COG_PARAMS_R": final_cog_params_r,
+                               "COG_PARAMS_Z": final_cog_params_z,
+                                "COG_PARAMS_G_ERR": final_cog_params_g_err,
+                               "COG_PARAMS_R_ERR": final_cog_params_r_err,
+                               "COG_PARAMS_Z_ERR": final_cog_params_z_err,
+                               "COG_DECREASE_MAX_LEN": final_cog_decrease_len,
+                               "COG_DECREASE_MAX_MAG": final_cog_decrease_mag,
+                               'APER_CEN_RADEC': final_apercen_radec,
+                               'APER_CEN_XY_PIX': final_apercen_xy_pix,
+                               'APER_PARAMS':final_aper_params
+                              }
                 
-                ##adding the lists to the astropy table!
+                column_dict_no_isolate = {
+                               "COG_CHI2_NO_ISOLATE_MASK": final_cog_chi2_no_isolate_mask,
+                              "COG_DOF_NO_ISOLATE_MASK": final_cog_dof_no_isolate_mask,
+                              "COG_MAG_ERR_NO_ISOLATE_MASK" : final_cog_mags_err_no_isolate_mask,
+                               "COG_PARAMS_G_NO_ISOLATE_MASK": final_cog_params_g_no_isolate_mask,
+                               "COG_PARAMS_R_NO_ISOLATE_MASK": final_cog_params_r_no_isolate_mask,
+                               "COG_PARAMS_Z_NO_ISOLATE_MASK": final_cog_params_z_no_isolate_mask,
+                                "COG_PARAMS_G_ERR_NO_ISOLATE_MASK": final_cog_params_g_err_no_isolate_mask,
+                               "COG_PARAMS_R_ERR_NO_ISOLATE_MASK": final_cog_params_r_err_no_isolate_mask,
+                               "COG_PARAMS_Z_ERR_NO_ISOLATE_MASK": final_cog_params_z_err_no_isolate_mask,
+                               "COG_DECREASE_MAX_LEN_NO_ISOLATE_MASK": final_cog_decrease_len_no_isolate_mask,
+                               "COG_DECREASE_MAX_MAG_NO_ISOLATE_MASK": final_cog_decrease_mag_no_isolate_mask,
+                               'APER_CEN_RADEC_NO_ISOLATE_MASK': final_apercen_radec_no_isolate_mask,
+                               'APER_CEN_XY_PIX_NO_ISOLATE_MASK': final_apercen_xy_pix_no_isolate_mask,
+                               'APER_PARAMS_NO_ISOLATE_MASK':final_aper_params_no_isolate_mask,
+                               "APER_R2_MU_NO_ISOLATE_MASK" : final_aper_r2_mus_no_isolate_mask
+                              }
 
-                # Create an astropy Column with object dtype to hold variable-length array
-                col_cog_params_g = Column(final_cog_params_g, name="COG_PARAMS_G")
-                col_cog_params_r = Column(final_cog_params_r, name="COG_PARAMS_R")
-                col_cog_params_z = Column(final_cog_params_z, name="COG_PARAMS_Z")
-                # Add the column to the table
-                shreds_focus_i.add_column(col_cog_params_g)
-                shreds_focus_i.add_column(col_cog_params_r)
-                shreds_focus_i.add_column(col_cog_params_z)
+                #combining the above dictionaries into one!
+                column_dict_total = column_dict | column_dict_no_isolate
 
-                col_cog_params_err_g = Column(final_cog_params_g_err, name='COG_PARAMS_ERR_G')
-                col_cog_params_err_r = Column(final_cog_params_r_err, name='COG_PARAMS_ERR_R')
-                col_cog_params_err_z = Column(final_cog_params_z_err, name='COG_PARAMS_ERR_Z')
-                # Add the column to the table
-                shreds_focus_i.add_column(col_cog_params_err_g)
-                shreds_focus_i.add_column(col_cog_params_err_r)
-                shreds_focus_i.add_column(col_cog_params_err_z)
+                for ki, values in column_dict_total.items():
+                    shreds_focus_i[ki] = values
+                    
+                # for ki in column_dict_total.keys():
+                    # col_i = Column(column_dict_total[ki], name=ki)
+                    # # Add the column to the table
+                    #shreds_focus_i.add_column(col_i)
+    
+                # THEN RUN SGA, AND MAKE THOSE PLOTS AND FIND WHICH MU CUT WORKS BEST!! AND IN APPENDIX ADD PLOTS ON HOW THE COMPARISON 
+                # IS FOR WITH AND WITHOUT THESE CUTS AND SOME EXAMPLE
 
-                col_cog_decrease_len = Column(final_cog_decrease_len, name='COG_DECREASE_MAX_LEN')
-                col_cog_decrease_mag = Column(final_cog_decrease_mag, name='COG_DECREASE_MAX_MAG')
-                # Add the column to the table
-                shreds_focus_i.add_column(col_cog_decrease_len)
-                shreds_focus_i.add_column(col_cog_decrease_mag)
-
-                shreds_focus_i["APER_R425_FRAC_IN_IMG"] = final_aper_r425_frac_in_image
-
-                col_aper_radec_cen = Column(final_apercen_radec, name='APER_CEN_RADEC')
-                col_aper_xy_pix_cen = Column(final_apercen_xy_pix, name='APER_CEN_XY_PIX')
-                # Add the column to the table
-                shreds_focus_i.add_column(col_aper_radec_cen)
-                shreds_focus_i.add_column(col_aper_xy_pix_cen)
-            
-                # shreds_focus_i["APER_CEN_RA"] = final_apercen_ra
-                # shreds_focus_i["APER_CEN_DEC"] = final_apercen_dec
-                # shreds_focus_i["APER_CEN_XPIX"] = final_apercen_xpix
-                # shreds_focus_i["APER_CEN_YPIX"] = final_apercen_ypix
-
-                TODO: MAKE SURE ALL THE RELEVANT COLUMNS ARE BEING ADDED TO THE CATALOG AT THE END!!
-                THEN RUN SGA, AND MAKE THOSE PLOTS AND FIND WHICH MU CUT WORKS BEST!! AND IN APPENDIX ADD PLOTS ON HOW THE COMPARISON 
-                IS FOR WITH AND WITHOUT THESE CUTS AND SOME EXAMPLE
-
-                col_cog_aper_params = Column(final_aper_params, name='APER_PARAMS')
-                shreds_focus_i.add_column(col_cog_aper_params)
-                
-                #Get the cog based stellar mass
+                #Get the cog based stellar mass, get the 2 kinds of stellar masses!!
                 shreds_focus_i = compute_aperture_masses(shreds_focus_i, rband_key="COG_MAG_R", gband_key="COG_MAG_G", z_key="Z", output_key="LOGM_SAGA_COG")
+
+                shreds_focus_i = compute_aperture_masses(shreds_focus_i, rband_key="COG_MAG_R_NO_ISOLATE_MASK", gband_key="COG_MAG_G_NO_ISOLATE_MASK", z_key="Z", output_key="LOGM_SAGA_COG_NO_ISOLATE_MASK")
 
                 #add the shred maskbits to the catalog
                 ##TODO: This step will done in a different script when we are combining all the shred catalogs into one!! MAKE A SCRIPT FOR THAT
@@ -1250,7 +1307,9 @@ if __name__ == '__main__':
     ##################
 
     yes_save = not no_save
-    if tgids_list is None and (run_aper | run_cog) and yes_save:
+    # if tgids_list is None and (run_aper | run_cog) and yes_save:
+    if tgids_list is None and (run_cog) and yes_save:
+        
         print_stage("Consolidating all the saved chunks!")
         
         #files were saved and so we will consolidate them!
@@ -1264,6 +1323,8 @@ if __name__ == '__main__':
         file_template_aper = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_%s_catalog_w_aper_mags"%(sample_str, clean_flag)
  
         if nchunks == 1:
+            shreds_focus_combine_aper = Table.read(file_template_aper + "_chunk_0.fits")
+            
             #we just need to rename the file!
             shutil.copy(file_template_aper + "_chunk_0.fits", file_template_aper + "%s.fits"%end_name)
             if run_cog == True:
@@ -1297,12 +1358,15 @@ if __name__ == '__main__':
         print("Saving aperture photometry imgs")
         make_scroll_pdf(all_aper_saveimgs, save_sample_path, summary_scroll_file_name, special_plot_mask, max_num=250, type_str="aper",all_aper_saveimgs2=None)
 
+    # if tgids_list is None and run_cog:
+    #     print("Saving COG aperture photometry imgs")
+        
+    #     make_scroll_pdf(all_cog_saveimgs, save_sample_path, summary_scroll_file_name, special_plot_mask, max_num=250, type_str="cog",all_aper_saveimgs2=None)
+        
     if tgids_list is None and run_cog:
-        print("Saving COG aperture photometry imgs")
+        special_plot_mask = (shreds_focus_combine_aper["STARFDIST"] < 1.5) & (shreds_focus_combine_aper["STARDIST_DEG"]*3600 < 45)
+        all_aper_saveimgs = shreds_focus_combine_aper["SAVE_SUMMARY_APER_PATH"]
         
-        make_scroll_pdf(all_cog_saveimgs, save_sample_path, summary_scroll_file_name, special_plot_mask, max_num=250, type_str="cog",all_aper_saveimgs2=None)
-        
-    if tgids_list is None and run_cog and run_aper:
         print("Saving COG and aperture photometry imgs")
         make_scroll_pdf(all_aper_saveimgs, save_sample_path, summary_scroll_file_name, special_plot_mask, max_num=250, type_str="apercog",all_aper_saveimgs2=all_cog_saveimgs)
 
@@ -1310,8 +1374,6 @@ if __name__ == '__main__':
     if tgids_list is None and run_cog:
         print("Saving jaccard score imgs")
         make_scroll_pdf(all_jaccard_saveimgs, save_sample_path, summary_scroll_file_name, None, max_num=250, type_str="jaccard",all_aper_saveimgs2=None)
-
-
 
         
     if tgids_list is None and run_cog:

@@ -307,6 +307,8 @@ def get_new_segment(data, fiber_xpix, fiber_ypix, tot_noise_rms,  npixels_min, t
     '''
     #combine the g+r+z 
     tot_data = np.sum(data, axis=0)
+
+    #NOTE Do not need to worry about the interpolation here as we are only doing detection, not deblending like in isoalte_galaxy_mask function
     
     masked_data = np.copy(tot_data)
     #we set the aperture mask values to be very low so masked pixels are not identified as part of the segment
@@ -318,7 +320,7 @@ def get_new_segment(data, fiber_xpix, fiber_ypix, tot_noise_rms,  npixels_min, t
     kernel_smooth = make_2dgaussian_kernel(15, size=29)  # FWHM = 3.0
 
     convolved_tot_data = convolve( masked_data, kernel )
-    convolved_tot_data_smooth = convolve( masked_data, kernel_smooth )
+    convolved_tot_data_smooth = convolve( masked_data, kernel_smooth)
 
     #we will definitely find somewhere here!
     segment_map_new = detect_sources(convolved_tot_data, threshold, npixels=npixels_min) 
@@ -741,6 +743,9 @@ def cog_fitting_subfunction(same_input_dict,reconstruct_galaxy_dict, parent_gala
     ax_id = 3
     ax[ax_id].set_title("Reconstructed Galaxy",fontsize = 12)
     rgb_reconstruct_full = process_img( [reconstruct_galaxy_dict["g"],reconstruct_galaxy_dict["r"],reconstruct_galaxy_dict["z"]], cutout_size = None, org_size = np.shape(data_arr)[1] )
+
+    #let us save this reconstructed galaxy!!
+    np.save(save_path + f"/final_reconstruct_galaxy_subfunction{img_flag}.npy", np.array([reconstruct_galaxy_dict["g"],reconstruct_galaxy_dict["r"],reconstruct_galaxy_dict["z"]]))
     
     ax[ax_id].imshow(rgb_reconstruct_full, origin='lower',zorder = 0)
     ax[ax_id].scatter( aper_xpos, aper_ypos, color = "darkorange",marker = "x",zorder = 1)
@@ -901,7 +906,7 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_d
 
         
         #we construct the smooth galaxy mask using the r-band image of the latest reconstruction so far!
-        segm_smooth_deblend_opt, num_deblend_segs_main_blob, parent_galaxy_mask, non_parent_galaxy_mask, nearest_deblend_dist_pix, jaccard_img_path = get_isolate_galaxy_mask(img_rgb = rgb_img, img_rgb_mask = rgb_img_mask, r_band_data=reconstruct_data[1], r_rms=noise_rms_perband[1], fiber_xpix=fiber_xpix, fiber_ypix=fiber_ypix, file_path=save_path, tgid=tgid, aperture_mask = aperture_mask, pcnn_val = pcnn_val, radec=source_radec, mu_rough = mu_rough )
+        segm_smooth_deblend_opt, num_deblend_segs_main_blob, parent_galaxy_mask, non_parent_galaxy_mask, nearest_deblend_dist_pix, jaccard_img_path = get_isolate_galaxy_mask(img_rgb = rgb_img, img_rgb_mask = rgb_img_mask, r_band_data=reconstruct_data[1], r_rms=noise_rms_perband[1], fiber_xpix=fiber_xpix, fiber_ypix=fiber_ypix, file_path=save_path, tgid=tgid, aperture_mask = aperture_mask, pcnn_val = pcnn_val, radec=source_radec, mu_rough = mu_rough, segment_map_v2 = segment_map_v2, source_zred = source_zred)
 
         if segm_smooth_deblend_opt is not None:
             #a smooth segment was found!

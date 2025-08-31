@@ -20,6 +20,9 @@ import matplotlib.colors as mcolors
 import numpy as np
 from alternative_photometry_methods import find_nearest_island
 from desi_lowz_funcs import make_subplots
+from scipy.ndimage import generic_filter
+from matplotlib.colors import LogNorm
+from scipy.ndimage import gaussian_filter
 
 def make_custom_cmap(n_colors, cmap_name="rainbow"):
     """
@@ -133,7 +136,7 @@ def find_contrast_run(ncontrast, all_jacc_desi, all_jacc_largest, thresh=0.95, r
     return None, np.nan  # nothing found
 
 
-def find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_map, nlevel_val = 4,save_path = None, pcnn_val=None,radec=None, tgid=None, mu_rough=None):
+def find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_map, nlevel_val = 4,save_path = None, pcnn_val=None,radec=None, tgid=None, mu_rough=None, source_zred=None):
     '''
     In this function, we find the optimal ncontrast value with which we will deblend.
     We also save a plot regarding this!!
@@ -159,6 +162,9 @@ def find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_ma
     #enter ra,dec text here!
     ax[-4].text(0.5,0.9, "(%.3f,%.3f)"%(radec[0], radec[1]) ,color = "white",fontsize = 8,
                ha="center",va="center",transform = ax[-4].transAxes)
+    
+    ax[-3].text(0.5,0.9, "(%.4f)"%(source_zred) ,color = "white",fontsize = 9,
+               ha="center",va="center",transform = ax[-3].transAxes)
 
     ax[-3].set_title(f"Reconstruct",fontsize = 8)
     ax[-3].imshow(img_rgb_mask,origin="lower")
@@ -283,7 +289,38 @@ def process_deblend_image(segment_map, segm_deblend, fiber_xpix, fiber_ypix):
     return segm_deblend_v3, num_deblend_segs_main_blob, parent_galaxy_mask.astype(int), not_parent_galaxy_mask,  nearest_deblend_dist_pix, lie_on_smooth_segment
 
 
-def get_isolate_galaxy_mask(img_rgb=None, img_rgb_mask=None, r_band_data=None, r_rms=None, fiber_xpix=None, fiber_ypix=None, file_path=None,  tgid=None, aperture_mask=None, pcnn_val=None, radec=None, mu_rough = None):
+def simple_interpolate_mask(image, mask, footprint_size=5):
+    filled = image.copy()
+    temp = filled.astype(float)
+    temp[mask] = np.nan
+
+    # local mean ignoring NaNs
+    def mean_ignore_nan(values):
+        return np.nanmean(values)
+
+    footprint = np.ones((footprint_size, footprint_size))
+    interpolated = generic_filter(temp, mean_ignore_nan, footprint=footprint, mode='nearest')
+
+    filled[mask] = interpolated[mask]
+    return filled
+
+from scipy.interpolate import griddata
+
+def linear_interpolate_mask(org_image, smooth_image, segment_map_v2, mask):
+    '''
+    We will use the smoothed image for interpolation to fill into the unsmoothed image! We only want to interpolate on pixels that are on the main blob. Rest will be left as is. Thus the only pixels tha we will be updating are those that are masked and segment_map_v2 = 2.
+    '''
+    filled = org_image.copy()
+    y, x = np.indices(org_image.shape)
+    
+    points = np.column_stack((x[~mask], y[~mask]))
+    values = smooth_image[~mask]
+    
+    filled[mask & (segment_map_v2 == 2)] = griddata(points, values, (x[mask & (segment_map_v2 == 2)], y[mask & (segment_map_v2 == 2)]), method='linear')
+    
+    return filled
+    
+def get_isolate_galaxy_mask(img_rgb=None, img_rgb_mask=None, r_band_data=None, r_rms=None, fiber_xpix=None, fiber_ypix=None, file_path=None,  tgid=None, aperture_mask=None, pcnn_val=None, radec=None, mu_rough = None, segment_map_v2 = None, source_zred=None):
     '''
     Function that returns the deblended segment used for isolating the parent galaxy. 
     Note that this function is only run when z > 0.01, and that flag is applied in the aperture_cogs.py script when this function is called
@@ -294,13 +331,43 @@ def get_isolate_galaxy_mask(img_rgb=None, img_rgb_mask=None, r_band_data=None, r
     npixels_min = 10
     threshold_rms_scale = 1.5
 
-    r_band_data[aperture_mask] = 0 
+    ##setting the masked regions to be nans so we can interpolate over them in the convolution
+    # r_band_data[aperture_mask] = np.nan
+    #filling in the masked regions with some approximate pixels so we do not bias any measurements
+    # r_band_data = simple_interpolate_mask(r_band_data, aperture_mask, footprint_size=30)
+    #Smooth the image lightly (sigma ~ 1-2 pixels)
+
+    #TODO: ONLY DO THIS SMOOTHING IF SEGMENT_MAP_V2 == 2 AND APERTURE_MASK == TRUE PIXELS EXIST
+    if np.sum(  (segment_map_v2 == 2) & (aperture_mask) ) > 0:
+        smoothed_r_image = gaussian_filter(r_band_data, sigma=1.0)
+        r_band_data_intp = linear_interpolate_mask(r_band_data, smoothed_r_image, segment_map_v2, aperture_mask)
+    else:
+        r_band_data_intp = r_band_data
+
+    #TODO: IT SEEMS LIKE SOMEWHERE AROUND 22.5 is a good cutout to start being greedy! Suggestion is to take SGA, manaully label number of segments
+    #and make a plot of MU hist where we get correct or not ... and draw some boundary there!!
+    
+    ##NOTE: we only care about this interpolate for masked pixels in the main blob
+    #the above will do interpolation on the full image
+    #and that might lead to weird things, so to avoid that, we will be setting all those outside the main segment pixels to 0 again!
+    # #essentially pixels that were masked before, we want them to remain masked!
+    # r_band_data_intp[segment_map_v2 == 1] = 0
+    #note that this is not setting everything outside main blob zero, only some sources
+
+    #saving this image for reference
+    fig,ax = plt.subplots(1,2,figsize = (8,4))
+    ax[0].set_title("Pre-interpolate")
+    ax[0].imshow(r_band_data, origin="lower",norm=LogNorm())
+    ax[1].set_title("Post-interpolate")
+    ax[1].imshow(r_band_data_intp, origin="lower",norm=LogNorm())
+    fig.savefig(file_path+ "/interpolated_r_band_data.png")
+    plt.close(fig)
 
     ###get the updated deblend values!!
     kernel = make_2dgaussian_kernel(15, size=29)  # FWHM = 3.0
 
     threshold = threshold_rms_scale * r_rms
-    convolved_tot_data = convolve( r_band_data, kernel )
+    convolved_tot_data = convolve( r_band_data_intp, kernel)
     
     segment_map = detect_sources(convolved_tot_data, threshold, npixels=npixels_min) 
 
@@ -312,7 +379,7 @@ def get_isolate_galaxy_mask(img_rgb=None, img_rgb_mask=None, r_band_data=None, r
     else:
         segment_map_data = segment_map.data
 
-        ncontrast_opt, jaccard_img_path = find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_map, nlevel_val = 4, save_path = file_path, pcnn_val=pcnn_val, radec=radec, tgid=tgid, mu_rough = mu_rough )
+        ncontrast_opt, jaccard_img_path = find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_map, nlevel_val = 4, save_path = file_path, pcnn_val=pcnn_val, radec=radec, tgid=tgid, mu_rough = mu_rough, source_zred=source_zred )
         
         segm_deblend_opt = deblend_sources(convolved_tot_data,segment_map,
                                            npixels=npixels_min,nlevels=4, contrast=ncontrast_opt,
