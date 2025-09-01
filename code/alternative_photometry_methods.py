@@ -28,7 +28,7 @@ import concurrent.futures
 import pickle
 from photutils.segmentation import make_2dgaussian_kernel
 from astropy.convolution import convolve
-from desi_lowz_funcs import make_subplots, sdss_rgb
+from desi_lowz_funcs import make_subplots, sdss_rgb, get_elliptical_aperture
 
 
 def mags_to_flux(mags, zeropoint=22.5):
@@ -88,70 +88,84 @@ def get_simplest_photometry(data_arr, r_rms, fiber_xpix, fiber_ypix, source_cat_
     
     segment_map = detect_sources(convolved_tot_data, threshold, npixels=npixels_min) 
 
-    #note no deblending here!! except for the large step at the end!    
-    ## note that these 2d arrays are [y-coord, x-coord]
-    island_num = segment_map.data[int(fiber_ypix),int(fiber_xpix)]
-
-    segment_map_smooth = np.copy(segment_map.data)
-
-    if island_num == 0:
-        #very similarly to to the aperture photometry step, here, we find the nearest possible source
-        new_island_num, closest_island_dist_pix = find_nearest_island(segment_map_smooth, fiber_xpix,fiber_ypix)
-    else:
-        #the fiber is already on a segment!
-        new_island_num = island_num
-        closest_island_dist_pix = 0
+    if segment_map is None:        
+        np.save(save_path + "/simplest_photometry_binary_mask.npy",  np.zeros_like(r_band_data ) )
         
-    #make everything that is not on the main blob a 0!
-    segment_map_smooth[segment_map_smooth != new_island_num] = 0
+        np.save(save_path + "/simplest_photo_rgb_mask_image.npy", np.ones_like(data_arr) )
+        
+        return 3*[np.nan], np.nan, 0
 
-    #WE DO NOT APPLY THE DEBLENDING YET, BUT WE WILL SEE IF NECESSARY. GUESS IS NOT AS THIS PHOTOMETRY WILL BE ONLY USED RARELY.
-    #do the basic deblending here??
-    #use this mask to identify all the tractor o
-
-    #use this new segmentation mask to filter the tractor sources! and save their photometry!!!
-    xpix_all = source_cat_no_stars["xpix"].astype(int)
-    ypix_all = source_cat_no_stars["ypix"].astype(int)
+    else:
+        #note no deblending here!! except for the large step at the end!    
+        ## note that these 2d arrays are [y-coord, x-coord]
+        island_num = segment_map.data[int(fiber_ypix),int(fiber_xpix)]
     
-    # mask of which sources fall on a segment (nonzero)
-    on_segment_mask = (segment_map_smooth[ypix_all, xpix_all] != 0)    
-    # filter catalog
-    source_cat_no_stars_simple_model = source_cat_no_stars[on_segment_mask]
-
-    #save this catalog!
-    source_cat_no_stars_simple_model.write( save_path + "/simplest_photometry_parent_sources.fits", overwrite=True)
-
-    #let us save this mask
-    np.save(save_path + "/simplest_photometry_binary_mask.npy", segment_map_smooth)
-
-    #let us make a simple rgb image, where we apply this mask to it!
-    fig,ax = make_subplots(ncol = 2, nrow = 1, return_fig = True)
-    rgb_image_full = sdss_rgb(data_arr)
-    #make the masked image
-    data_arr[:, (segment_map_smooth == 0)] = 0
-    rgb_image_mask = sdss_rgb(data_arr)
-    ax[0].set_title("Full grz image",fontsize = 15)
-    ax[0].imshow(rgb_image_full, origin="lower")
-    ax[1].set_title("Simplest Photo grz mask image",fontsize = 15)
-    ax[1].imshow(rgb_image_mask, origin="lower")
-    for axi in ax:
-        axi.set_xticks([])
-        axi.set_yticks([])
-    fig.savefig(save_path + "/simplest_photometry_mask_image.png")
-    plt.close(fig)
-
-    #we will make a tractor model image with this sources later!
-
-    #in the mean time, measure the simplest photometry!
-    g_flux_corr = mags_to_flux(source_cat_no_stars_simple_model["mag_g"]) / source_cat_no_stars_simple_model["mw_transmission_g"]
-    r_flux_corr = mags_to_flux(source_cat_no_stars_simple_model["mag_r"]) / source_cat_no_stars_simple_model["mw_transmission_r"]
-    z_flux_corr = mags_to_flux(source_cat_no_stars_simple_model["mag_z"]) / source_cat_no_stars_simple_model["mw_transmission_z"]
+        segment_map_smooth = np.copy(segment_map.data)
+        
+        if island_num == 0:
+            #very similarly to to the aperture photometry step, here, we find the nearest possible source
+            new_island_num, closest_island_dist_pix = find_nearest_island(segment_map_smooth, fiber_xpix,fiber_ypix)
+        else:
+            #the fiber is already on a segment!
+            new_island_num = island_num
+            closest_island_dist_pix = 0
     
-    tot_g_mag = flux_to_mag(np.sum(g_flux_corr))
-    tot_r_mag = flux_to_mag(np.sum(r_flux_corr))
-    tot_z_mag = flux_to_mag(np.sum(z_flux_corr))
+        
+        #make everything that is not on the main blob a 0!
+        segment_map_smooth[segment_map_smooth != new_island_num] = 0
     
-    return np.array([tot_g_mag, tot_r_mag, tot_z_mag]), closest_island_dist_pix 
+        #estimate the aperture of this simplest photo and measure its outside fraction!
+        aperture_for_simple_phot, areafrac_in_image_simple_phot, _, _ = get_elliptical_aperture( segment_map_smooth , sigma = 4.25 )
+
+        
+    
+        #use this new segmentation mask to filter the tractor sources! and save their photometry!!!
+        xpix_all = source_cat_no_stars["xpix"].astype(int)
+        ypix_all = source_cat_no_stars["ypix"].astype(int)
+        
+        # mask of which sources fall on a segment (nonzero)
+        on_segment_mask = (segment_map_smooth[ypix_all, xpix_all] != 0)    
+        # filter catalog
+        source_cat_no_stars_simple_model = source_cat_no_stars[on_segment_mask]
+    
+        #save this catalog!
+        source_cat_no_stars_simple_model.write( save_path + "/simplest_photometry_parent_sources.fits", overwrite=True)
+    
+        #let us save this mask
+        np.save(save_path + "/simplest_photometry_binary_mask.npy", segment_map_smooth)
+    
+        #let us make a simple rgb image, where we apply this mask to it!
+        fig,ax = make_subplots(ncol = 2, nrow = 1, return_fig = True)
+        rgb_image_full = sdss_rgb(data_arr)
+        #make the masked image
+        data_arr[:, (segment_map_smooth == 0)] = 0
+        rgb_image_mask = sdss_rgb(data_arr)
+        ax[0].set_title("Full grz image",fontsize = 15)
+        ax[0].imshow(rgb_image_full, origin="lower")
+        ax[1].set_title("Simplest Photo grz mask image",fontsize = 15)
+        ax[1].imshow(rgb_image_mask, origin="lower")
+
+        #save this rgb image so we can load it in a future step!
+        np.save(save_path + "/simplest_photo_rgb_mask_image.npy", rgb_image_mask)
+
+        for axi in ax:
+            axi.set_xticks([])
+            axi.set_yticks([])
+        fig.savefig(save_path + "/simplest_photometry_mask_image.png")
+        plt.close(fig)
+    
+        #we will make a tractor model image with this sources later!
+    
+        #in the mean time, measure the simplest photometry!
+        g_flux_corr = mags_to_flux(source_cat_no_stars_simple_model["mag_g"]) / source_cat_no_stars_simple_model["mw_transmission_g"]
+        r_flux_corr = mags_to_flux(source_cat_no_stars_simple_model["mag_r"]) / source_cat_no_stars_simple_model["mw_transmission_r"]
+        z_flux_corr = mags_to_flux(source_cat_no_stars_simple_model["mag_z"]) / source_cat_no_stars_simple_model["mw_transmission_z"]
+        
+        tot_g_mag = flux_to_mag(np.sum(g_flux_corr))
+        tot_r_mag = flux_to_mag(np.sum(r_flux_corr))
+        tot_z_mag = flux_to_mag(np.sum(z_flux_corr))
+        
+        return np.array([tot_g_mag, tot_r_mag, tot_z_mag]), closest_island_dist_pix,  areafrac_in_image_simple_phot
         
         
 def get_galaxy_close_photometry_mask():

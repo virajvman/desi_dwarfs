@@ -535,7 +535,7 @@ if __name__ == '__main__':
 
     if img_source:
         print("Getting img source models")
-        pool = mp.Pool(128)
+        pool = mp.Pool(64)
         completed = 0
         for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_img_source ) for i in range(total)], chunksize = 500 ):
             completed += 1
@@ -546,7 +546,7 @@ if __name__ == '__main__':
 
     if bkg_source:
         print("Getting bkg source models")
-        pool = mp.Pool(128)
+        pool = mp.Pool(64)
         
         completed = 0
         for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_bkg_sources ) for i in range(total)], chunksize = 500 ):
@@ -558,7 +558,7 @@ if __name__ == '__main__':
 
     if blend_remove_source:
         print("Getting blend remove source models")
-        pool = mp.Pool(128)
+        pool = mp.Pool(64)
         
         completed = 0
         for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_blended_remove_sources) for i in range(total)], chunksize = 500 ):
@@ -571,7 +571,7 @@ if __name__ == '__main__':
 
     if parent_galaxy:
         print("Getting the parent galaxy source models")
-        pool = mp.Pool(128)
+        pool = mp.Pool(64)
         
         completed = 0
         for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_main_blob_sources) for i in range(total)], chunksize = 500 ):

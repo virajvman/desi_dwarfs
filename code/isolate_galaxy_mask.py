@@ -23,6 +23,9 @@ from desi_lowz_funcs import make_subplots
 from scipy.ndimage import generic_filter
 from matplotlib.colors import LogNorm
 from scipy.ndimage import gaussian_filter
+from desi_lowz_funcs import get_elliptical_aperture
+from photutils.aperture import aperture_photometry, EllipticalAperture
+from photutils.morphology import data_properties
 
 def make_custom_cmap(n_colors, cmap_name="rainbow"):
     """
@@ -136,7 +139,7 @@ def find_contrast_run(ncontrast, all_jacc_desi, all_jacc_largest, thresh=0.95, r
     return None, np.nan  # nothing found
 
 
-def find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_map, nlevel_val = 4,save_path = None, pcnn_val=None,radec=None, tgid=None, mu_rough=None, source_zred=None):
+def find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_map, nlevel_val = 4,save_path = None, pcnn_val=None,radec=None, tgid=None, mu_rough=None, source_zred=None, mu_r_smooth = None):
     '''
     In this function, we find the optimal ncontrast value with which we will deblend.
     We also save a plot regarding this!!
@@ -166,7 +169,7 @@ def find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_ma
     ax[-3].text(0.5,0.9, "(%.4f)"%(source_zred) ,color = "white",fontsize = 9,
                ha="center",va="center",transform = ax[-3].transAxes)
 
-    ax[-3].set_title(f"Reconstruct",fontsize = 8)
+    ax[-3].set_title(f"Recon, mur_s = {mu_r_smooth:.2f}",fontsize = 8)
     ax[-3].imshow(img_rgb_mask,origin="lower")
 
     ax[-2].set_title(f"PCNN = {pcnn_val:.2f}",fontsize = 8)
@@ -306,7 +309,21 @@ def simple_interpolate_mask(image, mask, footprint_size=5):
 
 from scipy.interpolate import griddata
 
-def linear_interpolate_mask(org_image, smooth_image, segment_map_v2, mask):
+# def linear_interpolate_mask_SMOOTH(org_image, smooth_image, segment_map_v2, mask):
+#     '''
+#     We will use the smoothed image for interpolation to fill into the unsmoothed image! We only want to interpolate on pixels that are on the main blob. Rest will be left as is. Thus the only pixels tha we will be updating are those that are masked and segment_map_v2 = 2.
+#     '''
+#     filled = org_image.copy()
+#     y, x = np.indices(org_image.shape)
+    
+#     points = np.column_stack((x[~mask], y[~mask]))
+#     values = smooth_image[~mask]
+    
+#     filled[mask & (segment_map_v2 == 2)] = griddata(points, values, (x[mask & (segment_map_v2 == 2)], y[mask & (segment_map_v2 == 2)]), method='linear')
+    
+#     return filled
+
+def linear_interpolate_mask(org_image, segment_map_v2, mask):
     '''
     We will use the smoothed image for interpolation to fill into the unsmoothed image! We only want to interpolate on pixels that are on the main blob. Rest will be left as is. Thus the only pixels tha we will be updating are those that are masked and segment_map_v2 = 2.
     '''
@@ -314,11 +331,19 @@ def linear_interpolate_mask(org_image, smooth_image, segment_map_v2, mask):
     y, x = np.indices(org_image.shape)
     
     points = np.column_stack((x[~mask], y[~mask]))
-    values = smooth_image[~mask]
+    values = org_image[~mask]
     
     filled[mask & (segment_map_v2 == 2)] = griddata(points, values, (x[mask & (segment_map_v2 == 2)], y[mask & (segment_map_v2 == 2)]), method='linear')
     
     return filled
+
+    
+def mean_surface_brightness(mag, ellip_area):
+    '''
+    Function to compute surface brightness. We will use this in the r-band data and the input is the area in arcsec2 of the ellipse in which we are measuring the rough photo
+    '''
+    return mag + 2.5*np.log10(ellip_area)
+
     
 def get_isolate_galaxy_mask(img_rgb=None, img_rgb_mask=None, r_band_data=None, r_rms=None, fiber_xpix=None, fiber_ypix=None, file_path=None,  tgid=None, aperture_mask=None, pcnn_val=None, radec=None, mu_rough = None, segment_map_v2 = None, source_zred=None):
     '''
@@ -339,21 +364,16 @@ def get_isolate_galaxy_mask(img_rgb=None, img_rgb_mask=None, r_band_data=None, r
 
     #TODO: ONLY DO THIS SMOOTHING IF SEGMENT_MAP_V2 == 2 AND APERTURE_MASK == TRUE PIXELS EXIST
     if np.sum(  (segment_map_v2 == 2) & (aperture_mask) ) > 0:
-        smoothed_r_image = gaussian_filter(r_band_data, sigma=1.0)
-        r_band_data_intp = linear_interpolate_mask(r_band_data, smoothed_r_image, segment_map_v2, aperture_mask)
+        # smoothed_r_image = gaussian_filter(r_band_data, sigma=1.0)
+        # r_band_data_intp = linear_interpolate_mask_SMOOTH(r_band_data, smoothed_r_image, segment_map_v2, aperture_mask)
+        r_band_data_intp = linear_interpolate_mask(r_band_data, segment_map_v2, aperture_mask)
     else:
-        r_band_data_intp = r_band_data
+        r_band_data_intp = np.copy(r_band_data)
 
+  
     #TODO: IT SEEMS LIKE SOMEWHERE AROUND 22.5 is a good cutout to start being greedy! Suggestion is to take SGA, manaully label number of segments
     #and make a plot of MU hist where we get correct or not ... and draw some boundary there!!
-    
-    ##NOTE: we only care about this interpolate for masked pixels in the main blob
-    #the above will do interpolation on the full image
-    #and that might lead to weird things, so to avoid that, we will be setting all those outside the main segment pixels to 0 again!
-    # #essentially pixels that were masked before, we want them to remain masked!
-    # r_band_data_intp[segment_map_v2 == 1] = 0
-    #note that this is not setting everything outside main blob zero, only some sources
-
+            
     #saving this image for reference
     fig,ax = plt.subplots(1,2,figsize = (8,4))
     ax[0].set_title("Pre-interpolate")
@@ -374,12 +394,21 @@ def get_isolate_galaxy_mask(img_rgb=None, img_rgb_mask=None, r_band_data=None, r
     #we want sources where we detect something!! If we do not detect anything, we return a non valyue
     if segment_map is None:
         print(f"Nothing found in this smooth segmentation: {tgid}! Returning Nones. In such cases, we will revert back to the tractor photometry!")
-        
-        return None, 0, None, None, np.nan, None
+        r_mu_smooth = 0
+        return None, 0, None, None, np.nan, None, r_mu_smooth
     else:
         segment_map_data = segment_map.data
 
-        ncontrast_opt, jaccard_img_path = find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_map, nlevel_val = 4, save_path = file_path, pcnn_val=pcnn_val, radec=radec, tgid=tgid, mu_rough = mu_rough, source_zred=source_zred )
+        ##estimate the approximate surface brightness on this r_band_data_intp!    
+        aper_smooth, _,_,aper_smooth_params = get_elliptical_aperture(segment_map_data, sigma = 2)    
+        #measure photometry within this rough aperture!
+        phot_r_smooth = aperture_photometry( r_band_data_intp , aper_smooth)
+        r_mag_smooth = 22.5 - 2.5*np.log10( phot_r_smooth["aperture_sum"].data[0] )
+        #get the area of this aperture in arcsec^2 so convert the pixel sizes to arcsec! Area = pi*a*b
+        aper_smooth_area = np.pi * (aper_smooth_params[0]*0.262) * (aper_smooth_params[0] * aper_smooth_params[1] * 0.262)        
+        r_mu_smooth = mean_surface_brightness( r_mag_smooth,  aper_smooth_area )
+
+        ncontrast_opt, jaccard_img_path = find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_map, nlevel_val = 4, save_path = file_path, pcnn_val=pcnn_val, radec=radec, tgid=tgid, mu_rough = mu_rough, source_zred=source_zred, mu_r_smooth = r_mu_smooth )
         
         segm_deblend_opt = deblend_sources(convolved_tot_data,segment_map,
                                            npixels=npixels_min,nlevels=4, contrast=ncontrast_opt,
@@ -400,5 +429,5 @@ def get_isolate_galaxy_mask(img_rgb=None, img_rgb_mask=None, r_band_data=None, r
     structure = np.ones((3, 3), dtype=bool)
     not_parent_galaxy_mask = binary_dilation(not_parent_galaxy_mask, structure=structure, iterations=2)
     
-    return segm_deblend_opt, num_deblend_segs_main_blob, parent_galaxy_mask, not_parent_galaxy_mask, nearest_deblend_dist_pix, jaccard_img_path
+    return segm_deblend_opt, num_deblend_segs_main_blob, parent_galaxy_mask, not_parent_galaxy_mask, nearest_deblend_dist_pix, jaccard_img_path, r_mu_smooth
     

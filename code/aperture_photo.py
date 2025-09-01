@@ -48,6 +48,7 @@ from photutils.background import StdBackgroundRMS, MADStdBackgroundRMS
 from astropy.stats import SigmaClip
 from scipy.stats import skew, kurtosis
 from alternative_photometry_methods import get_simplest_photometry
+from desi_lowz_funcs import get_elliptical_aperture
 
 rootdir = '/global/u1/v/virajvm/'
 sys.path.append(os.path.join(rootdir, 'DESI2_LOWZ'))
@@ -975,7 +976,7 @@ def run_aperture_pipe(input_dict):
         #^the above catalog contains sources that satisfy the color cuts! The simple photo sources are saved as part of the below function
         
         #we run the simplest photometry here!!
-        simplest_photo_mags, simplest_photo_island_dist_pix  = get_simplest_photometry(data_arr,  noise_dict["r"], fiber_xpix, fiber_ypix, source_cat_f[~is_star], save_path,source_zred=None)
+        simplest_photo_mags, simplest_photo_island_dist_pix, simplest_photo_aper_frac_in_image  = get_simplest_photometry(data_arr,  noise_dict["r"], fiber_xpix, fiber_ypix, source_cat_f[~is_star], save_path,source_zred=None)
 
         ##########################################
         ### PLOTTING CODE
@@ -1268,7 +1269,8 @@ def run_aperture_pipe(input_dict):
                 "aper_frac_mask_badpix": aper_frac_mask_badpix, 
                 "img_frac_mask_badpix":  img_frac_mask_badpix,
                 "simple_photo_mags": simplest_photo_mags, 
-                "simple_photo_island_dist_pix": simplest_photo_island_dist_pix
+                "simple_photo_island_dist_pix": simplest_photo_island_dist_pix,
+                "simplest_photo_aper_frac_in_image": simplest_photo_aper_frac_in_image
             }
         
 

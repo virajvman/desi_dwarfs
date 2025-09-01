@@ -1505,7 +1505,66 @@ def download_few_spectra(data_cat,ncores=2):
 
     return all_waves, all_fluxs, all_ivars
 
+from photutils.aperture import aperture_photometry, EllipticalAperture
+from photutils.morphology import data_properties
 
+def measure_elliptical_aperture_area_fraction(image_shape, ell_aper_obj):
+    # aperture: EllipticalAperture object
+    # image_shape: (ny, nx)
+    
+    mask = ell_aper_obj.to_mask(method='exact')  # or method='center' for faster, coarser estimate
+    aperture_mask = mask.to_image(image_shape)  # same shape as image
+    
+    # Compute area fraction
+    area_in_image = np.nansum(aperture_mask)         # pixel values are fractions from 0 to 1
+    total_aperture_area = ell_aper_obj.area  # exact analytic ellipse area: πab
+    
+    fraction = area_in_image / total_aperture_area
+
+    return fraction
+
+def get_elliptical_aperture(segment_mask, sigma = 3, aperture_mask = None, id_num = None ):
+    '''
+    Function that takes in a segment mask and fits an aperture to it!
+
+    Note that the sizes etc. obtained here does not have much to do with actual size of the galaxy. We are just using this to get some fiducial size and 
+    and to scale the aperture. If we wanted light weighted aperture, we would have to work with the actual image and not the pixel mask.
+    
+    '''
+
+    if id_num is not None:
+        segment_mask_v2 = np.copy(segment_mask)
+        segment_mask_v2[segment_mask != id_num] = 0
+        segment_mask_v2[segment_mask == id_num] = 1
+        segment_mask = segment_mask_v2
+    
+    if aperture_mask is not None:
+        segment_mask[aperture_mask] = 0
+        if np.sum( segment_mask) == 0:
+            #in case source is too close to the star, then we do not code to crash so we unmask it again
+            segment_mask[aperture_mask] = 1
+        
+    #segment_mask is a binary mask.
+    #use this trick to get properties of the main segment 
+    cat = data_properties(segment_mask, mask=None)
+
+    columns = ['label', 'xcentroid', 'ycentroid', 'semimajor_sigma',
+               'semiminor_sigma', 'orientation']
+    tbl = cat.to_table(columns=columns)
+
+    from photutils.aperture import EllipticalAperture
+    xypos = (cat.xcentroid, cat.ycentroid)
+
+    r = sigma # choose an appropriate value here
+    a = cat.semimajor_sigma.value * r
+    b = cat.semiminor_sigma.value * r
+    theta = cat.orientation.to(u.rad).value
+        
+    aperture = EllipticalAperture(xypos, a, b, theta=theta)
+
+    area_fraction = measure_elliptical_aperture_area_fraction(segment_mask.shape, aperture)
+
+    return aperture, area_fraction, xypos, [cat.semimajor_sigma.value, b/a, theta]
 
 import scipy.optimize as opt
 

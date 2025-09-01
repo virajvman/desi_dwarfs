@@ -28,6 +28,8 @@ from astropy.convolution import convolve
 import matplotlib.patches as patches
 from isolate_galaxy_mask import get_isolate_galaxy_mask
 from alternative_photometry_methods import mags_to_flux, flux_to_mag
+from desi_lowz_funcs import get_elliptical_aperture
+import copy
 
 def mean_surface_brightness(mag, ellip_area):
     '''
@@ -100,68 +102,7 @@ def find_nearest_island(segment_map_v2,fiber_xpix, fiber_ypix):
     return segment_map_v2, island_num, fiber_xpix, fiber_ypix, np.min(all_dists_segpixs)
 
 
-def measure_elliptical_aperture_area_fraction(image_shape, ell_aper_obj):
-    # aperture: EllipticalAperture object
-    # image_shape: (ny, nx)
-    
-    mask = ell_aper_obj.to_mask(method='exact')  # or method='center' for faster, coarser estimate
-    aperture_mask = mask.to_image(image_shape)  # same shape as image
-    
-    # Compute area fraction
-    area_in_image = np.nansum(aperture_mask)         # pixel values are fractions from 0 to 1
-    total_aperture_area = ell_aper_obj.area  # exact analytic ellipse area: πab
-    
-    fraction = area_in_image / total_aperture_area
 
-    return fraction
-
-
-def get_elliptical_aperture(segment_mask, sigma = 3, aperture_mask = None, id_num = None ):
-    '''
-    Function that takes in a segment mask and fits an aperture to it!
-
-    Note that the sizes etc. obtained here does not have much to do with actual size of the galaxy. We are just using this to get some fiducial size and 
-    and to scale the aperture. If we wanted light weighted aperture, we would have to work with the actual image and not the pixel mask.
-    
-    '''
-
-    if id_num is not None:
-        segment_mask_v2 = np.copy(segment_mask)
-        segment_mask_v2[segment_mask != id_num] = 0
-        segment_mask_v2[segment_mask == id_num] = 1
-        segment_mask = segment_mask_v2
-    
-    if aperture_mask is not None:
-        segment_mask[aperture_mask] = 0
-        if np.sum( segment_mask) == 0:
-            #in case source is too close to the star, then we do not code to crash so we unmask it again
-            segment_mask[aperture_mask] = 1
-        
-    
-    #segment_mask is a binary mask.
-    
-    
-    #use this trick to get properties of the main segment 
-    cat = data_properties(segment_mask, mask=None)
-
-    columns = ['label', 'xcentroid', 'ycentroid', 'semimajor_sigma',
-               'semiminor_sigma', 'orientation']
-    tbl = cat.to_table(columns=columns)
-
-    from photutils.aperture import EllipticalAperture
-    xypos = (cat.xcentroid, cat.ycentroid)
-
-    r = sigma # choose an appropriate value here
-    a = cat.semimajor_sigma.value * r
-    b = cat.semiminor_sigma.value * r
-    theta = cat.orientation.to(u.rad).value
-        
-    aperture = EllipticalAperture(xypos, a, b, theta=theta)
-
-    area_fraction = measure_elliptical_aperture_area_fraction(segment_mask.shape, aperture)
-
-    return aperture, area_fraction, xypos, [cat.semimajor_sigma.value, b/a, theta]
-    
 
 def build_residual_mask(data_images, model_images, main_seg_mask, sigma_threshold=5, smooth_sigma=2):
     """
@@ -381,8 +322,9 @@ def get_new_segment(data, fiber_xpix, fiber_ypix, tot_noise_rms,  npixels_min, t
         z_mu_rough = mean_surface_brightness( z_mag_temp,  aper_temp_area )
         
     else:
-        r_mur_rough = 0
-        z_mur_rough = 0
+        g_mu_rough = 0
+        r_mu_rough = 0
+        z_mu_rough = 0
 
     return largest_blob, cog_num_seg_smooth, cog_num_seg, segment_map_smooth_new, [g_mu_rough, r_mu_rough, z_mu_rough]
 
@@ -455,6 +397,9 @@ def get_tractor_only_mag(parent_galaxy_mask, save_path, width, tgid):
         #load it!
         model_i = np.load(tractor_model_path)
         total_model += model_i
+
+    #let us save this total model!
+    np.save(f"{save_path}/parent_galaxy_tractor_only_w_isolate_mask.npy",total_model)
     ##save the final parent galaxy tractor only model
     rgb_data = sdss_rgb(total_model, ["g","r","z"])
     fig, ax = plt.subplots(1, 1, figsize=(8, 8))
@@ -474,7 +419,7 @@ def get_tractor_only_mag(parent_galaxy_mask, save_path, width, tgid):
     tot_r_mag = flux_to_mag(np.sum(r_flux_corr))
     tot_z_mag = flux_to_mag(np.sum(z_flux_corr))
 
-    return [tot_g_mag, tot_r_mag, tot_z_mag], parent_source_catalog_f
+    return [tot_g_mag, tot_r_mag, tot_z_mag], parent_source_catalog_f, rgb_data
 
 
 
@@ -589,7 +534,7 @@ def cog_fitting_subfunction(same_input_dict,reconstruct_galaxy_dict, parent_gala
     ##if the optimal fits were not found, 
     
     box_size = np.shape(data_arr)[1] 
-
+    
     ##plot the rgb image of actual data 
     ax_id = 5
     ax[ax_id].set_title("IMG",fontsize=12)
@@ -881,6 +826,7 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_d
     reconstruct_data = np.copy(data_arr_no_bkg_no_blend)
     reconstruct_data[:,aperture_mask] = 0
     np.save(save_path + "/final_reconstruct_galaxy_no_cog_mask.npy", reconstruct_data)
+    
    
     ##get the current best estimate of the aperture blob
     largest_blob, cog_num_seg_smooth, cog_num_seg, segment_map_smooth_new, mu_rough = get_new_segment(reconstruct_data, fiber_xpix, fiber_ypix, tot_noise_rms,  npixels_min, threshold_rms_scale, aperture_mask)
@@ -890,6 +836,8 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_d
     ##estimate the surface brightness of this segment_map_smooth_new aperture galaxy! With a simple cut in surface brightness, only galaxies below that will get this 
     #additional optimal deblending cut!
 
+    rgb_img = sdss_rgb([data_arr[0],data_arr[1],data_arr[2]])
+    
     if source_zred < 0.01:
         #we do not apply any isolate galaxy mask
         #and just continue as usual with our COG approach
@@ -899,14 +847,13 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_d
         jaccard_img_path = None
         num_deblend_segs_main_blob = 1
         nearest_deblend_dist_pix = 0
+        r_mu_smooth_isolate = 0
 
     else:
-        rgb_img = sdss_rgb([data_arr[0],data_arr[1],data_arr[2]])
         rgb_img_mask =  sdss_rgb([reconstruct_data[0], reconstruct_data [1], reconstruct_data [2]])
 
-        
         #we construct the smooth galaxy mask using the r-band image of the latest reconstruction so far!
-        segm_smooth_deblend_opt, num_deblend_segs_main_blob, parent_galaxy_mask, non_parent_galaxy_mask, nearest_deblend_dist_pix, jaccard_img_path = get_isolate_galaxy_mask(img_rgb = rgb_img, img_rgb_mask = rgb_img_mask, r_band_data=reconstruct_data[1], r_rms=noise_rms_perband[1], fiber_xpix=fiber_xpix, fiber_ypix=fiber_ypix, file_path=save_path, tgid=tgid, aperture_mask = aperture_mask, pcnn_val = pcnn_val, radec=source_radec, mu_rough = mu_rough, segment_map_v2 = segment_map_v2, source_zred = source_zred)
+        segm_smooth_deblend_opt, num_deblend_segs_main_blob, parent_galaxy_mask, non_parent_galaxy_mask, nearest_deblend_dist_pix, jaccard_img_path, r_mu_smooth_isolate = get_isolate_galaxy_mask(img_rgb = rgb_img, img_rgb_mask = rgb_img_mask, r_band_data=reconstruct_data[1], r_rms=noise_rms_perband[1], fiber_xpix=fiber_xpix, fiber_ypix=fiber_ypix, file_path=save_path, tgid=tgid, aperture_mask = aperture_mask, pcnn_val = pcnn_val, radec=source_radec, mu_rough = mu_rough, segment_map_v2 = segment_map_v2, source_zred = source_zred)
 
         if segm_smooth_deblend_opt is not None:
             #a smooth segment was found!
@@ -945,6 +892,7 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_d
 
     #we make two copies of image, one with the smooth blob mask applied and one with it!
     reconstruct_data_no_smooth_mask = np.copy(reconstruct_data)
+    reconstruct_data_no_smooth_mask[:, final_cog_mask_no_isolate_mask] = 0
     reconstruct_data_no_smooth_mask_dict = { "g": reconstruct_data_no_smooth_mask[0], "r": reconstruct_data_no_smooth_mask[1], "z": reconstruct_data_no_smooth_mask[2] }
 
     reconstruct_data[:,final_cog_mask] = 0
@@ -952,18 +900,18 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_d
     reconstruct_data_dict = { "g": reconstruct_data[0], "r": reconstruct_data[1], "z": reconstruct_data[2] }
 
     #save this all!!
-    rgb_512 = process_img(reconstruct_data, cutout_size = 512, org_size = np.shape(data_arr)[1] )
+    rgb_350 = process_img(reconstruct_data, cutout_size = 350, org_size = np.shape(data_arr)[1] )
     rgb_128 = process_img(reconstruct_data, cutout_size = 128, org_size = np.shape(data_arr)[1] )
 
     ##save some diagnostic images!
     ax_256 = make_subplots(ncol=1,nrow = 1)
-    ax_256[0].set_title("Reconstructed Image 512x512",fontsize = 12)
-    ax_256[0].imshow(rgb_512, origin='lower')
-    ax_256[0].set_xlim([0,512])
-    ax_256[0].set_ylim([0,512])
+    ax_256[0].set_title("Reconstructed Image 350x350",fontsize = 12)
+    ax_256[0].imshow(rgb_350, origin='lower')
+    ax_256[0].set_xlim([0,350])
+    ax_256[0].set_ylim([0,350])
     ax_256[0].set_xticks([])
     ax_256[0].set_yticks([])
-    plt.savefig(save_path + "/reconstruct_image_512.png",bbox_inches="tight")
+    plt.savefig(save_path + "/reconstruct_image_350.png",bbox_inches="tight")
     plt.close()
 
     ax_128 = make_subplots(ncol=1,nrow = 1)
@@ -977,7 +925,6 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_d
     plt.close()
         
     np.save(save_path + "/final_mask_cog.npy", final_cog_mask  )
-
 
     #example template empty dictionary used in case outputs are nans
     EMPTY_COG_DICT = {
@@ -1012,14 +959,14 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_d
         print("--"*6)
 
         FINAL_COG_DICT = {}
-
+    
         ##adding the cog_isolate params
-        for ki in EMPTY_COG_DICT.keys():
-            FINAL_COG_DICT[ki] = EMPTY_COG_DICT[ki]
+        for ki,val in EMPTY_COG_DICT.items():
+            FINAL_COG_DICT[ki] = copy.deepcopy(val)
 
         #adding the cog no isoalte params
-        for ki in EMPTY_COG_DICT.keys():
-            FINAL_COG_DICT[ki + "_no_isolate_mask"] = EMPTY_COG_DICT[ki]
+        for ki,val in EMPTY_COG_DICT.keys():
+            FINAL_COG_DICT[ki + "_no_isolate_mask"] = copy.deepcopy(val)
 
         #adding the other params
         FINAL_COG_DICT["jaccard_path"] = None
@@ -1028,12 +975,14 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_d
         FINAL_COG_DICT["tractor_parent_mask_mags"] = [np.nan, np.nan, np.nan]
         FINAL_COG_DICT["revert_to_org_tractor"] = True
         FINAL_COG_DICT["aper_r2_mus_no_isolate_mask"] = mu_rough
-        
-        return FINAL_COG_DICT
-    
+        FINAL_COG_DICT["aper_r2_mu_r_smooth"] = r_mu_smooth_isolate
+
+        trac_only_w_isolate_rgb = np.ones_like(data_arr)
+
     else:       
+
         ##save the tractor only mags!!
-        tractor_only_mags, parent_source_catalog = get_tractor_only_mag(parent_galaxy_mask, save_path, np.shape(data_arr)[1], tgid )
+        tractor_only_mags, parent_source_catalog, trac_only_w_isolate_rgb = get_tractor_only_mag(parent_galaxy_mask, save_path, np.shape(data_arr)[1], tgid )
         
         parent_galaxy_mask = parent_galaxy_mask.astype(int)
         
@@ -1044,7 +993,7 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_d
         #Note, only the last 3 functions and img_flag will be changing. everything else will be kept the same.
 
         same_input_dict = {
-            "data_arr": data_arr,
+            "data_arr": np.copy(data_arr),
             "tgid": tgid,
             "save_path": save_path,
             "parent_source_catalog": parent_source_catalog,
@@ -1057,6 +1006,9 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_d
             "fiber_xpix": fiber_xpix,
             "fiber_ypix": fiber_ypix
         }
+
+        #making a deep copy of this dict as it will be modified inside one of these functions
+        same_input_dict_copy = copy.deepcopy(same_input_dict)
         
         cog_isolate_dict = cog_fitting_subfunction(same_input_dict, reconstruct_data_dict, parent_galaxy_mask, final_cog_mask, img_flag = "")
         
@@ -1064,12 +1016,13 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_d
         #if source_zred < 0.01, we are not doing the separate deblending anyways, and so need to run it all over again!
         
         if largest_blob is not None and source_zred > 0.01:
-            cog_NO_isolate_dict = cog_fitting_subfunction(same_input_dict,reconstruct_data_no_smooth_mask_dict, largest_blob, final_cog_mask_no_isolate_mask,  img_flag = "_no_isolate")
+            cog_NO_isolate_dict = cog_fitting_subfunction(same_input_dict_copy,reconstruct_data_no_smooth_mask_dict, largest_blob, final_cog_mask_no_isolate_mask,  img_flag = "_no_isolate")
         else:
             cog_NO_isolate_dict = {}
             #we want to return nans
-            for ki in EMPTY_COG_DICT.keys():
-                cog_NO_isolate_dict[ki] = EMPTY_COG_DICT[ki]
+            
+            for ki,val in EMPTY_COG_DICT.keys():
+                cog_NO_isolate_dict[ki] = copy.deepcopy(val)
             
         #initializing the final dictionary to be returned
         ##vv the keys in the above dicts returning by the cog_fitting_subfunction command
@@ -1103,10 +1056,50 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_d
         FINAL_COG_DICT["tractor_parent_mask_mags"] = tractor_only_mags
         FINAL_COG_DICT["revert_to_org_tractor"] = False
         FINAL_COG_DICT["aper_r2_mus_no_isolate_mask"] = mu_rough
-        
-        return FINAL_COG_DICT
+        FINAL_COG_DICT["aper_r2_mu_r_smooth"] = r_mu_smooth_isolate
 
-        
+
+    ###MAKE A MULTI PANEL PLOT SAVING THE DIFFERENT RECONSTRUCTIONS IN ONE PLACE!
+    ## -> IMG, cog with isolate, cog without mask, tractor only parent, and then simple reconstruct
+
+    fig,ax = make_subplots(ncol = 5, nrow = 1, return_fig=True, col_spacing = 0.1)
+    
+    ax[0].set_title(f"{tgid}",fontsize = 12)
+    ax[0].imshow(rgb_img, origin="lower")
+    
+    ax[1].set_title(r"COG w/isolate",fontsize = 10)
+    #let us save this reconstructed galaxy!!
+    try:
+        data_cog_wiso = np.load(save_path + f"/final_reconstruct_galaxy_subfunction.npy")
+        rgb_cog_wiso = sdss_rgb( data_cog_wiso)
+    except:
+        rgb_cog_wiso = np.ones_like(data_arr)
+    ax[1].imshow(rgb_cog_wiso,origin="lower")
+            
+    ax[2].set_title(r"COG wo/isolate",fontsize = 10)
+    try:
+        data_cog_wo_iso = np.load(save_path + f"/final_reconstruct_galaxy_subfunction_no_isolate.npy")
+        rgb_cog_wo_iso = sdss_rgb( data_cog_wo_iso)
+    except:
+        rgb_cog_wo_iso = np.ones_like(data_arr)
+    ax[1].imshow(rgb_cog_wo_iso,origin="lower")  
+    
+    ax[3].set_title(r"Trac-only w/isolate",fontsize = 10)
+    ax[3].imshow(trac_only_w_isolate_rgb, origin="lower")
+    
+    ax[4].set_title(r"Simple Photo",fontsize = 10)
+    simple_photo_rgb = np.load(save_path + "/simplest_photo_rgb_mask_image.npy")
+    ax[4].imshow(simple_photo_rgb, origin="lower")
+    
+    for axi in ax:
+        axi.set_xticks([])
+        axi.set_yticks([])
+     
+    plt.savefig(save_path + "/different_parent_reconstruct_panel.png",bbox_inches="tight")
+    plt.close(fig)
+    
+    return FINAL_COG_DICT
+
 
 def run_cog_pipe(input_dict):
     '''
