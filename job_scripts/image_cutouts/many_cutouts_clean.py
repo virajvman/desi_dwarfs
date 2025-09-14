@@ -116,16 +116,16 @@ def plan(comm=None,outdir_data='.', mp=1):
     ## let us read the file to get ra, dec info     
     clean_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4.fits")
     #subselect:
-
     print(f"Total number = {len(clean_cat)}")
-
     ## we select the first 10k clean objects in each sample
-    clean_lowz = clean_cat[clean_cat["SAMPLE"] == "LOWZ"][:10000]
-    clean_elg = clean_cat[clean_cat["SAMPLE"] == "ELG"][:10000]
-    clean_bgsb = clean_cat[clean_cat["SAMPLE"] == "BGS_BRIGHT"][:10000]
-    clean_bgsf = clean_cat[clean_cat["SAMPLE"] == "BGS_FAINT"][:10000]
-
-    out = vstack([clean_bgsb, clean_bgsf, clean_lowz, clean_elg]) 
+    # clean_lowz = clean_cat[clean_cat["SAMPLE"] == "LOWZ"][:10000]
+    # clean_elg = clean_cat[clean_cat["SAMPLE"] == "ELG"][:10000]
+    # clean_bgsb = clean_cat[clean_cat["SAMPLE"] == "BGS_BRIGHT"][:10000]
+    # clean_bgsf = clean_cat[clean_cat["SAMPLE"] == "BGS_FAINT"][:10000]
+    # out = vstack([clean_bgsb, clean_bgsf, clean_lowz, clean_elg]) 
+    
+    out = clean_cat
+    
 
     print("TOTAL NUMBER = ", len(out))
     
@@ -135,12 +135,36 @@ def plan(comm=None,outdir_data='.', mp=1):
     alldec = np.array(out["DEC"],dtype = object)
     allobjids = np.array(out["TARGETID"],dtype = object)
     allsizes = np.array(out["IMAGE_SIZE_PIX"],dtype = object)
-    
+     ##need to check what fraction of these files exist!!
     file_names = []
-    for k in range(len(allobjids)):
-        file_i = outdir_data + f"/image_tgid_{allobjids[k]:d}_ra_{allra[k]:.3f}_dec_{alldec[k]:3f}.fits"         
-        file_names.append(file_i)
+    need_inds = []
+    n = len(out)
 
+    
+    print("Checking what images already exist!!")
+    for k in range(len(allobjids)):
+        file_i = outdir_data + f"/image_tgid_{allobjids[k]:d}_ra_{allra[k]:.3f}_dec_{alldec[k]:.3f}.fits"  
+        if os.path.exists(file_i):
+            pass
+        else:
+            file_names.append(file_i)
+            need_inds.append(k)
+
+        # log every 100 iterations
+        if (k + 1) % 1000 == 0 or (k + 1) == n:
+            print(f"Processed {k+1}/{n} ({(k+1)/n:.1%})")
+
+    need_inds = np.array(need_inds)
+
+    print(f"Need to download {len(need_inds)}/{len(allra)} images!")
+
+    
+    allra = allra[need_inds]
+    alldec = alldec[need_inds]
+    allobjids = allobjids[need_inds]
+    allsizes = allsizes[need_inds]
+
+    
     ## we need to get the information now 
     jpegfiles = np.array(file_names, dtype = object)
     

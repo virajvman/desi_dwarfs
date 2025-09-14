@@ -48,7 +48,7 @@ from photutils.background import StdBackgroundRMS, MADStdBackgroundRMS
 from astropy.stats import SigmaClip
 from scipy.stats import skew, kurtosis
 from alternative_photometry_methods import get_simplest_photometry
-from desi_lowz_funcs import get_elliptical_aperture
+from desi_lowz_funcs import get_elliptical_aperture, measure_elliptical_aperture_area_fraction_masked
 
 rootdir = '/global/u1/v/virajvm/'
 sys.path.append(os.path.join(rootdir, 'DESI2_LOWZ'))
@@ -61,23 +61,46 @@ def mask_bad_flux(flux_vals):
     good_flux_vals = np.where(flux_vals > 0, flux_vals, np.nan)
     return good_flux_vals
 
-def substitute_bad_mag(source_cat_f):
-    '''
-    Function that puts in very faint magnitudes in place of 0 flux for sources so they are propagated through the catalog!!
-    '''
 
+def flux_to_mag(flux, zeropoint=22.5):
+    # Protect against zero/negative flux
+    if flux > 0:
+        return zeropoint - 2.5*np.log10(flux)
+    else:
+        return np.nan  # or some sentinel value
+
+
+def substitute_bad_mag(source_cat_f):
+    """
+    Replace bad mags/errors with safe values for GMM input.
+
+    What happens if very bright sources have inf mags?
+    """
     for BAND in ("g", "r", "z"):
-        source_cat_f[f"mag_{BAND}"] = np.array(np.nan_to_num(source_cat_f[f"mag_{BAND}"], nan=25))
-        source_cat_f[f"mag_{BAND}_err"] = np.array(np.nan_to_num(source_cat_f[f"mag_{BAND}_err"], nan=0))
-        
-    ##compute some color information and errors on source of interest
+        # Replace NaN/Inf mags with faint limit
+        source_cat_f[f"mag_{BAND}"] = np.nan_to_num(
+            source_cat_f[f"mag_{BAND}"], nan=25, posinf=25, neginf=25
+        )
+
+        # Replace NaN/Inf errors with large value, not zero
+        source_cat_f[f"mag_{BAND}_err"] = np.nan_to_num(
+            source_cat_f[f"mag_{BAND}_err"], nan=0, posinf=0, neginf=0
+        )
+
+    # Compute colors
     source_cat_f["g-r"] = source_cat_f["mag_g"] - source_cat_f["mag_r"]
     source_cat_f["r-z"] = source_cat_f["mag_r"] - source_cat_f["mag_z"]
-    
-    source_cat_f["g-r_err"] = np.sqrt(  source_cat_f["mag_g_err"]**2 + source_cat_f["mag_r_err"]**2)
-    source_cat_f["r-z_err"] = np.sqrt(  source_cat_f["mag_r_err"]**2 + source_cat_f["mag_z_err"]**2)
+
+    # Errors: avoid zeros
+    source_cat_f["g-r_err"] = np.sqrt(source_cat_f["mag_g_err"]**2 + source_cat_f["mag_r_err"]**2)
+    source_cat_f["r-z_err"] = np.sqrt(source_cat_f["mag_r_err"]**2 + source_cat_f["mag_z_err"]**2)
+
+    # Clip extreme values to a plausible range
+    source_cat_f["g-r"] = np.clip(source_cat_f["g-r"], -3, 3)
+    source_cat_f["r-z"] = np.clip(source_cat_f["r-z"], -3, 3)
 
     return source_cat_f
+
 
     
 def mask_radius_for_mag(mag):
@@ -142,43 +165,8 @@ def make_new_saturated_mask(invvar_data):
     return ~final_mask_pd
     
 
-
-def measure_elliptical_aperture_area_fraction_masked(image_shape, good_pixel_mask, ell_aper_obj):
-    '''
-    Computes the fraction of the elliptical aperture area that is masked (i.e., falls on bad, saturated pixels etc.).
-    
-    Parameters
-    ----------
-    image_shape : tuple
-        Shape of the image (ny, nx).
-    good_pixel_mask : 2D boolean array
-        True where pixels are good, False where they are bad (e.g., stars, bright sources).
-    ell_aper_obj : photutils.aperture.EllipticalAperture
-        The elliptical aperture object.
-
-    Returns
-    -------
-    area_masked : float
-        Fraction of the aperture area that is masked.
-    '''
-    bad_pixel_mask = ~good_pixel_mask  # True where pixels are bad
-
-    # Create aperture mask
-    mask = ell_aper_obj.to_mask(method='exact')  # Pixel values range from 0 to 1 (fractional overlap)
-    aperture_mask = mask.to_image(image_shape)   # Same shape as image
-
-    # Compute total effective area of aperture (in pixel units)
-    area_in_image = np.nansum(aperture_mask)  # Sum of fractional contributions
-
-    # Compute how much of the aperture overlaps with bad pixels
-    area_in_aper_masked = np.nansum(aperture_mask[bad_pixel_mask])
-
-    # Compute fraction masked
-    if area_in_image == 0:
-        return np.nan
-    else:
-        area_masked = area_in_aper_masked / area_in_image
-        return area_masked
+def fmt_mag(mag):
+    return "NaN" if not np.isfinite(mag) else f"{mag:.2f}"
 
 
 
@@ -190,7 +178,6 @@ def run_aperture_pipe(input_dict):
     '''
 
     save_path = input_dict["save_path"]
-    img_path  = input_dict["img_path"]
     source_tgid  = input_dict["tgid"]
     source_ra  = input_dict["ra"] 
     source_dec  = input_dict["dec"]
@@ -205,7 +192,8 @@ def run_aperture_pipe(input_dict):
     npixels_min = input_dict["npixels_min"]
     threshold_rms_scale = input_dict["threshold_rms_scale"]
     image_size = input_dict["image_size"]
-        
+    run_simple_photo = input_dict["run_simple_photo"]
+    
     verbose=False
 
     if verbose:
@@ -256,11 +244,16 @@ def run_aperture_pipe(input_dict):
     # source_seps = ref_coord.separation(sources_coords).arcsec
 
     ##procedure for selecting a star
-    signi_pm = ( np.abs(source_cat_f["pmra"]) * np.sqrt(source_cat_f["pmra_ivar"]) > 3) | ( np.abs(source_cat_f["pmdec"]) * np.sqrt(source_cat_f["pmdec_ivar"]) > 3)
-    
-    is_star = (source_cat_f["ref_cat"] == "G2")  &  ( 
-        (source_cat_f['type'] == "PSF")  | signi_pm 
-    ) 
+    signi_pm = ( np.abs(source_cat_f["pmra"]) * np.sqrt(source_cat_f["pmra_ivar"]) > 2) | ( np.abs(source_cat_f["pmdec"]) * np.sqrt(source_cat_f["pmdec_ivar"]) > 2)
+    star_model = ((source_cat_f['type'] == "PSF") | (source_cat_f['type'] == "DUP") )
+
+    ##some stuff choices here. There are some birght HII regions that are also in Gaia and tractor often models them as PSF. So to be lax on star definition. I think I will relax the PMRA cuts
+    # is_star = (source_cat_f["ref_cat"] == "G2")  &  ( 
+    #     (source_cat_f['type'] == "PSF")  | signi_pm 
+    # )     
+    is_star = (source_cat_f["ref_cat"] == "G2")  &  star_model  & signi_pm  
+
+    #could also include the DUPLICATE TYPE?
 
     #what is the distance to the closest star from us?
     all_stars = source_cat_f[is_star]
@@ -307,23 +300,23 @@ def run_aperture_pipe(input_dict):
 
     if overwrite == False:
         try:
-            new_mags = np.load(save_path + "/aper_r35_mags.npy")
+            new_mags = np.load(save_path + "/aper_r3_mags.npy")
 
             raise ValueError("The correct outputs will not be outputted if overwrite is False!")
 
             output_dict = {
                     "closest_star_dist": closest_star_dist,
                     "closest_star_mag": closest_star_mag,
-                    "aper_r35_mags": 3*[np.nan],
+                    "aper_r3_mags": 3*[np.nan],
                     "save_path": save_path,
                     "save_summary_png": None,
-                    "img_path": None,
                     "closest_star_norm_dist": closest_star_norm_dist,
                     "lie_on_segment_island": False,
                     "aper_frac_mask_badpix": np.nan, 
                     "img_frac_mask_badpix":  np.nan,
                     "simple_photo_mags": 3*[np.nan], 
-                    "simple_photo_island_dist_pix": np.nan
+                    "simple_photo_island_dist_pix": np.nan,
+                    "simplest_photo_aper_frac_in_image" : np.nan
                 }
 
             return output_dict
@@ -447,16 +440,18 @@ def run_aperture_pipe(input_dict):
             segment_map_v2, island_num, fiber_xpix, fiber_ypix, min_dist_pix = find_nearest_island(segment_map_v2, fiber_xpix, fiber_ypix)
 
             if island_num is None:
+
+                np.save(save_path + "/main_segment_map.npy", np.zeros_like(tot_data) )
+                
                 print_stage(f"Following source being skipped for aperture photo: TGID:{source_tgid}")
                 #we will just be returning to the original tractor mag from DR9 and no aperture and COG for this!
                 output_dict = {
                         "closest_star_dist": closest_star_dist,
                         "closest_star_mag": closest_star_mag,
-                        "aper_r35_mags": 3*[np.nan],
+                        "aper_r3_mags": 3*[np.nan],
                         "tractor_dr9_mags": 3*[np.nan],
                         "save_path": save_path,
                         "save_summary_png": None,
-                        "img_path": None,
                         "closest_star_norm_dist": closest_star_norm_dist,
                         "lie_on_segment_island": lie_on_segment_island,
                         "first_min_dist_island_pix" : min_dist_pix,
@@ -464,6 +459,7 @@ def run_aperture_pipe(input_dict):
                         "img_frac_mask_badpix":  np.nan,
                         "simple_photo_mags": 3*[np.nan], 
                         "simple_photo_island_dist_pix": np.nan,
+                        "simplest_photo_aper_frac_in_image" : np.nan
                     }
  
                 return output_dict
@@ -541,10 +537,10 @@ def run_aperture_pipe(input_dict):
         #rest all remains 0
 
         #constructing the fiducial aperture for doing photometry
-        aperture_for_phot, _, _,_ = get_elliptical_aperture( segment_map_v2, sigma = 3.5, aperture_mask = star_mask, id_num = 2  )
+        aperture_for_phot, _, _,_ = get_elliptical_aperture( segment_map_v2, sigma = 3, aperture_mask = star_mask, id_num = 2  )
         aperture_for_phot_noscale, _, _,_ = get_elliptical_aperture( segment_map_v2, sigma = 1, aperture_mask = star_mask, id_num = 2  )
 
-        #given the saturated pixel mask and above aperture, what fraction of the pixels in the image are masked by this, and what fraction of pixels within the original R35 aperture are masked by this?
+        #given the saturated pixel mask and above aperture, what fraction of the pixels in the image are masked by this, and what fraction of pixels within the original R3 aperture are masked by this?
         aper_frac_mask_badpix = measure_elliptical_aperture_area_fraction_masked(data_arr[0].shape, good_pixel_mask, aperture_for_phot)
 
         img_frac_mask_badpix = np.sum(~good_pixel_mask)/np.sum( np.ones_like(good_pixel_mask) )
@@ -881,12 +877,10 @@ def run_aperture_pipe(input_dict):
             aperture_mask_no_bkg[star_mask] = 0            
 
 
-
-
-        if os.path.exists(save_path + "/tractor_source_model.npy"):
-            tractor_model = np.load(save_path + "/tractor_source_model.npy")
-        else:
-            tractor_model = np.zeros_like(data_arr)
+        # if os.path.exists(save_path + "/tractor_source_model.npy"):
+        #     tractor_model = np.load(save_path + "/tractor_source_model.npy")
+        # else:
+        tractor_model = np.zeros_like(data_arr)
         
         #we will mask all the nans in the data
         aperture_mask[ np.isnan(tot_data) ] = 0
@@ -914,9 +908,9 @@ def run_aperture_pipe(input_dict):
         phot_table_r = aperture_photometry(data["r"] , aperture_for_phot, mask = ~aperture_mask.astype(bool))
         phot_table_z = aperture_photometry(data["z"] , aperture_for_phot, mask = ~aperture_mask.astype(bool))
 
-        fidu_aper_mag_g = 22.5 - 2.5*np.log10( phot_table_g["aperture_sum"].data[0] - tot_subtract_sources_g )
-        fidu_aper_mag_r = 22.5 - 2.5*np.log10( phot_table_r["aperture_sum"].data[0] - tot_subtract_sources_r )
-        fidu_aper_mag_z = 22.5 - 2.5*np.log10( phot_table_z["aperture_sum"].data[0] - tot_subtract_sources_z )
+        fidu_aper_mag_g = flux_to_mag( phot_table_g["aperture_sum"].data[0] - tot_subtract_sources_g )
+        fidu_aper_mag_r = flux_to_mag( phot_table_r["aperture_sum"].data[0] - tot_subtract_sources_r )
+        fidu_aper_mag_z = flux_to_mag( phot_table_z["aperture_sum"].data[0] - tot_subtract_sources_z )
 
         #these mags are extinction corrected!
         org_mags = [source_mag_g_mwc,source_mag_r_mwc,source_mag_z_mwc] 
@@ -976,7 +970,12 @@ def run_aperture_pipe(input_dict):
         #^the above catalog contains sources that satisfy the color cuts! The simple photo sources are saved as part of the below function
         
         #we run the simplest photometry here!!
-        simplest_photo_mags, simplest_photo_island_dist_pix, simplest_photo_aper_frac_in_image  = get_simplest_photometry(data_arr,  noise_dict["r"], fiber_xpix, fiber_ypix, source_cat_f[~is_star], save_path,source_zred=None)
+        if run_simple_photo:
+            simplest_photo_mags, simplest_photo_island_dist_pix, simplest_photo_aper_frac_in_image  = get_simplest_photometry(data_arr,  noise_dict["r"], fiber_xpix, fiber_ypix, source_cat_f[~is_star], save_path,source_zred=None)
+        else:
+            simplest_photo_mags = 3*[np.nan]
+            simplest_photo_island_dist_pix = 0
+            simplest_photo_aper_frac_in_image = 0
 
         ##########################################
         ### PLOTTING CODE
@@ -986,8 +985,10 @@ def run_aperture_pipe(input_dict):
         ax_id = 5
         ax[ax_id].set_title("grz image w/aperture",fontsize = 13)
         ax[ax_id].imshow(rgb_stuff,origin="lower",zorder = 0)
-        #th box size is image_sizeximage_size, with fiducial being 350x350 pixels
-        ax[ax_id].text(image_size * (65/350),image_size * (325/350), "(%.3f,%.3f, z=%.3f)"%(source_ra,source_dec, source_redshift) ,color = "yellow",fontsize = 10)
+        #th box size is image_sizeximage_size
+        ax[ax_id].text(0.5 , 0.95 , "(%.3f,%.3f, z=%.3f)"%(source_ra,source_dec, source_redshift) ,color = "yellow",fontsize = 10,
+                      ha="center", va= "center",transform = ax[ax_id].transAxes )
+        
 
         #get pixel co-ordinates of the source galaxy
         circle = patches.Circle( (fiber_xpix_org, fiber_ypix_org),3, color='orange', fill=False, linewidth=1,ls ="-")
@@ -1225,15 +1226,18 @@ def run_aperture_pipe(input_dict):
         start = 0.97
         fsize = 11
         ax[ax_id].text(0.05,start,"Tractor-mag g = %.2f"%source_mag_g,size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-        ax[ax_id].text(0.05,start - spacing*1,"Aper-mag-R35 g = %.2f"%fidu_aper_mag_g,size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+
+        
+        ax[ax_id].text(0.05,start - spacing*1,f"Aper-mag-R3 g = {fmt_mag(fidu_aper_mag_g)}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        
         ax[ax_id].text(0.05,start - spacing*2,"fracflux_g = %.2f"%(source_cat_obs["fracflux_g"]),size = 12,transform=ax[ax_id].transAxes, verticalalignment='top')
         
         ax[ax_id].text(0.05,start - spacing*3,"Tractor-mag r = %.2f"%source_mag_r,size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-        ax[ax_id].text(0.05,start - spacing*4,"Aper-mag-R35 r = %.2f"%fidu_aper_mag_r,size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*4,f"Aper-mag-R3 r = {fmt_mag(fidu_aper_mag_r)}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
         ax[ax_id].text(0.05,start - spacing*5,"fracflux_r= %.2f"%(source_cat_obs["fracflux_r"]),size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
 
         ax[ax_id].text(0.05,start - spacing*6,"Tractor-mag z = %.2f"%source_mag_z,size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-        ax[ax_id].text(0.05,start - spacing*7,"Aper-mag-R35 z = %.2f"%fidu_aper_mag_z,size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*7,f"Aper-mag-R3 z = {fmt_mag(fidu_aper_mag_z)}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
         ax[ax_id].text(0.05,start - spacing*8,"fracflux_z = %.2f"%(source_cat_obs["fracflux_z"]),size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
 
         ax[ax_id].text(0.05,start - spacing*9,"Closest Star fdist = %.2f"%(closest_star_norm_dist),size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
@@ -1251,17 +1255,16 @@ def run_aperture_pipe(input_dict):
         fidu_aper_mags = [fidu_aper_mag_g, fidu_aper_mag_r, fidu_aper_mag_z]
         
         ##save these as a file for future reference
-        np.save(save_path + "/aper_r35_mags.npy", fidu_aper_mags)        
+        np.save(save_path + "/aper_r3_mags.npy", fidu_aper_mags)        
         np.save(save_path + "/org_mags.npy", org_mags)
 
 
         return {
                 "closest_star_dist": closest_star_dist,
                 "closest_star_mag": closest_star_mag,
-                "aper_r35_mags": fidu_aper_mags,
+                "aper_r3_mags": fidu_aper_mags,
                 "save_path": save_path,
                 "save_summary_png": save_summary_png,
-                "img_path": img_path,
                 "tractor_dr9_mags": org_mags,
                 "closest_star_norm_dist": closest_star_norm_dist,
                 "lie_on_segment_island": lie_on_segment_island,

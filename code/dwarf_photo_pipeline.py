@@ -36,6 +36,40 @@ import random, string
 from datetime import datetime
 from shred_photometry_maskbits import create_shred_maskbits
 import glob
+from shred_classifier import get_pcnn_data_inputs
+
+
+def argument_parser():
+    '''
+    Function that parses the arguments passed while running a script
+    '''
+    result = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    # path to the config file with parameters and information about the run
+    result.add_argument('-sample', dest='sample', type=str, default = "BGS_BRIGHT") 
+    #the sample is like BGS_BRIGHT, BGS_FAINT, etc.
+    result.add_argument('-save_img', dest='save_img', type=str, default = "") 
+    result.add_argument('-min', dest='min', type=int,default = 0)
+    result.add_argument('-max', dest='max', type=int,default = 100000) 
+    result.add_argument('-ncores', dest='ncores', type=int,default = 64) 
+    result.add_argument('-tgids',dest="tgids_list", type=parse_tgids) 
+    result.add_argument('-run_parr', dest='parallel',  action='store_true') 
+    result.add_argument('-use_sample',dest='use_sample', type = str, default = "")
+    result.add_argument('-overwrite',dest='overwrite',action='store_true')
+    result.add_argument('-make_cats',dest='make_cats', action='store_true')
+    result.add_argument('-run_aper',dest='run_aper', action='store_true')
+    result.add_argument('-run_cog',dest='run_cog', action='store_true')
+    result.add_argument('-nchunks',dest='nchunks', type=int,default = 1)
+    result.add_argument('-no_save',dest='no_save', action = "store_true")
+    result.add_argument('-make_main_cats',dest='make_main_cats', action = "store_true")
+    result.add_argument('-end_name',dest='end_name', type = str, default = "")
+    result.add_argument('-no_cnn_cut',dest='no_cnn_cut', action='store_true')
+    result.add_argument('-run_simple_photo',dest='run_simple_photo', action='store_true')
+    result.add_argument('-get_cnn_inputs',dest='get_cnn_inputs', action='store_true')
+    
+    return result
+
+
+
 
 def parse_tgids(value):
     if not value:
@@ -154,35 +188,6 @@ def make_scroll_pdf(all_aper_saveimgs1, save_sample_path, summary_scroll_file_na
 
     
 
-def argument_parser():
-    '''
-    Function that parses the arguments passed while running a script
-    '''
-    result = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    # path to the config file with parameters and information about the run
-    result.add_argument('-sample', dest='sample', type=str, default = "BGS_BRIGHT") 
-    #the sample is like BGS_BRIGHT, BGS_FAINT, etc.
-    result.add_argument('-save_img', dest='save_img', type=str, default = "") 
-    result.add_argument('-min', dest='min', type=int,default = 0)
-    result.add_argument('-max', dest='max', type=int,default = 100000) 
-    result.add_argument('-ncores', dest='ncores', type=int,default = 64) 
-    result.add_argument('-tgids',dest="tgids_list", type=parse_tgids) 
-    result.add_argument('-run_parr', dest='parallel',  action='store_true') 
-    result.add_argument('-use_sample',dest='use_sample', type = str, default = "")
-    result.add_argument('-overwrite',dest='overwrite',action='store_true')
-    result.add_argument('-make_cats',dest='make_cats', action='store_true')
-    result.add_argument('-run_aper',dest='run_aper', action='store_true')
-    result.add_argument('-run_cog',dest='run_cog', action='store_true')
-    result.add_argument('-nchunks',dest='nchunks', type=int,default = 1)
-    result.add_argument('-no_save',dest='no_save', action = "store_true")
-    result.add_argument('-make_main_cats',dest='make_main_cats', action = "store_true")
-    result.add_argument('-end_name',dest='end_name', type = str, default = "")
-    result.add_argument('-no_cnn_cut',dest='no_cnn_cut', action='store_true')
-    
-    return result
-
-
-
 
 def get_relevant_files_aper(input_dict):
     '''
@@ -221,18 +226,23 @@ def get_relevant_files_aper(input_dict):
     #inside this folder, we will save all the relevant files and info!!
     image_path =  top_folder + f"_cutouts/image_tgid_{tgid_k}_ra_{ra_k:.3f}_dec_{dec_k:.3f}.fits"
 
-    get_nearby_source_catalog(ra_k, dec_k, objid_k, brickid_k, box_size, wcat, brick_i, top_path_k, source_cat, source_pzs_i)
-    
-    ## check if the source is at the edge of the brick, if so we will need to combine stuff
-    more_bricks, more_wcats, more_sweeps = are_more_bricks_needed(ra_k,dec_k,radius_arcsec = int(box_size*0.262/2)  )
 
-    if len(more_bricks) == 0:
-        #there are no neighboring bricks needed
+    ##for now, we will only do this for objects that do not already have a source catalog file!!
+    if os.path.exists(top_path_k + "/source_cat_f.fits"):
         pass
     else:
-        return_sources_wneigh_bricks(top_path_k, ra_k, dec_k, objid_k, brickid_k, box_size, more_bricks, more_wcats, more_sweeps,use_pz = False)
+        print(f"Source catalog did not exist! Making one: {top_path_k}")
+        get_nearby_source_catalog(ra_k, dec_k, objid_k, brickid_k, box_size, wcat, brick_i, top_path_k, source_cat, source_pzs_i)
         
-
+        ## check if the source is at the edge of the brick, if so we will need to combine stuff
+        more_bricks, more_wcats, more_sweeps = are_more_bricks_needed(ra_k,dec_k,radius_arcsec = int(box_size*0.262/2)  )
+    
+        if len(more_bricks) == 0:
+            #there are no neighboring bricks needed
+            pass
+        else:
+            return_sources_wneigh_bricks(top_path_k, ra_k, dec_k, objid_k, brickid_k, box_size, more_bricks, more_wcats, more_sweeps,use_pz = False)
+            
     if os.path.exists(image_path):
         pass
     else:
@@ -262,6 +272,7 @@ def get_relevant_files_aper(input_dict):
     ##done saving all the relevant, useful files!
     return
 
+
 def select_unique_objs(catalog):
     '''
     Function that selects only the unique TARGETIDs from the catalog
@@ -279,44 +290,37 @@ def make_clean_shreds_catalogs():
     Useful information is added to the catalog in the process.
     '''
 
+    ##THESE ARE ALL THE SOURCES THAT ARE NOT IN SGA! 
     bgsb_list = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_bgs_bright_filter_zsucc_zrr02_allfracflux.fits")
     bgsf_list = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_bgs_faint_filter_zsucc_zrr03_allfracflux.fits")
     elg_list = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_elg_filter_zsucc_zrr05_allfracflux.fits")
     lowz_list = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_lowz_filter_zsucc_zrr03.fits")
+
+    #these are sources to be added to the final clean catalog from SGA
+    sga_bad_trac_clean = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_sga_bad_trac_good_dwarfs_CLEAN.fits")
 
     ##select only unique objects
     bgsb_list = select_unique_objs(bgsb_list)
     bgsf_list = select_unique_objs(bgsf_list)
     elg_list = select_unique_objs(elg_list)
     lowz_list = select_unique_objs(lowz_list)
+    sga_bad_trac_clean = select_unique_objs(sga_bad_trac_clean)
+
     
     from desi_lowz_funcs import get_sweep_filename, save_table, is_target_in_south, get_sga_norm_dists, get_sga_norm_dists_FAST
     from construct_dwarf_galaxy_catalogs import bright_star_filter
 
-    #identifying the objects that have the 
-    fracflux_grz = [f"FRACFLUX_{b}" for b in "GRZ"]
-
-    remove_queries = [Query(_n_or_more_lt(fracflux_grz, 2, 0.2)) ]
-    
-    # note that the this is n_or_more_LT!! so be careful about that!
-    #these are masks for objects that did not satisfy the above condition!
-    bgsb_mask = get_remove_flag(bgsb_list, remove_queries) == 0
-    bgsf_mask = get_remove_flag(bgsf_list, remove_queries) == 0
-    elg_mask = get_remove_flag(elg_list, remove_queries) == 0
-    lowz_mask = get_remove_flag(lowz_list, remove_queries) == 0
-
     #invert the above to get the clean mask!
-    clean_mask_bgsb = (~bgsb_mask)
-    clean_mask_bgsf = (~bgsf_mask)
-    clean_mask_elg = (~elg_mask)
-    clean_mask_lowz = (~lowz_mask)
+    clean_mask_bgsb = (bgsb_list["PHOTO_REPROCESS"] == 0)
+    clean_mask_bgsf = (bgsf_list["PHOTO_REPROCESS"] == 0)
+    clean_mask_elg = (elg_list["PHOTO_REPROCESS"] == 0)
+    clean_mask_lowz = (lowz_list["PHOTO_REPROCESS"] == 0)
     
     ##CLEAN CATALOG
-
-    dwarf_mask_bgsb = (bgsb_list["LOGM_SAGA"] < 9.25) 
-    dwarf_mask_bgsf = (bgsf_list["LOGM_SAGA"] < 9.25) 
-    dwarf_mask_lowz = (lowz_list["LOGM_SAGA"] < 9.25) 
-    dwarf_mask_elg = (elg_list["LOGM_SAGA"] < 9.25)   
+    dwarf_mask_bgsb = (bgsb_list["LOGM_SAGA_FIDU"] < 9.25) 
+    dwarf_mask_bgsf = (bgsf_list["LOGM_SAGA_FIDU"] < 9.25) 
+    dwarf_mask_lowz = (lowz_list["LOGM_SAGA_FIDU"] < 9.25) 
+    dwarf_mask_elg = (elg_list["LOGM_SAGA_FIDU"] < 9.25)   
 
     bgsb_clean_dwarfs = bgsb_list[ clean_mask_bgsb  & (dwarf_mask_bgsb) ] 
     bgsf_clean_dwarfs = bgsf_list[ clean_mask_bgsf  & (dwarf_mask_bgsf) ]
@@ -328,8 +332,11 @@ def make_clean_shreds_catalogs():
     bgsf_clean_dwarfs["SAMPLE"] = np.array(len(bgsf_clean_dwarfs)*["BGS_FAINT"])
     elg_clean_dwarfs["SAMPLE"] = np.array(len(elg_clean_dwarfs)*["ELG"])
     lowz_clean_dwarfs["SAMPLE"] = np.array(len(lowz_clean_dwarfs)*["LOWZ"])
+    
+    #the sga_bad_trac_clean catalog already has SAMPLE column!
+    print(f"Number of clean sources being added from SGA matches as they have no SGA photometry = {len(sga_bad_trac_clean)}")
 
-    all_clean_dwarfs = vstack( [ bgsb_clean_dwarfs, bgsf_clean_dwarfs, lowz_clean_dwarfs, elg_clean_dwarfs] )
+    all_clean_dwarfs = vstack( [ bgsb_clean_dwarfs, bgsf_clean_dwarfs, lowz_clean_dwarfs, elg_clean_dwarfs, sga_bad_trac_clean] )
 
     #removing columns that were present in the ELG column from whole catalog
     all_clean_dwarfs.remove_column("OII_FLUX")
@@ -354,11 +361,15 @@ def make_clean_shreds_catalogs():
         # Recompute if missing
         print("Bright star information did not exist and will be computed.")
         all_clean_dwarfs = bright_star_filter(all_clean_dwarfs)
+
+    #adding dummy PCNN for now!
+    all_clean_dwarfs["PCNN_FRAGMENT"] = -99*np.ones(len(all_clean_dwarfs))
+    
     
     # save the clean dwarfs now!
     save_table(all_clean_dwarfs,"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4.fits",comment="This is a compilation of dwarf galaxy candidates in DESI Y1 data from the BGS Bright, BGS Faint, ELG and LOW-Z samples. Only galaxies with LogMstar < 9.25 (w/SAGA based stellar masses) and that have robust photometry are included.")
         
-    ##LIKELY SHREDDED CATALOG!!
+    ##LIKELY SHREDDED CATALOG FROM THE NON SGA sources. The shredded sources in SGA have been compiled separately in construct_dwarf .. py script
 
     bgsb_shreds = bgsb_list[ ~clean_mask_bgsb & dwarf_mask_bgsb]
     bgsf_shreds = bgsf_list[  ~clean_mask_bgsf & dwarf_mask_bgsf]
@@ -393,8 +404,13 @@ def make_clean_shreds_catalogs():
         # Recompute if missing
         print("Bright star information did not exist and will be computed.")
         shreds_all = bright_star_filter(shreds_all)
+
+
+    shreds_all["PCNN_FRAGMENT"] = -99*np.ones(len(shreds_all))
     
     save_table(shreds_all,"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v4.fits")
+
+    print_stage("MAKE SURE TO ADD THE PCNN VALUES TO DO THIS CATALOG! ")
         
     return 
 
@@ -462,7 +478,8 @@ def compute_aperture_masses(
     shreds_table, 
     rband_key="MAG_R_APERTURE_R375", 
     gband_key="MAG_G_APERTURE_R375", 
-    z_key="Z", 
+    z_key="Z_CMB", 
+    dmpc_key = "DIST_MPC_FIDU",
     output_key="LOGM_SAGA_APERTURE_R375"
 ):
     """
@@ -487,57 +504,13 @@ def compute_aperture_masses(
             gr_aper[valid_mask],
             rmag_aper[valid_mask],
             shreds_table[z_key][valid_mask],
+            d_in_mpc = shreds_table[dmpc_key][valid_mask],
+            input_zred = False
         )
         all_mstar_aper[valid_mask] = mstar_aper_nonan
 
     shreds_table[output_key] = all_mstar_aper
     return shreds_table
-
-
-    
-# def compute_aperture_masses(shreds_table, rband_key="MAG_R_APERTURE_R375", gband_key="MAG_G_APERTURE_R375", z_key="Z", output_key="LOGM_SAGA_APERTURE_R375"):
-#     """
-#     Compute new aperture-photometry-based stellar masses using g - r color, r-band magnitude, and redshift.
-
-#     Parameters
-#     ----------
-#     shreds_table : astropy Table, Input table with aperture magnitudes and redshift.
-#     rband_key : str, Column name for r-band aperture magnitude.
-#     gband_key : str, Column name for g-band aperture magnitude.
-#     z_key : str, Column name for redshift.
-#     output_key : str, Name of the output column to store log stellar masses.
-
-#     Returns
-#     -------
-#     shreds_table : astropy Table, Modified in-place (and also returned) with a new column containing log stellar masses.
-#     """
-#     rmag_aper = shreds_table[rband_key].data
-#     gr_aper = shreds_table[gband_key].data - rmag_aper
-
-#     nan_mask = np.isnan(rmag_aper) | np.isnan(shreds_table[gband_key].data)
-
-#     all_mstar_aper = np.full(len(shreds_table), np.nan)
-
-#     if len(shreds_table) == 1:
-#         print("Note, as computing for a single object, not bothering to compute stellar mass in case")
-#     else:
-#         mstar_aper_nonan = get_stellar_mass(gr_aper[~nan_mask], rmag_aper[~nan_mask], shreds_table[z_key][~nan_mask])
-#         all_mstar_aper[~nan_mask] = mstar_aper_nonan
-
-#     shreds_table[output_key] = all_mstar_aper
-#     return shreds_table
-
-
-
-# def consolidate_photometry():
-#     '''
-#     Function that consolidates the different photometry measurements we have into a single best photometry column!
-#     '''
-
-#     # TODO: if PCNN < 0.5, we revert to the tractor photometry! The shredmaskbit should be within the certain star radius but not PCNN > 0.5
-#     # those values should be used with caution and but only if a significant fraction of the star is masked! So maybe not just based on star radius, but whether a significant fraction is masked, because if just teh desi source is masked then its fine!
-
-#     return
 
 def filter_saveimgs_paths(results, flag):
     final_cog_saveimgs = []
@@ -559,7 +532,8 @@ if __name__ == '__main__':
     np.seterr(invalid='ignore')
     warnings.simplefilter('ignore', category=UnitsWarning)
     warnings.simplefilter('ignore', FITSFixedWarning)
-    
+    warnings.filterwarnings("ignore", message="Warning: converting a masked element to nan")
+
     rootdir = '/global/u1/v/virajvm/'
     sys.path.append(os.path.join(rootdir, 'DESI2_LOWZ'))
     from desi_lowz_funcs import print_stage, check_path_existence, get_remove_flag, _n_or_more_lt, is_target_in_south, match_c_to_catalog, calc_normalized_dist, get_sweep_filename, get_random_markers, save_table, make_subplots, _n_or_more_gt, _n_or_more_lt
@@ -576,6 +550,8 @@ if __name__ == '__main__':
     mpl.rcParams['legend.frameon'] = False
     # use a good colormap and don't interpolate the pixels
     mpl.rc('image', cmap='viridis', interpolation='none', origin='lower')
+
+    use_tqdm = sys.stdout.isatty()
 
     # read in command line arguments
     args = argument_parser().parse_args()
@@ -616,12 +592,17 @@ if __name__ == '__main__':
     run_aper = args.run_aper
     #should the cog pipeline be run?
     run_cog = args.run_cog
+    run_simple_photo = args.run_simple_photo
+    get_cnn_inputs = args.get_cnn_inputs
+    
 
     #the fiducial parameters for the image segmentation!
     npixels_min = 10
     threshold_rms_scale = 1.5
     
     c_light = 299792 #km/s
+
+    # TODO: SAVE THE 128X128 OR WHATEVER FITS FINAL RECONSTR IN A FOLDER! WILL DO SSL ON IT!
 
     ##################
     ##PART 1: Make, prep the catalogs!
@@ -636,21 +617,15 @@ if __name__ == '__main__':
 
     ##add the columns on image path and file_path to these catalogs!!
     shreds_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v4.fits"
-    # shreds_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/TEMPORARY_desi_y1_dwarf_shreds_catalog_v3.fits"
-    # clean_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4.fits"
-    clean_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4_RUN_W_APER.fits"
-    sga_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_sga_matched_dwarfs.fits"
+    clean_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4.fits"
+    clean_file_2 = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4_RUN_W_APER.fits"
+    sga_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_SGA_matched_dwarfs_REPROCESS.fits"
 
-    if use_sample == "shred":
-        top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds"
-    if use_sample == "sga":
-        top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_sga"
-    if use_sample == "clean":
-        top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_good"
 
     ##Adding the image path and file path (where all the outputs are saved) columns to the catalog if they do not exist
     shreds_cat = Table.read(shreds_file)
     clean_cat = Table.read(clean_file)
+    clean_cat_2 = Table.read(clean_file_2)
     sga_cat = Table.read(sga_file)
 
     ##we need to be careful here in how we are defining the top folder!! 
@@ -660,24 +635,52 @@ if __name__ == '__main__':
         print("Adding image_path and file_path to shreds catalog!")
         add_paths_to_catalog(org_file = shreds_file, out_file = shreds_file,top_folder="/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds")
 
+    ##
+    
     if "IMAGE_PATH" in clean_cat.colnames and "FILE_PATH" in clean_cat.colnames:
         print("image_path and file_path columns already exist in clean catalog!")
     else:
         print("Adding image_path and file_path to clean catalog!")
         add_paths_to_catalog(org_file = clean_file, out_file = clean_file,top_folder="/pscratch/sd/v/virajvm/redo_photometry_plots/all_good")
 
+    ###
+    
+    if "IMAGE_PATH" in clean_cat_2.colnames and "FILE_PATH" in clean_cat_2.colnames:
+        print("image_path and file_path columns already exist in clean TOTAL catalog!")
+    else:
+        print("Adding image_path and file_path to clean TOTAL catalog!")
+        add_paths_to_catalog(org_file = clean_file_2, out_file = clean_file_2,top_folder="/pscratch/sd/v/virajvm/redo_photometry_plots/all_good")
+
+    ##
+        
     if "IMAGE_PATH" in sga_cat.colnames and "FILE_PATH" in sga_cat.colnames:
         print("image_path and file_path columns already exist in sga catalog!")
     else:
         print("Adding image_path and file_path to sga catalog!")
         add_paths_to_catalog(org_file = sga_file, out_file = sga_file,top_folder="/pscratch/sd/v/virajvm/redo_photometry_plots/all_sga")
-    
+
+
+    ##in the shreds file make sure there is a PCNN column
+    if "PCNN_FRAGMENT" in shreds_cat.colnames:
+        print("PCNN Fragment column already exist!")
+    else:
+        print("PCNN column does not exist in the catalog. ADD ITT!!")
+        # add_pcnn_to_shred_catalog(shreds_file,get_all_data=True)
+
     #delete these variables as no longer needed!
-    del shreds_cat, clean_cat, sga_cat
+    del shreds_cat, clean_cat, sga_cat, clean_cat_2
      
     ##################
     ##PART 2: Generate nested folder structure with relevant files for doing photometry
     ##################
+
+    if use_sample == "shred":
+        top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds"
+    if use_sample == "sga":
+        top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_sga"
+    if use_sample == "clean":
+        top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_good"
+
 
     ##load the relevant catalogs!
     if use_sample == "shred":
@@ -730,6 +733,13 @@ if __name__ == '__main__':
     #apply the max_ind cut if relevant
     max_ind = np.minimum( max_ind, len(shreds_focus) )
     shreds_focus = shreds_focus[min_ind:max_ind]
+
+    if use_sample == "clean":
+        print(f"Initial size = {len(shreds_focus)}")
+        #need to filter for robust rchisq as we recently updated that and just want to make sure
+        shreds_focus = shreds_focus[ (shreds_focus["RCHISQ_G"] < 4) & (shreds_focus["RCHISQ_R"] < 4) & (shreds_focus["RCHISQ_Z"] < 4) ]
+        print(f"Final size = {len(shreds_focus)}")
+        
 
     print("Number of objects in catalog so far: ", len(shreds_focus))
 
@@ -932,7 +942,7 @@ if __name__ == '__main__':
     
             temp_dict = {"tgid":tgid_k, "ra":ra_k, "dec":dec_k, "redshift":redshift_k, "save_path":save_path_k, "img_path":img_path_k, "wcs": wcs , "image_data": data_arr, "mask_data": mask_arr, "invvar_data": invvar_arr, "source_cat": source_cat_f, "index":k , "org_mags": [ shreds_focus["MAG_G"][k], shreds_focus["MAG_R"][k], shreds_focus["MAG_Z"][k] ] , "overwrite": overwrite_bool, "image_size" :  box_size,
                         "bright_star_info": (bstar_ra, bstar_dec, bstar_radius, bstar_fdist, bstar_mag), "sga_info": (sga_dist, sga_ndist), 
-                        "pcnn_val": pcnn_val_k,  "npixels_min": npixels_min, "threshold_rms_scale": threshold_rms_scale}
+                        "pcnn_val": pcnn_val_k,  "npixels_min": npixels_min, "threshold_rms_scale": threshold_rms_scale, "run_simple_photo": run_simple_photo}
     
             return temp_dict
             
@@ -962,10 +972,11 @@ if __name__ == '__main__':
     
             #getting the table associated with this chunk!
             shreds_focus_i = shreds_focus[all_ks_i]
-    
+
+
             if run_parr:
                 with mp.Pool(processes = ncores ) as pool:
-                    all_inputs = list(tqdm(pool.imap(produce_input_dicts, all_ks_i), total = len(all_ks_i)  ))
+                    all_inputs = list(tqdm(pool.imap(produce_input_dicts, all_ks_i), total = len(all_ks_i), disable=not use_tqdm   ) )
             else:
                 all_inputs = []
                 for i in trange(len(all_ks_i)):
@@ -992,7 +1003,7 @@ if __name__ == '__main__':
             if run_aper == True:
                 if run_parr:
                     with mp.Pool(processes= ncores ) as pool:
-                        results = list(tqdm(pool.imap(run_aperture_pipe, all_inputs), total = len(all_inputs)  ))
+                        results = list(tqdm(pool.imap(run_aperture_pipe, all_inputs), total = len(all_inputs), disable=not use_tqdm  ))
                 else:
                     results = []
                     for i in trange(len(all_inputs)):
@@ -1005,7 +1016,7 @@ if __name__ == '__main__':
 
                 final_close_star_dists = np.array([r["closest_star_norm_dist"] for r in results])
                 final_close_star_maxmags  = np.array([r["closest_star_mag"] for r in results])
-                final_aper_r35_mags     = np.vstack([r["aper_r35_mags"] for r in results])  # if same shape
+                final_aper_r3_mags     = np.vstack([r["aper_r3_mags"] for r in results])  # if same shape
                 final_simple_mags     = np.vstack([r["simple_photo_mags"] for r in results]) 
                 final_simple_island_dist_pix     = np.vstack([r["simple_photo_island_dist_pix"] for r in results])
                 final_simple_aper_r425_frac_in_image     = np.array([r["simplest_photo_aper_frac_in_image"] for r in results])
@@ -1015,17 +1026,16 @@ if __name__ == '__main__':
                 final_save_paths         = [r["save_path"] for r in results]
                 on_segment_island        = np.array([r["lie_on_segment_island"] for r in results])
                 final_image_paths       = [r["save_summary_png"] for r in results]
-                all_img_data_paths          = [r["img_path"] for r in results]
 
                 aper_frac_mask_badpix = [r["aper_frac_mask_badpix"] for r in results]
                 img_frac_mask_badpix = [r["img_frac_mask_badpix"] for r in results]
 
                 if chunk_i == 0:
                     print_stage("Example outputs from aperture pipeline")
-                    print("fidu aper mags shape : ",final_aper_r35_mags.shape)
+                    print("fidu aper mags shape : ",final_aper_r3_mags.shape)
                     print("final close star_dists shape : ", final_close_star_dists.shape)
                     #print some values for testing
-                    print("aper_mags : ", final_aper_r35_mags[0])
+                    print("aper_mags : ", final_aper_r3_mags[0])
                     print("aper frac mask badpix : ", aper_frac_mask_badpix[0] )
                     print("img frac mask badpix : ", img_frac_mask_badpix[0] )
                     
@@ -1050,18 +1060,17 @@ if __name__ == '__main__':
                 shreds_focus_i["NEAREST_STAR_NORM_DIST"] = final_close_star_dists
                 shreds_focus_i["NEAREST_STAR_MAX_MAG"] = final_close_star_maxmags
 
-                shreds_focus_i["APER_R35_MAG_G"] = final_aper_r35_mags[:,0]
-                shreds_focus_i["APER_R35_MAG_R"] = final_aper_r35_mags[:,1]
-                shreds_focus_i["APER_R35_MAG_Z"] = final_aper_r35_mags[:,2]
+                shreds_focus_i["APER_ORG_R3_MAG_G"] = final_aper_r3_mags[:,0]
+                shreds_focus_i["APER_ORG_R3_MAG_R"] = final_aper_r3_mags[:,1]
+                shreds_focus_i["APER_ORG_R3_MAG_Z"] = final_aper_r3_mags[:,2]
 
                 shreds_focus_i["SAVE_PATH"] = final_save_paths 
                 #the file path to the aper summary image
                 shreds_focus_i["SAVE_SUMMARY_APER_PATH"] = final_image_paths
                 
                 shreds_focus_i["APER_SOURCE_ON_ORG_BLOB"] = on_segment_island.astype(bool)
-                shreds_focus_i["IMAGE_FITS_PATH"] = all_img_data_paths
 
-                shreds_focus_i["APER_R35_FRAC_MASK_PIX"] = aper_frac_mask_badpix
+                shreds_focus_i["APER_ORG_R3_FRAC_MASK_PIX"] = aper_frac_mask_badpix
                 shreds_focus_i["IMAGE_MASK_PIX_FRAC"] = img_frac_mask_badpix
 
                 shreds_focus_i["SIMPLE_PHOTO_MAG_G"] = final_simple_mags[:,0]
@@ -1073,10 +1082,16 @@ if __name__ == '__main__':
                 
                 print("Compute aperture-photometry based stellar masses now!")
 
-                shreds_focus_i = compute_aperture_masses(shreds_focus_i, rband_key="APER_R35_MAG_R", gband_key="APER_R35_MAG_G", z_key="Z", output_key="LOGM_SAGA_APER_R35")
+                shreds_focus_i = compute_aperture_masses(shreds_focus_i, rband_key="APER_ORG_R3_MAG_R", gband_key="APER_ORG_R3_MAG_G", z_key="Z", output_key="LOGM_SAGA_APER_ORG_R3")
                     
                 #then save this file!
                 if tgids_list is None:
+                    ##when saving it, let us make sure the SAVE_SUMMARY_APER_PATH is clean!
+                    #also better to save it as we might not be running aper and just cog!
+                    col = shreds_focus_i["SAVE_SUMMARY_APER_PATH"]
+                    clean_col = np.array([x if x is not None else "" for x in col], dtype="U")
+                    shreds_focus_i.replace_column("SAVE_SUMMARY_APER_PATH", clean_col)
+                                    
                     save_table( shreds_focus_i, file_save)   
                     print_stage("Saved aperture summary files at %s!"%file_save)
 
@@ -1088,10 +1103,48 @@ if __name__ == '__main__':
             
             if run_cog == True:
                 #we run the curve of growth analysis here!
+                
+                if run_aper == False and tgids_list is None:
+                    #in this case, we want to check if the source has lie_on_segment = 1, If not we will not run this in COG
+                    shreds_focus_i = Table.read(file_save)
+                    lie_on_segment_i = shreds_focus_i["APER_SOURCE_ON_ORG_BLOB"].data
+                    print(f"Chunk {chunk_i}: Number of sources that lie on segment = {np.sum(lie_on_segment_i)}/{len(shreds_focus_i)}")
+                    #we will add something to the inputs! inputs is a list of dictionary
+                    if len(lie_on_segment_i) != len(all_inputs):
+                        raise ValueError("The number of rows in shreds_focus_i did not match with input dictionary length")
 
+                    for i,input_dict_i in enumerate(all_inputs):
+                        input_dict_i["LIE_ON_APER_SEGMENT"] = lie_on_segment_i[i]
+
+                else:
+                    print("As doing only a few select targetids, we will force it to run COG")
+                    for input_dict_i in all_inputs:
+                        input_dict_i["LIE_ON_APER_SEGMENT"] = 1
+
+                
+                if "LIE_ON_APER_SEGMENT" in all_inputs[0].keys():
+                    pass
+                else:
+                    raise ValueError("The LIE_ON_APER_SEGMENT clause did not get added properly to the dictionary")
+                #and to the input dictionary, add info on whether cog should be run or not!
+    
+
+                ##I CAN CHECK IF THE CHUNK I AM AT HAS ALREADY SAVED ALL THE COG PARAMS??
+                #Do not need to repeat the analysis then
+                if os.path.exists(file_save) and tgids_list is None:
+                    temp = Table.read(file_save)
+                    #check if the COG columns are there! Just check one of them!
+                    if "COG_MAG_Z_NO_ISOLATE" in temp.colnames:
+                        print("--"*5)
+                        print(f"THIS CHUNK {chunk_i} ALREADY HAS COG COLUMNS AND SO SKIPPING THIS AND GOING TO NEXT FOR LOOP")
+                        print("Note: if you changed something in the COG function and want it to be reflected, comment this out as it will just take previous file")
+                        print(file_save)
+                        print("--"*5)
+                        continue
+                    
                 if run_parr:
                     with mp.Pool(processes= ncores ) as pool:
-                        results = list(tqdm(pool.imap(run_cog_pipe, all_inputs), total = len(all_inputs)  ))
+                        results = list(tqdm(pool.imap(run_cog_pipe, all_inputs), total = len(all_inputs), disable=not use_tqdm  ))
                 else:
                     results = []
                     for i in trange(len(all_inputs)):
@@ -1144,36 +1197,45 @@ if __name__ == '__main__':
                 final_aper_params = np.vstack( [r["aper_params"] for r in results] )
                 final_apercen_radec = np.vstack([ r["aper_radec_cen"] for r in results])
                 final_apercen_xy_pix = np.vstack([ r["aper_xy_pix_cen"] for r in results])
+                final_mask_frac_r3 = np.array([ r["mask_frac_r3"] for r in results])
+                
 
                 #ADDING COG MAGS WITHOUT ISOLATE MASK
-                final_aper_r425_mags_no_isolate_mask    = np.vstack([r["aper_r425_mags_no_isolate_mask"] for r in results])
-                final_cog_mags_no_isolate_mask        = np.vstack([r["cog_mags_no_isolate_mask"] for r in results])
-                final_cog_mags_err_no_isolate_mask    = np.array([r["cog_mags_err_no_isolate_mask"] for r in results])
-                final_cog_params_g_no_isolate_mask     = np.vstack([r["cog_params_g_no_isolate_mask"] for r in results])
-                final_cog_params_r_no_isolate_mask     = np.vstack([r["cog_params_r_no_isolate_mask"] for r in results])
-                final_cog_params_z_no_isolate_mask     = np.vstack([r["cog_params_z_no_isolate_mask"] for r in results])
-                final_cog_params_g_err_no_isolate_mask = np.vstack([r["cog_params_g_err_no_isolate_mask"] for r in results])
-                final_cog_params_r_err_no_isolate_mask = np.vstack([r["cog_params_r_err_no_isolate_mask"] for r in results])
-                final_cog_params_z_err_no_isolate_mask = np.vstack([r["cog_params_z_err_no_isolate_mask"] for r in results])
-                final_aper_r425_frac_in_image_no_isolate_mask = np.array([r["aper_r425_frac_in_image_no_isolate_mask"] for r in results])
-                final_cog_chi2_no_isolate_mask = np.vstack( [r["cog_chi2_no_isolate_mask"] for r in results] )
-                final_cog_dof_no_isolate_mask = np.vstack( [r["cog_dof_no_isolate_mask"] for r in results] )
-                final_cog_decrease_len_no_isolate_mask = np.vstack( [r["cog_decrease_len_no_isolate_mask"] for r in results] )
-                final_cog_decrease_mag_no_isolate_mask = np.vstack( [r["cog_decrease_mag_no_isolate_mask"] for r in results] )
-                final_aper_params_no_isolate_mask = np.vstack( [r["aper_params_no_isolate_mask"] for r in results] )
-                final_apercen_radec_no_isolate_mask = np.vstack([ r["aper_radec_cen_no_isolate_mask"] for r in results])
-                final_apercen_xy_pix_no_isolate_mask = np.vstack([ r["aper_xy_pix_cen_no_isolate_mask"] for r in results])
+                final_aper_r425_mags_no_isolate_mask    = np.vstack([r["aper_r425_mags_no_isolate"] for r in results])
+                final_cog_mags_no_isolate_mask        = np.vstack([r["cog_mags_no_isolate"] for r in results])
+                final_cog_mags_err_no_isolate_mask    = np.array([r["cog_mags_err_no_isolate"] for r in results])
+                final_cog_params_g_no_isolate_mask     = np.vstack([r["cog_params_g_no_isolate"] for r in results])
+                final_cog_params_r_no_isolate_mask     = np.vstack([r["cog_params_r_no_isolate"] for r in results])
+                final_cog_params_z_no_isolate_mask     = np.vstack([r["cog_params_z_no_isolate"] for r in results])
+                final_cog_params_g_err_no_isolate_mask = np.vstack([r["cog_params_g_err_no_isolate"] for r in results])
+                final_cog_params_r_err_no_isolate_mask = np.vstack([r["cog_params_r_err_no_isolate"] for r in results])
+                final_cog_params_z_err_no_isolate_mask = np.vstack([r["cog_params_z_err_no_isolate"] for r in results])
+                final_aper_r425_frac_in_image_no_isolate_mask = np.array([r["aper_r425_frac_in_image_no_isolate"] for r in results])
+                final_cog_chi2_no_isolate_mask = np.vstack( [r["cog_chi2_no_isolate"] for r in results] )
+                final_cog_dof_no_isolate_mask = np.vstack( [r["cog_dof_no_isolate"] for r in results] )
+                final_cog_decrease_len_no_isolate_mask = np.vstack( [r["cog_decrease_len_no_isolate"] for r in results] )
+                final_cog_decrease_mag_no_isolate_mask = np.vstack( [r["cog_decrease_mag_no_isolate"] for r in results] )
+                final_aper_params_no_isolate_mask = np.vstack( [r["aper_params_no_isolate"] for r in results] )
+                final_apercen_radec_no_isolate_mask = np.vstack([ r["aper_radec_cen_no_isolate"] for r in results])
+                final_apercen_xy_pix_no_isolate_mask = np.vstack([ r["aper_xy_pix_cen_no_isolate"] for r in results])
+                final_mask_frac_r3_no_isolate_mask = np.array([ r["mask_frac_r3_no_isolate"] for r in results])
+                
           
                 ##THESE ARE COG OUTPUTS THAT ARE COMMON TO ALL!
                 final_deblend_smooth_num_seg = np.array([ r["deblend_smooth_num_seg"] for r in results])
                 final_deblend_smooth_dist_pix = np.array([ r["deblend_smooth_dist_pix"] for r in results])
                 final_revert_to_org_tractor = np.array([ r["revert_to_org_tractor"] for r in results])
-                final_tractor_parent_mask_mags = np.vstack([ r["tractor_parent_mask_mags"] for r in results])
-
-                #the mu grz values useful in identifying when a galaxy is too LSB to use the smooth deblending params
-                final_aper_r2_mus_no_isolate_mask = np.vstack([ r["aper_r2_mus_no_isolate_mask"] for r in results ]  )
-                final_aper_r2_mu_r_smooth = np.array([ r["aper_r2_mu_r_smooth"] for r in results ]  )
+                final_tractor_parent_isolate_mags = np.vstack([ r["tractor_parent_isolate_mags"] for r in results])
+                final_tractor_parent_no_isolate_mags = np.vstack([ r["tractor_parent_no_isolate_mags"] for r in results])
                 
+                #the mu grz values useful in identifying when a galaxy is too LSB to use the smooth deblending params
+                final_aper_r2_mus_no_isolate = np.vstack([ r["aper_r2_mus_no_isolate"] for r in results ]  )
+                final_aper_r2_mu_r_intp_no_isolate = np.array([ r["aper_r2_mu_r_intp_no_isolate"] for r in results ]  )
+
+                final_parent_no_isolate_hollow_fraction = np.array([ r["parent_no_isolate_hollow_fraction"] for r in results ]  )
+                final_found_smooth_segment = np.array([ r["found_smooth_segment"] for r in results ]  )
+                
+            
                 #add the image paths to the total lists
 
                 final_cog_saveimgs = filter_saveimgs_paths(results, "img_path")
@@ -1213,92 +1275,90 @@ if __name__ == '__main__':
                     raise RuntimeError("Missing variable: 'shreds_focus_i'. Did you forget to run `run_aper()`? This would be the case if you are running this on a few TGIDs.")
 
                 ##these are columns to be added per band
-                shreds_focus_i["COG_MAG_G"] = final_cog_mags[:,0]
-                shreds_focus_i["COG_MAG_R"] = final_cog_mags[:,1]
-                shreds_focus_i["COG_MAG_Z"] = final_cog_mags[:,2]
+                shreds_focus_i["COG_MAG_G_ISOLATE"] = final_cog_mags[:,0]
+                shreds_focus_i["COG_MAG_R_ISOLATE"] = final_cog_mags[:,1]
+                shreds_focus_i["COG_MAG_Z_ISOLATE"] = final_cog_mags[:,2]
 
-                shreds_focus_i["COG_NO_ISOLATE_MASK_MAG_G"] = final_cog_mags_no_isolate_mask[:,0]
-                shreds_focus_i["COG_NO_ISOLATE_MASK_MAG_R"] = final_cog_mags_no_isolate_mask[:,1]
-                shreds_focus_i["COG_NO_ISOLATE_MASK_MAG_Z"] = final_cog_mags_no_isolate_mask[:,2]
+                shreds_focus_i["COG_MAG_G_NO_ISOLATE"] = final_cog_mags_no_isolate_mask[:,0]
+                shreds_focus_i["COG_MAG_R_NO_ISOLATE"] = final_cog_mags_no_isolate_mask[:,1]
+                shreds_focus_i["COG_MAG_Z_NO_ISOLATE"] = final_cog_mags_no_isolate_mask[:,2]
                 
-                shreds_focus_i["APER_R425_MAG_G"] = final_aper_r425_mags[:,0]
-                shreds_focus_i["APER_R425_MAG_R"] = final_aper_r425_mags[:,1]
-                shreds_focus_i["APER_R425_MAG_Z"] = final_aper_r425_mags[:,2]
+                shreds_focus_i["APER_R425_MAG_G_ISOLATE"] = final_aper_r425_mags[:,0]
+                shreds_focus_i["APER_R425_MAG_R_ISOLATE"] = final_aper_r425_mags[:,1]
+                shreds_focus_i["APER_R425_MAG_Z_ISOLATE"] = final_aper_r425_mags[:,2]
 
-                shreds_focus_i["APER_R425_NO_ISOLATE_MASK_MAG_G"] = final_aper_r425_mags_no_isolate_mask[:,0]
-                shreds_focus_i["APER_R425_NO_ISOLATE_MASK_MAG_R"] = final_aper_r425_mags_no_isolate_mask[:,1]
-                shreds_focus_i["APER_R425_NO_ISOLATE_MASK_MAG_Z"] = final_aper_r425_mags_no_isolate_mask[:,2]
+                shreds_focus_i["APER_R425_MAG_G_NO_ISOLATE"] = final_aper_r425_mags_no_isolate_mask[:,0]
+                shreds_focus_i["APER_R425_MAG_R_NO_ISOLATE"] = final_aper_r425_mags_no_isolate_mask[:,1]
+                shreds_focus_i["APER_R425_MAG_Z_NO_ISOLATE"] = final_aper_r425_mags_no_isolate_mask[:,2]
 
-                shreds_focus_i["APER_R425_FRAC_IN_IMG"] = final_aper_r425_frac_in_image
-                shreds_focus_i["APER_R425_FRAC_IN_IMG_NO_ISOLATE_MASK"] = final_aper_r425_frac_in_image_no_isolate_mask
+                shreds_focus_i["APER_R425_FRAC_IN_IMG_ISOLATE"] = final_aper_r425_frac_in_image
+                shreds_focus_i["APER_R425_FRAC_IN_IMG_NO_ISOLATE"] = final_aper_r425_frac_in_image_no_isolate_mask
                 
                 #these columns are common to both! This is with the isolate mask applied
-                shreds_focus_i["TRACTOR_PARENT_MASK_MAG_G"] = final_tractor_parent_mask_mags[:,0]
-                shreds_focus_i["TRACTOR_PARENT_MASK_MAG_R"] = final_tractor_parent_mask_mags[:,1]
-                shreds_focus_i["TRACTOR_PARENT_MASK_MAG_Z"] = final_tractor_parent_mask_mags[:,2]
+                shreds_focus_i["TRACTOR_PARENT_MAG_G_ISOLATE"] = final_tractor_parent_isolate_mags[:,0]
+                shreds_focus_i["TRACTOR_PARENT_MAG_R_ISOLATE"] = final_tractor_parent_isolate_mags[:,1]
+                shreds_focus_i["TRACTOR_PARENT_MAG_Z_ISOLATE"] = final_tractor_parent_isolate_mags[:,2]
+                
+                shreds_focus_i["TRACTOR_PARENT_MAG_G_NO_ISOLATE"] = final_tractor_parent_no_isolate_mags[:,0]
+                shreds_focus_i["TRACTOR_PARENT_MAG_R_NO_ISOLATE"] = final_tractor_parent_no_isolate_mags[:,1]
+                shreds_focus_i["TRACTOR_PARENT_MAG_Z_NO_ISOLATE"] = final_tractor_parent_no_isolate_mags[:,2]
 
                 shreds_focus_i["DEBLEND_SMOOTH_NUM_BLOB"] = final_deblend_smooth_num_seg
                 shreds_focus_i["DEBLEND_SMOOTH_BLOB_PIX_DIST"] = final_deblend_smooth_dist_pix
                 shreds_focus_i["REVERT_TO_OLD_TRACTOR"] = final_revert_to_org_tractor
 
+                shreds_focus_i["HOLLOW_FRAC_NO_ISOLATE"] = final_parent_no_isolate_hollow_fraction
+                shreds_focus_i["FOUND_SMOOTH_SEGMENT"] = final_found_smooth_segment
+                shreds_focus_i["APER_R2_MU_R_INTP_NO_ISOLATE"] = final_aper_r2_mu_r_intp_no_isolate
 
-                
-              
+
                 ##these are columns that will arrays 
-                column_dict = {"COG_CHI2": final_cog_chi2,
-                              "COG_DOF": final_cog_dof,
-                              "COG_MAG_ERR" : final_cog_mags_err,
-                               "COG_PARAMS_G": final_cog_params_g,
-                               "COG_PARAMS_R": final_cog_params_r,
-                               "COG_PARAMS_Z": final_cog_params_z,
-                                "COG_PARAMS_G_ERR": final_cog_params_g_err,
-                               "COG_PARAMS_R_ERR": final_cog_params_r_err,
-                               "COG_PARAMS_Z_ERR": final_cog_params_z_err,
-                               "COG_DECREASE_MAX_LEN": final_cog_decrease_len,
-                               "COG_DECREASE_MAX_MAG": final_cog_decrease_mag,
-                               'APER_CEN_RADEC': final_apercen_radec,
-                               'APER_CEN_XY_PIX': final_apercen_xy_pix,
-                               'APER_PARAMS':final_aper_params,
-                               'APER_R2_MU_R_SMOOTH':final_aper_r2_mu_r_smooth,
-                               
+                column_dict = {"COG_CHI2_ISOLATE": final_cog_chi2,
+                              "COG_DOF_ISOLATE": final_cog_dof,
+                              "COG_MAG_ERR_ISOLATE" : final_cog_mags_err,
+                               "COG_PARAMS_G_ISOLATE": final_cog_params_g,
+                               "COG_PARAMS_R_ISOLATE": final_cog_params_r,
+                               "COG_PARAMS_Z_ISOLATE": final_cog_params_z,
+                                "COG_PARAMS_G_ERR_ISOLATE": final_cog_params_g_err,
+                               "COG_PARAMS_R_ERR_ISOLATE": final_cog_params_r_err,
+                               "COG_PARAMS_Z_ERR_ISOLATE": final_cog_params_z_err,
+                               "COG_DECREASE_MAX_LEN_ISOLATE": final_cog_decrease_len,
+                               "COG_DECREASE_MAX_MAG_ISOLATE": final_cog_decrease_mag,
+                               'APER_CEN_RADEC_ISOLATE': final_apercen_radec,
+                               'APER_CEN_XY_PIX_ISOLATE': final_apercen_xy_pix,
+                               'APER_PARAMS_ISOLATE':final_aper_params,                              
                               }
                 
                 column_dict_no_isolate = {
-                               "COG_CHI2_NO_ISOLATE_MASK": final_cog_chi2_no_isolate_mask,
-                              "COG_DOF_NO_ISOLATE_MASK": final_cog_dof_no_isolate_mask,
-                              "COG_MAG_ERR_NO_ISOLATE_MASK" : final_cog_mags_err_no_isolate_mask,
-                               "COG_PARAMS_NO_ISOLATE_MASK_G": final_cog_params_g_no_isolate_mask,
-                               "COG_PARAMS_NO_ISOLATE_MASK_R": final_cog_params_r_no_isolate_mask,
-                               "COG_PARAMS_NO_ISOLATE_MASK_Z": final_cog_params_z_no_isolate_mask,
-                                "COG_PARAMS_NO_ISOLATE_MASK_G_ERR": final_cog_params_g_err_no_isolate_mask,
-                               "COG_PARAMS_NO_ISOLATE_MASK_R_ERR": final_cog_params_r_err_no_isolate_mask,
-                               "COG_PARAMS_NO_ISOLATE_MASK_Z_ERR": final_cog_params_z_err_no_isolate_mask,
-                               "COG_DECREASE_MAX_LEN_NO_ISOLATE_MASK": final_cog_decrease_len_no_isolate_mask,
-                               "COG_DECREASE_MAX_MAG_NO_ISOLATE_MASK": final_cog_decrease_mag_no_isolate_mask,
-                               'APER_CEN_RADEC_NO_ISOLATE_MASK': final_apercen_radec_no_isolate_mask,
-                               'APER_CEN_XY_PIX_NO_ISOLATE_MASK': final_apercen_xy_pix_no_isolate_mask,
-                               'APER_PARAMS_NO_ISOLATE_MASK':final_aper_params_no_isolate_mask,
-                               "APER_R2_MU_NO_ISOLATE_MASK" : final_aper_r2_mus_no_isolate_mask
+                               "COG_CHI2_NO_ISOLATE": final_cog_chi2_no_isolate_mask,
+                              "COG_DOF_NO_ISOLATE": final_cog_dof_no_isolate_mask,
+                              "COG_MAG_ERR_NO_ISOLATE" : final_cog_mags_err_no_isolate_mask,
+                               "COG_PARAMS_G_NO_ISOLATE": final_cog_params_g_no_isolate_mask,
+                               "COG_PARAMS_R_NO_ISOLATE": final_cog_params_r_no_isolate_mask,
+                               "COG_PARAMS_Z_NO_ISOLATE": final_cog_params_z_no_isolate_mask,
+                                "COG_PARAMS_G_ERR_NO_ISOLATE": final_cog_params_g_err_no_isolate_mask,
+                               "COG_PARAMS_R_ERR_NO_ISOLATE": final_cog_params_r_err_no_isolate_mask,
+                               "COG_PARAMS_Z_ERR_NO_ISOLATE": final_cog_params_z_err_no_isolate_mask,
+                               "COG_DECREASE_MAX_LEN_NO_ISOLATE": final_cog_decrease_len_no_isolate_mask,
+                               "COG_DECREASE_MAX_MAG_NO_ISOLATE": final_cog_decrease_mag_no_isolate_mask,
+                               'APER_CEN_RADEC_NO_ISOLATE': final_apercen_radec_no_isolate_mask,
+                               'APER_CEN_XY_PIX_NO_ISOLATE': final_apercen_xy_pix_no_isolate_mask,
+                               'APER_PARAMS_NO_ISOLATE':final_aper_params_no_isolate_mask,
+                               "APER_R2_MUS_NO_ISOLATE" : final_aper_r2_mus_no_isolate
                               }
 
                 #combining the above dictionaries into one!
                 column_dict_total = column_dict | column_dict_no_isolate
 
+                #this should automatically add columns!
                 for ki, values in column_dict_total.items():
                     shreds_focus_i[ki] = values
-                    
-                # for ki in column_dict_total.keys():
-                    # col_i = Column(column_dict_total[ki], name=ki)
-                    # # Add the column to the table
-                    #shreds_focus_i.add_column(col_i)
-    
-                # THEN RUN SGA, AND MAKE THOSE PLOTS AND FIND WHICH MU CUT WORKS BEST!! AND IN APPENDIX ADD PLOTS ON HOW THE COMPARISON 
-                # IS FOR WITH AND WITHOUT THESE CUTS AND SOME EXAMPLE
 
-                #Get the cog based stellar mass, get the 2 kinds of stellar masses!!
-                shreds_focus_i = compute_aperture_masses(shreds_focus_i, rband_key="COG_MAG_R", gband_key="COG_MAG_G", z_key="Z", output_key="LOGM_SAGA_COG")
+                #Get the cog based stellar mass, get the 2 kinds of stellar masses!!    
+                
+                shreds_focus_i = compute_aperture_masses(shreds_focus_i, rband_key="COG_MAG_R_ISOLATE", gband_key="COG_MAG_G_ISOLATE", z_key="Z_CMB", dmpc_key = "DIST_MPC_FIDU", output_key="LOGM_SAGA_COG_ISOLATE")
 
-                shreds_focus_i = compute_aperture_masses(shreds_focus_i, rband_key="COG_NO_ISOLATE_MASK_MAG_R", gband_key="COG_NO_ISOLATE_MASK_MAG_G", z_key="Z", output_key="LOGM_SAGA_COG_NO_ISOLATE_MASK")
+                shreds_focus_i = compute_aperture_masses(shreds_focus_i, rband_key="COG_MAG_R_NO_ISOLATE", gband_key="COG_MAG_G_NO_ISOLATE", z_key="Z_CMB", dmpc_key = "DIST_MPC_FIDU", output_key="LOGM_SAGA_COG_NO_ISOLATE")
 
                 #add the shred maskbits to the catalog
                 ##TODO: This step will done in a different script when we are combining all the shred catalogs into one!! MAKE A SCRIPT FOR THAT
@@ -1330,16 +1390,20 @@ if __name__ == '__main__':
  
         if nchunks == 1:
             shreds_focus_combine_aper = Table.read(file_template_aper + "_chunk_0.fits")
+
+            final_save_name = file_template_aper + "%s.fits"%end_name
             
             #we just need to rename the file!
-            shutil.copy(file_template_aper + "_chunk_0.fits", file_template_aper + "%s.fits"%end_name)
+            shutil.copy(file_template_aper + "_chunk_0.fits", final_save_name)
             if run_cog == True:
                 #see the comments below for why this if statement is here
-                os.rename(file_template_aper + "_chunk_0.fits", file_template_aper + "%s.fits"%end_name)
+                os.rename(file_template_aper + "_chunk_0.fits", final_save_name)
 
         else:
             #we need to consolidate files!  
             shreds_focus_combine_aper = []
+
+            final_save_name = file_template_aper + "%s.fits"%end_name
             
             for ni in trange(nchunks):
                 shreds_focus_part = Table.read(file_template_aper + "_chunk_%d.fits"%ni  )
@@ -1353,29 +1417,31 @@ if __name__ == '__main__':
 
             print_stage("Total number of objects in consolidated aperture file = %d"%len(shreds_focus_combine_aper))
 
-            save_table( shreds_focus_combine_aper, file_template_aper + "%s.fits"%end_name ) 
+            save_table( shreds_focus_combine_aper, final_save_name ) 
             
-            print_stage("Consolidated aperture chunk saved at %s"%(file_template_aper + "%s.fits"%end_name) )
+            print_stage("Consolidated aperture chunk saved at %s"%(final_save_name) )
 
     ##make a scrollable pdf to view the final results!
     ##only make for some objects?
+
+
+    # ##################
+    # ##PART 5: Get the CNN inputs ready!!
+    # ##################
+
+    if get_cnn_inputs and tgids_list is None and run_cog:
+        print("Getting the PCNN shred classifier input files")
+        get_pcnn_data_inputs(sample_str, sample_cat_path = final_save_name)
 
     if tgids_list is None and run_aper:
         print("Saving aperture photometry imgs")
         make_scroll_pdf(all_aper_saveimgs, save_sample_path, summary_scroll_file_name, special_plot_mask, max_num=250, type_str="aper",all_aper_saveimgs2=None)
 
-    # if tgids_list is None and run_cog:
-    #     print("Saving COG aperture photometry imgs")
-        
-    #     make_scroll_pdf(all_cog_saveimgs, save_sample_path, summary_scroll_file_name, special_plot_mask, max_num=250, type_str="cog",all_aper_saveimgs2=None)
-        
     if tgids_list is None and run_cog:
-        special_plot_mask = (shreds_focus_combine_aper["STARFDIST"] < 1.5) & (shreds_focus_combine_aper["STARDIST_DEG"]*3600 < 45)
-        all_aper_saveimgs = shreds_focus_combine_aper["SAVE_SUMMARY_APER_PATH"]
+        print("Saving COG aperture photometry imgs")
         
-        print("Saving COG and aperture photometry imgs")
-        make_scroll_pdf(all_aper_saveimgs, save_sample_path, summary_scroll_file_name, special_plot_mask, max_num=250, type_str="apercog",all_aper_saveimgs2=all_cog_saveimgs)
-
+        make_scroll_pdf(all_cog_saveimgs, save_sample_path, summary_scroll_file_name, special_plot_mask, max_num=250, type_str="cog",all_aper_saveimgs2=None)
+        
     ##save a scrollable pdf of all the jaccard pngs!
     if tgids_list is None and run_cog:
         print("Saving jaccard score imgs")
@@ -1388,16 +1454,16 @@ if __name__ == '__main__':
         special_jaccard_mask = (shreds_focus_combine_aper["DEBLEND_SMOOTH_NUM_BLOB"].data > 1)
 
         make_scroll_pdf(all_jaccard_saveimgs, save_sample_path, summary_scroll_file_name, special_jaccard_mask, max_num=250, type_str="jaccard",all_aper_saveimgs2=None)
-        
 
 
-    # ##################
-    # ##PART 5: Using the aperture photometry footprint, find the desi sources that lie around on it and similar redshift as well??
-    # ##################
-
-
-
-
+    # if tgids_list is None and run_cog:
+    #     special_plot_mask = (shreds_focus_combine_aper["STARFDIST"] < 1.5) & (shreds_focus_combine_aper["STARDIST_DEG"]*3600 < 45)
+    #     all_aper_saveimgs = shreds_focus_combine_aper["SAVE_SUMMARY_APER_PATH"].data
+    #     #we retranslate this into None!
+    #     all_aper_saveimgs = np.array([x if x != "" else None for x in all_aper_saveimgs], dtype=object)
+                
+    #     print("Saving COG and aperture photometry imgs")
+    #     make_scroll_pdf(all_aper_saveimgs, save_sample_path, summary_scroll_file_name, special_plot_mask, max_num=250, type_str="apercog",all_aper_saveimgs2=all_cog_saveimgs)
 
     # ##### CODE FOR TESTING APERTURE PHOTOMETRY ON BAD RCHISQ OBJECTS
     # # rchisq_bins = np.arange(0,9,1)

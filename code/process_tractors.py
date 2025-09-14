@@ -21,6 +21,7 @@ def get_nearby_source_catalog(ra_k, dec_k, objid_k, brickid_k, box_size, wcat, b
     primary = True if ra_k,dec_k are the main source. If False, then this function is just being used to get the relevant files!
     '''
 
+ 
     #define the center.see the nearby dwarf catalog mISTY ipynb for a visual confirmation
     center = SkyCoord(ra=ra_k * u.deg, dec=dec_k * u.deg)
     # Define the source catalog coordinates

@@ -26,6 +26,7 @@ from scipy.ndimage import gaussian_filter
 from desi_lowz_funcs import get_elliptical_aperture
 from photutils.aperture import aperture_photometry, EllipticalAperture
 from photutils.morphology import data_properties
+import numpy.ma as ma
 
 def make_custom_cmap(n_colors, cmap_name="rainbow"):
     """
@@ -139,6 +140,8 @@ def find_contrast_run(ncontrast, all_jacc_desi, all_jacc_largest, thresh=0.95, r
     return None, np.nan  # nothing found
 
 
+    
+
 def find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_map, nlevel_val = 4,save_path = None, pcnn_val=None,radec=None, tgid=None, mu_rough=None, source_zred=None, mu_r_smooth = None):
     '''
     In this function, we find the optimal ncontrast value with which we will deblend.
@@ -233,7 +236,7 @@ def find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_ma
     
     return ncontrast_opt, jaccard_img_path
 
-def process_deblend_image(segment_map, segm_deblend, fiber_xpix, fiber_ypix):
+def process_deblend_image(segment_map, segm_deblend, fiber_xpix, fiber_ypix, save_path):
     '''
     Function where we process the deblended image so easier to plot!! Sets all other deblended segments in image to zero and just focuses on the deblended segment of the main blob.
 
@@ -272,6 +275,9 @@ def process_deblend_image(segment_map, segm_deblend, fiber_xpix, fiber_ypix):
     #setting all the pixels that are in background to be zero.
     segm_deblend_v3[np.isnan(segm_deblend_v3)] = 0
 
+    #save this deblended image for plotting purposes later!!
+    np.save(save_path + "/deblend_segments_isolate.npy", segm_deblend_v3)
+
     #what is the deblend id where our main source is in?
     deblend_island_num = segm_deblend_v3[int(fiber_ypix),int(fiber_xpix)]
     
@@ -284,8 +290,12 @@ def process_deblend_image(segment_map, segm_deblend, fiber_xpix, fiber_ypix):
 
     #given this deblend island num, get the mask of just the parent galaxy of interest
     parent_galaxy_mask = (segm_deblend_v3 == deblend_island_num)
-    not_parent_galaxy_mask = (segm_deblend_v3 != deblend_island_num) & (segm_deblend_v3 > 0)
 
+    # not_parent_galaxy_mask = (segm_deblend_v3 != deblend_island_num) & (segm_deblend_v3 > 0)
+    #we want to mask other deblended blobs in the main segment or mask other blobs (distinct from main blob) and hence the last condition
+    #this makes sure that we do not mask out the sky so we can still run COG
+    not_parent_galaxy_mask = ( (segm_deblend_v3 != deblend_island_num) & (segm_deblend_v3 > 0) ) | (segment_map_v2 == 1)
+    
     ##how many deblended segments are on the main blob?
     num_deblend_segs_main_blob = len(deblend_ids)
 
@@ -332,7 +342,14 @@ def linear_interpolate_mask(org_image, segment_map_v2, mask):
     
     points = np.column_stack((x[~mask], y[~mask]))
     values = org_image[~mask]
+
     
+    # Target (masked + blob=2) pixels
+    sel = mask & (segment_map_v2 == 2)
+    # Safety check: if no valid input, skip
+    if points.size == 0 or values.size == 0 or np.sum(sel) == 0:
+        return filled
+
     filled[mask & (segment_map_v2 == 2)] = griddata(points, values, (x[mask & (segment_map_v2 == 2)], y[mask & (segment_map_v2 == 2)]), method='linear')
     
     return filled
@@ -362,26 +379,42 @@ def get_isolate_galaxy_mask(img_rgb=None, img_rgb_mask=None, r_band_data=None, r
     # r_band_data = simple_interpolate_mask(r_band_data, aperture_mask, footprint_size=30)
     #Smooth the image lightly (sigma ~ 1-2 pixels)
 
-    #TODO: ONLY DO THIS SMOOTHING IF SEGMENT_MAP_V2 == 2 AND APERTURE_MASK == TRUE PIXELS EXIST
     if np.sum(  (segment_map_v2 == 2) & (aperture_mask) ) > 0:
+        
         # smoothed_r_image = gaussian_filter(r_band_data, sigma=1.0)
         # r_band_data_intp = linear_interpolate_mask_SMOOTH(r_band_data, smoothed_r_image, segment_map_v2, aperture_mask)
         r_band_data_intp = linear_interpolate_mask(r_band_data, segment_map_v2, aperture_mask)
+
+        if np.max(r_band_data_intp) == np.min(r_band_data_intp):
+            print(f"Invalid plotting in isolate galaxy mask for {tgid}")
+
+        else:        
+             # Handle invalid values: mask NaNs, zeros, negatives
+            r_band_data_safe = ma.masked_where(r_band_data <= 0, r_band_data)
+            r_band_data_intp_safe = ma.masked_where(r_band_data_intp <= 0, r_band_data_intp)
+        
+            # Colormap: invalid/masked pixels in white
+            cmap = plt.cm.viridis.copy()
+            cmap.set_bad(color="white")
+        
+            # Plot pre- and post-interpolation
+            fig, ax = plt.subplots(1, 2, figsize=(8, 4))
+        
+            ax[0].set_title("Pre-interpolate")
+            im0 = ax[0].imshow(r_band_data_safe, origin="lower", norm=LogNorm(), cmap=cmap)
+            fig.colorbar(im0, ax=ax[0])
+        
+            ax[1].set_title("Post-interpolate")
+            im1 = ax[1].imshow(r_band_data_intp_safe, origin="lower", norm=LogNorm(), cmap=cmap)
+            fig.colorbar(im1, ax=ax[1])
+        
+            # Save and close figure
+            fig.savefig(os.path.join(file_path, "interpolated_r_band_data.png"))
+            plt.close(fig)
+
+    
     else:
         r_band_data_intp = np.copy(r_band_data)
-
-  
-    #TODO: IT SEEMS LIKE SOMEWHERE AROUND 22.5 is a good cutout to start being greedy! Suggestion is to take SGA, manaully label number of segments
-    #and make a plot of MU hist where we get correct or not ... and draw some boundary there!!
-            
-    #saving this image for reference
-    fig,ax = plt.subplots(1,2,figsize = (8,4))
-    ax[0].set_title("Pre-interpolate")
-    ax[0].imshow(r_band_data, origin="lower",norm=LogNorm())
-    ax[1].set_title("Post-interpolate")
-    ax[1].imshow(r_band_data_intp, origin="lower",norm=LogNorm())
-    fig.savefig(file_path+ "/interpolated_r_band_data.png")
-    plt.close(fig)
 
     ###get the updated deblend values!!
     kernel = make_2dgaussian_kernel(15, size=29)  # FWHM = 3.0
@@ -414,7 +447,7 @@ def get_isolate_galaxy_mask(img_rgb=None, img_rgb_mask=None, r_band_data=None, r
                                            npixels=npixels_min,nlevels=4, contrast=ncontrast_opt,
                                            progress_bar=False)
 
-        segm_deblend_opt, num_deblend_segs_main_blob, parent_galaxy_mask,not_parent_galaxy_mask, nearest_deblend_dist_pix, lie_on_smooth_segment = process_deblend_image(segment_map, segm_deblend_opt, fiber_xpix, fiber_ypix)
+        segm_deblend_opt, num_deblend_segs_main_blob, parent_galaxy_mask,not_parent_galaxy_mask, nearest_deblend_dist_pix, lie_on_smooth_segment = process_deblend_image(segment_map, segm_deblend_opt, fiber_xpix, fiber_ypix, file_path)
 
         #segm_deblend_opt is the optimally deblended image with just the deblended segments on main blob highlighted
         #num_deblend_segs_main_blob is the number of deblended segments identified in the main blob

@@ -34,9 +34,15 @@ from desi_lowz_funcs import make_subplots, sdss_rgb, get_elliptical_aperture
 def mags_to_flux(mags, zeropoint=22.5):
     return 10**((zeropoint - mags) / 2.5)
 
+
 def flux_to_mag(flux, zeropoint=22.5):
-    return zeropoint - 2.5 * np.log10(flux)
-    
+    # Protect against zero/negative flux
+    if flux > 0:
+        return zeropoint - 2.5*np.log10(flux)
+    else:
+        return np.nan  # or some sentinel value
+
+
 
 def find_nearest_island(segment_map, fiber_xpix,fiber_ypix):
     '''
@@ -109,16 +115,18 @@ def get_simplest_photometry(data_arr, r_rms, fiber_xpix, fiber_ypix, source_cat_
             #the fiber is already on a segment!
             new_island_num = island_num
             closest_island_dist_pix = 0
-    
-        
+
         #make everything that is not on the main blob a 0!
         segment_map_smooth[segment_map_smooth != new_island_num] = 0
+
     
+        ##TODO: ONCE THE MAIN SEGMENT IS IDENTIFIED, WE DO THE DEBLEND STEP. We do not do this for now.
+        ##This is the jaccard score stuff! But there are stars in the way!!
+        # ncontrast_opt, jaccard_img_path = find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_map, nlevel_val = 4,save_path = None, pcnn_val=None,radec=None, tgid=None, mu_rough=None, source_zred=None, mu_r_smooth = None)
+            
         #estimate the aperture of this simplest photo and measure its outside fraction!
         aperture_for_simple_phot, areafrac_in_image_simple_phot, _, _ = get_elliptical_aperture( segment_map_smooth , sigma = 4.25 )
 
-        
-    
         #use this new segmentation mask to filter the tractor sources! and save their photometry!!!
         xpix_all = source_cat_no_stars["xpix"].astype(int)
         ypix_all = source_cat_no_stars["ypix"].astype(int)
@@ -130,6 +138,8 @@ def get_simplest_photometry(data_arr, r_rms, fiber_xpix, fiber_ypix, source_cat_
     
         #save this catalog!
         source_cat_no_stars_simple_model.write( save_path + "/simplest_photometry_parent_sources.fits", overwrite=True)
+
+        #TODO: include a step in the tractor source download part where we download this!
     
         #let us save this mask
         np.save(save_path + "/simplest_photometry_binary_mask.npy", segment_map_smooth)

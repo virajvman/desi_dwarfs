@@ -29,6 +29,135 @@ import requests
 import json
 
 
+
+def measure_elliptical_aperture_area_fraction_masked(image_shape, good_pixel_mask, ell_aper_obj):
+    '''
+    Computes the fraction of the elliptical aperture area that is masked (i.e., falls on bad, saturated pixels etc.).
+    
+    Parameters
+    ----------
+    image_shape : tuple
+        Shape of the image (ny, nx).
+    good_pixel_mask : 2D boolean array
+        True where pixels are good, False where they are bad (e.g., stars, bright sources).
+    ell_aper_obj : photutils.aperture.EllipticalAperture
+        The elliptical aperture object.
+
+    Returns
+    -------
+    area_masked : float
+        Fraction of the aperture area that is masked.
+    '''
+    bad_pixel_mask = ~good_pixel_mask  # True where pixels are bad
+
+    # Create aperture mask
+    mask = ell_aper_obj.to_mask(method='exact')  # Pixel values range from 0 to 1 (fractional overlap)
+    aperture_mask = mask.to_image(image_shape)   # Same shape as image
+
+    # Compute total effective area of aperture (in pixel units)
+    area_in_image = np.nansum(aperture_mask)  # Sum of fractional contributions
+
+    # Compute how much of the aperture overlaps with bad pixels
+    area_in_aper_masked = np.nansum(aperture_mask[bad_pixel_mask])
+
+    # Compute fraction masked
+    if area_in_image == 0:
+        return np.nan
+    else:
+        area_masked = area_in_aper_masked / area_in_image
+        return area_masked
+
+
+
+
+def make_cool_grz_panel(ncol,nrow, ras=[],decs=[], zreds=[], tgids=[], cutout_sizes=[],
+                        bar_size = 10, plot_bar = True, img_paths = None, save_img_fold = "",
+                       col_spacing = 0.1, row_spacing = 0.1,markersize=100, plot_cens=True, plot_title = False,
+                       save_path=None):
+    '''
+    Function that make grz images!
+
+    Cutout sizes are in arcecnds
+    '''
+
+    session = requests.Session()
+
+    ngals = len(ras)
+    nplot = ncol*nrow
+
+    cutout_sizes = np.array(cutout_sizes)/0.262
+
+    cutout_sizes = cutout_sizes.astype(int)
+
+    fig,ax = make_subplots(ncol = ncol, nrow =nrow, col_spacing = col_spacing, row_spacing= row_spacing,return_fig=True)
+
+
+    if ncol*nrow > ngals:
+        raise ValueError("Too few ra, decs provided")
+
+    if len(ras) != len(cutout_sizes):
+        raise ValueError("Cutout size list does not match ra list len")
+
+
+    for i in range(nplot):
+        if img_paths is None:
+            save_img_path_i = save_img_fold + f"/image_grz_ra_{ras[i]:.3f}_dec_{decs[i]:.3f}.fits"
+            if os.path.exists(save_img_path_i):
+                grz_data = fits.open(save_img_path_i)[0].data
+            else:
+                #we will be downlaoding the images as fits file
+                print(save_img_path_i)
+                save_cutouts(ras[i], decs[i], save_img_path_i, session, size = int(1.25*cutout_sizes[i]))
+                grz_data = fits.open(save_img_path_i)[0].data
+        else:
+            grz_data = fits.open(img_paths[i])[0].data
+            
+        #with the cutout, download the grz img
+        if cutout_sizes[i] > np.shape(grz_data)[1]:
+            raise ValueError("Cutout size is bigger than actual image size!")
+            
+        grz_img, _ = process_img(grz_data, cutout_size= cutout_sizes[i] , org_size = np.shape(grz_data)[1], return_shift=True )
+        
+        ax[i].imshow(grz_img,origin="lower",rasterized=True)
+        ax[i].set_xticks([])
+        ax[i].set_yticks([])
+
+        ##plot the horizontal bar!!
+        #cutout size is in pixels now
+        bar_frac = bar_size/(cutout_sizes[i]*0.262)
+
+        x_start_frac = 0.07  # 7% from left
+        y_start_frac = 0.07  # 7% from bottom
+        
+        # Draw the scale bar in axes coordinates
+        ax[i].plot([x_start_frac, x_start_frac + bar_frac],
+                [y_start_frac, y_start_frac],
+                color='white', lw=1, transform=ax[i].transAxes)
+
+        ##include TARGETID RA,DEC and REDSHIFT AT TOP?
+
+        if plot_cens:
+            #plot a circle at the center!!
+            ax[i].scatter(cutout_sizes[i]/2, cutout_sizes[i]/2, 
+                          s=markersize, edgecolor = "r",lw = 1,ls = "--",
+                          facecolor = "none")
+
+        if plot_title:
+            ax[i].text(0.5,0.9, f"({ras[i]:.3f},{decs[i]:.3f}), z = {zreds[i]:.3f}", ha="center",va="center",fontsize = 13,
+                       transform=ax[i].transAxes, color = "white")
+        
+
+    if save_path is not None:    
+        plt.savefig(save_path,bbox_inches="tight")
+    
+    plt.show()
+
+
+
+    return
+        
+        
+
 c_light = 299792 #km/s
 filler_sga_ind = 999999
 
@@ -385,7 +514,7 @@ def get_stellar_mass_mia( gr_col, gmag, zred):
     
     return log_mstar
 
-def get_stellar_mass(gr,rmag,zred,input_zred=True):
+def get_stellar_mass(gr,rmag,zred,d_in_mpc=None,input_zred=True):
     '''
     Computes the stellar mass of object using the SAGA 2 conversion
     
@@ -402,9 +531,9 @@ def get_stellar_mass(gr,rmag,zred,input_zred=True):
         #M = m + 5 - 5*log10(d/pc) - Kcor
         kr = r_kcorr(gr,zred)
     else:
-        #the input is in distance! We ignore the k-correction term for this
-        d_in_pc = zred * 1e6
-        kr = 0
+        #the input is in distance! We ignore the k-correction term for this as we will only use this mode for the smallest dist objects!
+        d_in_pc = d_in_mpc * 1e6
+        kr = r_kcorr(gr,zred)
         
     M_r = rmag + 5 - 5*np.log10(d_in_pc) - kr
 
@@ -971,11 +1100,13 @@ def get_useful_cat_colms(catalog):
     '''
     This functions takes in photometric catalog and computes useful columns that will be needed in filtering stuff
     '''
-    
+
+    ## DO NOT REMOVE PSF OBJECTS!! WE ALREADY HAVE ROBUST SPECTRA AND GALAXY FROM THEM AND SO IT SHOULD NOT MATTE
+    ## just comment out this whole below thing!!
     # Do galaxy/star separation
-    catalog["is_galaxy"] = QueryMaker.not_equal("TYPE", "PSF").mask(catalog)
+    # catalog["is_galaxy"] = QueryMaker.not_equal("TYPE", "PSF").mask(catalog)
     
-    catalog["is_galaxy"] |= QueryMaker.equal("REF_CAT", "L3").mask(catalog)
+    # catalog["is_galaxy"] |= QueryMaker.equal("REF_CAT", "L3").mask(catalog)
     
 
     # Rename/add columns
@@ -987,13 +1118,13 @@ def get_useful_cat_colms(catalog):
     
     # Recalculate mag and err to fix old bugs in the raw catalogs
     ##these are MW transmission corrected magnitudes
-    const = 2.5 / np.log(10)
-    for band in "gr":
-        BAND = band.upper()
-        with np.errstate(divide="ignore", invalid="ignore"):
-            catalog[f"{band}_mag"] = _fill_not_finite(
-                22.5 - const * np.log(catalog[f"FLUX_{BAND}"] / catalog[f"MW_TRANSMISSION_{BAND}"])
-            )
+    # const = 2.5 / np.log(10)
+    # for band in "gr":
+    #     BAND = band.upper()
+    #     with np.errstate(divide="ignore", invalid="ignore"):
+    #         catalog[f"{band}_mag"] = _fill_not_finite(
+    #             22.5 - const * np.log(catalog[f"FLUX_{BAND}"] / catalog[f"MW_TRANSMISSION_{BAND}"])
+    #         )
             
     ## now that we have added all the useful columns let us return this catalo
     return catalog
@@ -1467,7 +1598,31 @@ def add_paths_to_catalog(org_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/d
     return
 
 
-def save_cutouts(ra,dec,img_path,session, size=350, timeout = 30):
+def decompose_maskbits_pow2(num):
+    """
+    Decompose an integer into the exponents of powers of 2 that sum up to it.
+
+    Parameters
+    ----------
+    num : int
+        Input integer.
+
+    Returns
+    -------
+    list of int
+        List of exponents e such that 2**e contributes to num.
+    """
+    exponents = []
+    i = 0
+    while num > 0:
+        if num & 1:   # check if lowest bit is set
+            exponents.append(i)
+        num >>= 1
+        i += 1
+    return exponents
+    
+
+def save_cutouts(ra,dec,img_path,session, size=350, timeout = 120):
     url_prefix = 'https://www.legacysurvey.org/viewer-dev/'
     
     url = url_prefix + f'cutout.fits?ra={ra}&dec={dec}&size=%s&'%size

@@ -648,19 +648,49 @@ def get_lowz_catalogs(zpix):
     return zpix_lowz_f, zpix_trac_lowz_f
 
 
+def vhelio_to_vgsr(vhelio, l_rad, b_rad):
+    '''
+    # Vgsr (km/s) is the galactic standard of rest velocity; referenced to the center of the Galaxy assuming a circular velocity of Sun of 239 km/s plus local solar motion (van der Marel et al. 2012): 
+    #Vgsr = Vhelio + 11.1 cos(l) cos(b) + 251 sin(l) cos(b) + 7.25 sin(b)
+    '''
+    return vhelio + 11.1*np.cos(l_rad)*np.cos(b_rad) + 251*np.sin(l_rad)*np.cos(b_rad) + 7.25*np.sin(b_rad) 
 
 
-def get_corrected_distances(final_cat_i, chunk_size=500,calc_type = "NAM"):
+def vhelio_to_vcmb(vhelio, l_rad, b_rad, l0 = 264.021, b0 = 48.253, v0_cmb_dipole = 369.82):
+    '''
+    Converting the heliocentric redshift to CMB frame redshift. Equation 7 in this paper: https://arxiv.org/pdf/2110.03487
+    '''
+
+    z_helio = vhelio/c_light
+
+    l0_rad = np.radians(l0)
+    b0_rad = np.radians(b0)
+    
+    term = 1 - ( (v0_cmb_dipole/c_light) * (np.sin(b_rad)*np.sin(b0_rad) + np.cos(b_rad)*np.cos(b0_rad)*np.cos(l_rad - l0_rad) ) )
+    
+    z_cmb = (1 + z_helio) / term   - 1
+
+    return z_cmb * c_light
+
+
+def NAM_query(final_cat_i, chunk_size=500,calc_type = "NAM"):
     '''
     Function that computes the expected distances for objects given their RA, DEC and observed line of sight velocities!
-    We will only do this for objects within 2850 km/s line of sight velocities.
+    We will only do this for objects within 2850 km/s line of sight velocities. Note that these velocities are in GSR so need to convert to this from heliocentric
 
     More info here: http://edd.ifa.hawaii.edu/
+
+  calc_type desired Cosmicflows caluclator
+    Options are:
+    "NAM" to query the calculator at http://edd.ifa.hawaii.edu/NAMcalculator
+    "CF3" to query the calculator at http://edd.ifa.hawaii.edu/CF3calculator
+    "CF4" to query the calculator at http://edd.ifa.hawaii.edu/CF3calculator
     '''
+    
     ra_vals = final_cat_i["RA"].data
     dec_vals = final_cat_i["DEC"].data
-    zred_vals = final_cat_i["Z"].data
-
+    vgsr_vals = final_cat_i["V_GSR"].data
+    
     all_fiducial_distances = []
     all_extra_distances = []
 
@@ -675,10 +705,10 @@ def get_corrected_distances(final_cat_i, chunk_size=500,calc_type = "NAM"):
 
         ra_chunk = ra_vals[start:end]
         dec_chunk = dec_vals[start:end]
-        z_chunk = zred_vals[start:end]
+        vgsr_chunk = vgsr_vals[start:end]
 
         outputs = DVcalculator_list(ra_chunk, dec_chunk, system='equatorial',
-                                    parameter='velocity', values=z_chunk * c_light,
+                                    parameter='velocity', values=vgsr_chunk,
                                     calculator=calc_type)
         results = outputs["results"]
 
@@ -710,11 +740,144 @@ def get_corrected_distances(final_cat_i, chunk_size=500,calc_type = "NAM"):
 
 def format_extra_dists_as_string(extra_dists):
     return [",".join(f"{d:.2f}" for d in dlist) for dlist in extra_dists]
+
+
+def get_nam_distances(desi_catalog):
+    '''
+    Function that adds columns for different distance estimates! Makes the DIST_MPC_FIDU column which collects our best distance estimates
+    '''
+
+    ##computing the galactic co-ordinates
+    ra = desi_catalog["RA"].data   # degrees
+    dec = desi_catalog["DEC"].data  # degrees
+
+    # Create a SkyCoord object
+    coords = SkyCoord(ra=ra*u.degree, dec=dec*u.degree, frame='icrs')
+
+    # Convert to Galactic coordinates
+    L_rads = np.radians(coords.galactic.l.deg)  # Galactic longitude
+    B_rads = np.radians(coords.galactic.b.deg)  # Galactic latitude
+
+    ##compute the different velocities!
+    desi_catalog["V_HELIO"] = desi_catalog["Z"] * c_light 
     
-def process_sga_matches(desi_sga_cat):
+    desi_catalog["V_GSR"] = vhelio_to_vgsr(desi_catalog["V_HELIO"], L_rads, B_rads)
+    
+    desi_catalog["V_CMB"] = vhelio_to_vcmb(desi_catalog["V_HELIO"], L_rads, B_rads )
+    desi_catalog["Z_CMB"] = desi_catalog["V_CMB"] / c_light
+
+    #compute V_CMB based luminosity distances for everything!
+    #these are redshifts in the rest frame of the CMB!
+    desi_catalog["DIST_MPC_VCMB"] = Planck18.luminosity_distance(desi_catalog["Z_CMB"].data).value
+    
+    ##run the NAM code
+    nam_cutoff = 2850/c_light #in km/s
+    cat_nam = desi_catalog[(desi_catalog["Z"] < nam_cutoff)]
+    print(f"Below NAM redshift cutoff: {len(cat_nam)} ")
+    #get distances for NAM
+    fidu_dists,extra_dists = NAM_query(cat_nam, chunk_size=500,calc_type = "NAM")
+    fidu_dists =np.array(fidu_dists)
+    cat_nam["DIST_MPC_NAM"] = fidu_dists
+    extra_dists_str = format_extra_dists_as_string(extra_dists)
+    cat_nam["OTHER_DIST_MPC_NAM"] = extra_dists_str
+    cat_nam["DIST_MPC_FIDU"] = fidu_dists
+
+    #wherever the NAM distance is negative, we make it a nan, make the DIST_MPC_FIDU column
+    bad_nam_mask = (fidu_dists < 0)
+    cat_nam["DIST_MPC_FIDU"][bad_nam_mask] = cat_nam["DIST_MPC_VCMB"].data[bad_nam_mask]
+    cat_nam["DIST_MPC_NAM"][bad_nam_mask] = np.nan
+    
+    #working with far away catalog
+    cat_far = desi_catalog[(desi_catalog["Z"] >= nam_cutoff)]
+    print(f"Above NAM redshift cutoff: {len(cat_far)} ")
+    cat_far["DIST_MPC_FIDU"] = cat_far["DIST_MPC_VCMB"].data
+    #putting nan distances for NAM 
+    cat_far["DIST_MPC_NAM"] = np.full(len(cat_far), np.nan)
+    # Create a list of empty lists for the other_dist_mmp
+    blank_extra_dists = [[] for _ in range(len(cat_far))]
+    blank_extra_dists_str = format_extra_dists_as_string(blank_extra_dists)
+    cat_far["OTHER_DIST_MPC_NAM"] = blank_extra_dists_str
+
+    #now we stack these two!!
+    desi_catalog_f = vstack([cat_far, cat_nam])
+
+    return desi_catalog_f
+    
+def read_VI_flags(filename, match_cat):    
+    '''
+    Helper function to read the VI'ed catalogs
+    '''
+    # Load the file as strings first
+    data = np.loadtxt(filename, dtype=str)
+    
+    # Convert first two columns to floats
+    ras = data[:, 0].astype(float)
+    decs = data[:, 1].astype(float)
+    
+    # Convert last column to booleans
+    vi_flag = data[:, 2] == "true"   # True/False as actual Python bools
+    inds = np.arange(len(ras))
+    
+    tab = Table(
+    [inds, ras, decs, vi_flag],
+    names=["INDS", "RA", "DEC", "VI_FLAG"])
+
+    #cross-match this with mathc_cat
+
+    idx, d2d, _ = match_c_to_catalog(c_cat=tab, catalog_cat=match_cat, )
+
+    
+    if np.max(d2d.arcsec) != 0:
+        print(np.min(d2d.arcsec))
+        raise ValueError(f"ERROR IN MATCHING: {np.max(d2d.arcsec)}")
+
+    tab["Z"] = match_cat[idx]["Z"]
+
+    return tab, idx
+
+
+def process_sga_VI_catalog():
+    '''
+    In this function, we process the VI'ed SGA galaxies. Currently we are only doing this for sources that are reprocess needed Tractor and no SGA photometry.
+    These sources will then be added to the SGA processing column as we want to be able to compare/discuss them later in the photo paper! 
+    '''
+
+    #read the original catalogs
+    sga_all_bad = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_sga_bad_trac_bad_VI_NEEDED.fits")
+
+    print("--")
+    print(len(sga_all_bad))
+    print("--")
+
+    #these all VI done for Mstar < 9.25 sources
+    sga_all_bad_VI_path = "/global/homes/v/virajvm/DESI2_LOWZ/desi_dwarfs/data/sga_all_bad_VI.txt"
+
+    cat_all_bad, _ = read_VI_flags(sga_all_bad_VI_path, match_cat = sga_all_bad)
+    
+    if len(sga_all_bad) != len(cat_all_bad):
+        raise ValueError(f"Incorrect length in sga bad cat: {len(sga_all_bad)} {len(cat_all_bad)}")
+        
+    cat_sga_bad_trac_bad_do_reprocess = sga_all_bad[~cat_all_bad["VI_FLAG"].data]
+    print("The number of sources from BAD SGA and REPROCESS TRAC we will reprocess after VI confirmation ", len(cat_sga_bad_trac_bad_do_reprocess ))
+
+    print(cat_sga_bad_trac_bad_do_reprocess["RA","DEC"][:5])
+
+    #then take these two and return then! We will add them to the respective catalogs in the function!
+    return cat_sga_bad_trac_bad_do_reprocess
+    
+    
+def process_sga_matches(desi_sga_cat, gal_type):
     '''
     In this function, we sub-select the objects that are dwarf galaxies and in SGA.
+
+    We will make a catalog that contains both shredded and not shredded tractor sources (in SGA) that have a corresponding SGA magnitude.
+    
+    If they do not have a SGA magnitude, and they are a good tractor source, we push them to the other catalog!
+    If they do not have a SGA magnitude, we include them in the above catalog, and then keep that in mind when doing comparisons with SGA catalog
+    
     '''
+
+    print(f"{gal_type}: Number reprocess galaxies with SGA MASKBIT=12 = {len(desi_sga_cat[ (desi_sga_cat['PHOTO_REPROCESS'] == 1)])}")
 
     #load in the siena cat
     siena_cat = Table.read("/global/cfs/cdirs/cosmo/data/sga/2020/SGA-2020.fits")
@@ -736,7 +899,7 @@ def process_sga_matches(desi_sga_cat):
     desi_sga_cat["SGA_Z_COG_MAG"] = siena_matched["Z_COG_PARAMS_MTOT"]
     desi_sga_cat["SGA_ZRED_LEDA"] = siena_matched["Z_LEDA"]
     desi_sga_cat["SGA_ID"] = siena_matched["SGA_ID"]
-
+    desi_sga_cat["SGA_MAG_LEDA"] = siena_matched["MAG_LEDA"]
     
     #Compute normalized distances
     #the semi-major axis is needed in arcsec and so not muptipled by 60 here
@@ -755,65 +918,94 @@ def process_sga_matches(desi_sga_cat):
     #Build masks
 
     #we want to make sure the SGA catalog always has the photometry, but can relax this afterwards
-    good_photo_mask = (
+    good_sga_mask = (
         (desi_sga_cat["SGA_G_COG_MAG"] > 0) &
         (desi_sga_cat["SGA_R_COG_MAG"] > 0)
     )
     
-    #this is just to make sure
-    inside_galaxy_mask = (all_norm_dist <= 1)
-    final_mask =  good_photo_mask & inside_galaxy_mask 
-    
     #Apply final mask to both catalogs
-    desi_matched_clean = desi_sga_cat[final_mask]
-    print("After photo & dist cuts:", len(desi_matched_clean))
+    desi_matched_sga_good = desi_sga_cat[good_sga_mask]
+
+    print("After photo cuts:", len(desi_matched_sga_good))
     
-    #get the flow corrected distances, only for objeccts with velo < 2850 km/s
-    #everything above that we will assume it is the same as teh redshift 
-
-    nam_cutoff = 2850/c_light #in km/s
-    siena_nam = desi_matched_clean[(desi_matched_clean["Z"] <= nam_cutoff)]
-    #get distances for NAM
-    fidu_dists,extra_dists = get_corrected_distances(siena_nam, chunk_size=500,calc_type = "NAM")
-    siena_nam["DIST_MPC"] = fidu_dists
-    extra_dists_str = format_extra_dists_as_string(extra_dists)
-    siena_nam["OTHER_DIST_MPC"] = extra_dists_str
-
-    #working with far away catalog
-    siena_far = desi_matched_clean[(desi_matched_clean["Z"] > nam_cutoff)]
-    siena_far["DIST_MPC"] = Planck18.luminosity_distance(siena_far["Z"].data).value
-    # Create a list of empty lists
-    blank_extra_dists = [[] for _ in range(len(siena_far))]
-    blank_extra_dists_str = format_extra_dists_as_string(blank_extra_dists)
-    siena_far["OTHER_DIST_MPC"] = blank_extra_dists_str
-
-    #now we stack these two!!
-    desi_cat_f = vstack([siena_far, siena_nam])
-
-    #Compute stellar mass to select only dwarf galaxies!
-    gmag = desi_cat_f["SGA_G_COG_MAG"].data
-    rmag = desi_cat_f["SGA_R_COG_MAG"].data
-    zreds = desi_cat_f["Z"].data
+    ##of the desi matched good!
+    #how many are in BGS Bright and how many are in BGS Faint?
+    print(f"{gal_type}: Total robust cand-dwarfs in SGA = {len(desi_sga_cat[ (desi_sga_cat['PHOTO_REPROCESS'] == 0)]  )}")
+    print(f"{gal_type}: Total robust cand-dwarfs in SGA with SGA photo = {len(desi_matched_sga_good[ (desi_matched_sga_good['PHOTO_REPROCESS'] == 0)]  )}")
+    
+    #Compute stellar masses using SGA photo
+    gmag = desi_matched_sga_good["SGA_G_COG_MAG"].data
+    rmag = desi_matched_sga_good["SGA_R_COG_MAG"].data
     g_r = gmag - rmag
     
     # logm = get_stellar_mass(np.array(g_r), np.array(rmag), np.array(zreds), input_zred=False)
-    logm = get_stellar_mass(g_r, rmag, desi_cat_f["DIST_MPC"].data, input_zred=False)
+    logm = get_stellar_mass(g_r, rmag, desi_matched_sga_good["Z_CMB"].data,  d_in_mpc = desi_matched_sga_good["DIST_MPC_FIDU"].data, input_zred=False)
     
-    desi_cat_f["SGA_GR"] = g_r
-    desi_cat_f["SGA_LOGM_SAGA"] = logm
+    desi_matched_sga_good["SGA_GR"] = g_r
+    desi_matched_sga_good["SGA_LOGM_SAGA"] = logm
+
+    print(f"{gal_type}: Total number of SGA good matches = {len(desi_matched_sga_good)}" ) 
     
-    #Apply dwarf cut
-    dwarf_mask = desi_cat_f["SGA_LOGM_SAGA"] < 9.25
-    desi_siena_dwarfs = desi_cat_f[dwarf_mask]
-    print("Final dwarf sample:", len(desi_siena_dwarfs))
+    #identify the objects with robust tractor photo for sources with SGA photo
+    trac_good_dwarf_mask = (desi_matched_sga_good["PHOTO_REPROCESS"] == 0)
+    print(f"{gal_type}: Number of robust tractor sources among sga matched catalog = {np.sum(trac_good_dwarf_mask)} / {len(desi_matched_sga_good)}" ) 
+
+    #identify sources with photo-reprocess needed and SGA says is a dwarf galaxy
+    trac_shred_dwarf_mask = (desi_matched_sga_good["PHOTO_REPROCESS"] == 1) & (desi_matched_sga_good["SGA_LOGM_SAGA"] < 9.25)
+    print(f"{gal_type}: Number of dwarfs based on SGA from Tractor reprocess = {np.sum(trac_shred_dwarf_mask)} / { np.sum( (desi_matched_sga_good['PHOTO_REPROCESS'] == 1) ) }" ) 
+
+    ##we will now constructing the catalog from which we will be doing a comparison with SGA!
+
+    desi_sga_dwarfs_good  = desi_matched_sga_good[trac_shred_dwarf_mask | trac_good_dwarf_mask]
+
+    print(f"{gal_type}: Final number of candidate dwarf galaxies kept in SGA good (w/photo) catalog = {len(desi_sga_dwarfs_good)} ") 
 
 
+    ##^^these are the ones we draw a comparison against in the SHRED_PHOTO_PAPER
     #let us call all these to be in one sample!
-    desi_siena_dwarfs["SAMPLE"] = ["SGA"]*len(desi_siena_dwarfs)
-    desi_siena_dwarfs["PCNN_FRAGMENT"] = np.ones(len(desi_siena_dwarfs))
-    
-    return desi_siena_dwarfs
+    desi_sga_dwarfs_good["SAMPLE"] = ["SGA"]*len(desi_sga_dwarfs_good)
+    desi_sga_dwarfs_good["PCNN_FRAGMENT"] = np.ones(len(desi_sga_dwarfs_good))
+    desi_sga_dwarfs_good.write(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_{gal_type}_SGA_GOOD_matched_dwarfs.fits",overwrite=True)
 
+    #### NOW LET US WORK WITH THE OBJECTS IN SGA THAT DO NOT HAVE A SGA G/R PHOTOMETRY. 
+    #### for objects that do not have any SGA photo, but robust tractor photo, we still keep them here so we can compare them at the end for ease!!
+    ###for objets that do not have any SGA photo, but shred photo, we VI them to check to see if they could plausibly be dwarf galaxies!!
+
+    desi_matched_sga_bad = desi_sga_cat[~good_sga_mask]
+    
+    
+    print(f"{gal_type}: Galaxies (both robust + reprocess) with bad sga photo:", len(desi_matched_sga_bad))
+
+
+    print(f"{gal_type}: Number reprocess galaxies in SGA, but no SGA photo = {len(desi_matched_sga_bad[ (desi_matched_sga_bad['PHOTO_REPROCESS'] == 1) ]  )}")
+    
+    
+    ##these are sources with robust tractor photo in SGA-2020, but no SGA mag
+    sga_bad_but_tractor_good_mask = (desi_matched_sga_bad["PHOTO_REPROCESS"] == 0)
+
+    desi_matched_sga_bad_trac_good = desi_matched_sga_bad[sga_bad_but_tractor_good_mask]    
+    print(f"{gal_type}: Number robust galaxies in SGA, but no SGA photo = {len(desi_matched_sga_bad_trac_good)} ")
+
+    if len(desi_matched_sga_bad_trac_good) > 0:
+        desi_matched_sga_bad_trac_good["SAMPLE"] = gal_type #we add sample column just for this as it will combined together with the total clean source catalog
+        desi_matched_sga_bad_trac_good.write(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_{gal_type}_SGA_BAD_TRACTOR_GOOD_matched_dwarfs.fits",overwrite=True)
+    else:
+        print("File is zero size!")
+        desi_matched_sga_bad_trac_good.write(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_{gal_type}_SGA_BAD_TRACTOR_GOOD_matched_dwarfs.fits",overwrite=True)
+        
+
+
+
+    
+    #now what about the sources that do not have SGA and are shreddded in tractor, we will VI them! to remove the obvious ones!
+    desi_matched_sga_bad_trac_bad = desi_matched_sga_bad[(desi_matched_sga_bad["PHOTO_REPROCESS"] == 1)]
+    
+    print(f"{gal_type}: Number reprocess galaxies in SGA, but no SGA photo = {len(desi_matched_sga_bad_trac_bad)} ")
+    
+    desi_matched_sga_bad_trac_bad.write(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_{gal_type}_SGA_ALL_BAD.fits",overwrite=True)
+
+    return
+   
 
 def get_image_size(zred,return_arcmin=False):
     """
@@ -842,7 +1034,6 @@ def get_image_size(zred,return_arcmin=False):
         img_size_pix = img_size_arcmin*60/0.262
         return img_size_pix.astype(int)
 
-
     
 if __name__ == '__main__':
      
@@ -852,63 +1043,79 @@ if __name__ == '__main__':
     from desi_lowz_funcs import match_c_to_catalog, get_stellar_mass, get_stellar_mass_mia, calc_normalized_dist
     from desi_lowz_funcs import get_sweep_filename, save_table, is_target_in_south
 
-    load_zpix_iron=False
     process_sga = True
+    compute_nam_dists = True
+    save_int_catalog = False
 
-    zred_cuts = { "BGS_BRIGHT" : 0.2, "BGS_FAINT": 0.3, "LOWZ": 0.3, "ELG":0.5 }
+    zred_cuts = { "BGS_BRIGHT" : 0.4, "BGS_FAINT": 0.4, "LOWZ": 0.4, "ELG":0.5 }
     #either BGS_BRIGHT, ELG or BGS_FAINT
-    gal_types = ["BGS_BRIGHT", "BGS_FAINT", "ELG","LOWZ"]
-
+    gal_types = ["ELG","LOWZ", "BGS_FAINT", "BGS_BRIGHT"]
+    # gal_types = ["BGS_FAINT"]
+    
     save_folder = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs"
 
     save_filenames = {"BGS_BRIGHT":  "iron_bgs_bright_filter_zsucc_zrr02_allfracflux.fits", 
                       "BGS_FAINT": "iron_bgs_faint_filter_zsucc_zrr03_allfracflux.fits",
                        "LOWZ":  "iron_lowz_filter_zsucc_zrr03.fits" ,
                        "ELG": "iron_elg_filter_zsucc_zrr05_allfracflux.fits"}
-    
 
-    if load_zpix_iron:
-        zpix_iron = Table.read("/global/cfs/cdirs/desi/spectro/redux/iron/zcatalog/v1/zall-pix-iron.fits")
+
     
-        #we remove these columns as we will be adding columns from the zpix_trac later and so hope to avoid confusion
-        cols_to_remove = [
-        "FLUX_G", "FLUX_R", "FLUX_Z", "FLUX_W1", "FLUX_W2",
-        "FLUX_IVAR_G", "FLUX_IVAR_R", "FLUX_IVAR_Z", "FLUX_IVAR_W1", "FLUX_IVAR_W2",
-        "FIBERFLUX_G", "FIBERFLUX_Z",
-        "FIBERTOTFLUX_G", "FIBERTOTFLUX_R", "FIBERTOTFLUX_Z",
-        "SERSIC", "SHAPE_R", "SHAPE_E1", "SHAPE_E2"]
-    
-        zpix_iron.remove_columns(cols_to_remove)
-    
-        ##rename columns
-        zpix_iron.rename_column('TARGET_RA', 'RA')
-        zpix_iron.rename_column('TARGET_DEC', 'DEC')
-    
-        ##apply a basic cut of spectype = "GALAXY", z > 0.001 and ZCAT_PRIMARY = 1, and maximum redshift
-        basic_cleaning = (zpix_iron["SPECTYPE"] == "GALAXY") & (zpix_iron["ZCAT_PRIMARY"] == 1) & (zpix_iron["COADD_FIBERSTATUS"] == 0) & (zpix_iron["Z"] < 0.5) & (zpix_iron["Z"] > 0.001)
-    
-        #for the near
-    
-        print(f"Fraction remaining after basic cleaning cut = { np.sum(basic_cleaning)/len(zpix_iron) }")
-    
-        zpix_iron = zpix_iron[basic_cleaning]
-    
-        #select for unique targets
-        _, uni_tgids = np.unique( zpix_iron["TARGETID"].data, return_index=True )
-        zpix_iron = zpix_iron[uni_tgids]
-    
-    
+    allmask_grz = [f"ALLMASK_{b}" for b in "GRZ"]
+    sigma_grz = [f"SIGMA_GOOD_{b}" for b in "GRZ"]
+    sigma_wise = [f"SIGMA_GOOD_W{b}" for b in range(1, 5)]
+    fracflux_grz = [f"FRACFLUX_{b}" for b in "GRZ"]
+    rchisq_grz = [f"RCHISQ_{b}" for b in "GRZ"]
+    fracmasked_grz = [f"FRACMASKED_{b}" for b in "GRZ"]
+            
+
+    if save_int_catalog:
+        if os.path.exists("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/zdownselect-pix-iron.fits"):
+            print("Reading already saved file!")
+            zpix_iron = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/zdownselect-pix-iron.fits")
+        else:
+            zpix_iron = Table.read("/global/cfs/cdirs/desi/spectro/redux/iron/zcatalog/v1/zall-pix-iron.fits")
+        
+            #we remove these columns as we will be adding columns from the zpix_trac later and so hope to avoid confusion
+            cols_to_remove = [
+            "FLUX_G", "FLUX_R", "FLUX_Z", "FLUX_W1", "FLUX_W2",
+            "FLUX_IVAR_G", "FLUX_IVAR_R", "FLUX_IVAR_Z", "FLUX_IVAR_W1", "FLUX_IVAR_W2",
+            "FIBERFLUX_G", "FIBERFLUX_Z",
+            "FIBERTOTFLUX_G", "FIBERTOTFLUX_R", "FIBERTOTFLUX_Z",
+            "SERSIC", "SHAPE_R", "SHAPE_E1", "SHAPE_E2"]
+        
+            zpix_iron.remove_columns(cols_to_remove)
+        
+            ##rename columns
+            zpix_iron.rename_column('TARGET_RA', 'RA')
+            zpix_iron.rename_column('TARGET_DEC', 'DEC')
+        
+            ##apply a basic cut of spectype = "GALAXY", z > 0.001 and ZCAT_PRIMARY = 1, and maximum redshift
+            basic_cleaning = (zpix_iron["SPECTYPE"] == "GALAXY") & (zpix_iron["ZCAT_PRIMARY"] == 1) & (zpix_iron["COADD_FIBERSTATUS"] == 0) & (zpix_iron["Z"] < 0.5) & (zpix_iron["Z"] > 0.001)
+        
+            #for the near
+            
+            print(f"Fraction remaining after basic cleaning cut = { np.sum(basic_cleaning)/len(zpix_iron) }")
+            zpix_iron = zpix_iron[basic_cleaning]
+
+            #select for unique targets
+            _, uni_tgids = np.unique( zpix_iron["TARGETID"].data, return_index=True )
+            zpix_iron = zpix_iron[uni_tgids]
+
+            #save this catalog for future reading!!
+            zpix_iron.write("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/zdownselect-pix-iron.fits", overwrite=True)
+
+
         #apply only maskbit+sigma cleaning or also fracflux cleaning?
         apply_only_maskbit = True
         #should I filter for successful redshifts?
         apply_zsucc_cut = True
         #should I apply some redshift cut to make sure I am dealing with potential dwarf objects only?
         apply_zred_cut = True
-        cross_match_w_cigale = True
+        cross_match_w_cigale = False
         get_color_mstar = True
         #we will remove objects that are within twice the half-light radius of SGA galaxies
     
-        
         #looping over all the sub-samples!
         for i,gal_type in enumerate(gal_types):
             zred_cut = zred_cuts[gal_type]
@@ -980,21 +1187,10 @@ if __name__ == '__main__':
                 
                 ##select the catalog for that sample
                 zpix_sub_cat = zpix_iron[gal_mask]
+
                 print(f"Number selected in {gal_type} with just bitmask selection = {len(zpix_sub_cat)}")
     
     
-                allmask_grz = [f"ALLMASK_{b}" for b in "GRZ"]
-                sigma_grz = [f"SIGMA_GOOD_{b}" for b in "GRZ"]
-                sigma_wise = [f"SIGMA_GOOD_W{b}" for b in range(1, 5)]
-                fracflux_grz = [f"FRACFLUX_{b}" for b in "GRZ"]
-                rchisq_grz = [f"RCHISQ_{b}" for b in "GRZ"]
-                fracmasked_grz = [f"FRACMASKED_{b}" for b in "GRZ"]
-            
-                #number of bands we need 5 sigma detection in
-                nsigma_bands = 2
-                if gal_type == "ELG":
-                    nsigma_bands = 2
-            
                 ##filter by maskbits
                 remove_queries = [
                 "(MASKBITS >> 1) % 2 > 0",  # 1
@@ -1002,33 +1198,27 @@ if __name__ == '__main__':
                 "(MASKBITS >> 6) % 2 > 0",  # 3
                 "(MASKBITS >> 7) % 2 > 0",  # 4
                 "(MASKBITS >> 13) % 2 > 0",  # 6
-                _n_or_more_lt(sigma_grz, nsigma_bands, 5),  # 7
                 ]
-    
-                #For now, we will not apply any SGA cleaning, we will do that in the end stage, because the SGA catalog does have dwarf galaxies.
-                # "(MASKBITS >> 12) % 2 > 0",  # 5
     
                 ## read tractor phot
                 zpix_trac = read_tractorphot(zpix_sub_cat, verbose=True)
                 zpix_trac = get_useful_cat_colms(zpix_trac)
-            
+                
                 #combine some catalogs
                 zpix_sub_cat, zpix_trac = get_final_catalogs(zpix_sub_cat, zpix_trac, gal_type)
-    
+
                 #cross match this with fastspec to make sure the extinction has been done correctly
                 # cross_match_with_fastspec(zpix_sub_cat,gal_type)
             
                 print(f"{gal_type}: Maximum RA difference is =", np.max(np.abs(zpix_trac["RA"] - zpix_sub_cat["RA"] ) ) )
-                
-                mask = get_remove_flag(zpix_trac, remove_queries) == 0
-                mask2 = (zpix_trac["is_galaxy"] == True)
-                tot_mask = mask&mask2
-                ### this is the mask that will keep good objects and remove bad
+
+                ##apply the common cleaning cuts !!
+                tot_mask = get_remove_flag(zpix_trac, remove_queries) == 0
+                ### this is the mask that will keep good photo objects and remove bad
                 print(f"{gal_type}: Fraction that pass cleaning cuts: ", np.sum(tot_mask)/len(tot_mask) )
-            
+    
                 zpix_sub_cat_f = zpix_sub_cat[tot_mask]
-    
-    
+
             ##APPLYIGNG REDSHIFT SUCCESS CRITERION!
             if apply_zsucc_cut:
                 print("Applying redshift success cut.")
@@ -1086,10 +1276,15 @@ if __name__ == '__main__':
                     zpix_sub_cat_f = zpix_sub_cat_f[good_mask]
     
                     print(f"{gal_type}: Fraction of galaxies with robust redshifts = { np.sum(good_mask)/len(good_mask) }")
-    
+        
             if apply_zred_cut:
                 zpix_sub_cat_f = zpix_sub_cat_f[ (zpix_sub_cat_f["Z"] < zred_cut)]
-            
+
+            if compute_nam_dists:
+                ##compute the velocities in different reference frames and the distance columns.
+                ##the fiducial distance column is DIST_MPC_FIDU 
+                zpix_sub_cat_f = get_nam_distances(zpix_sub_cat_f)
+        
             if cross_match_w_cigale:
                 print("Crossmatching with CIGALE VAC")
                 
@@ -1102,19 +1297,26 @@ if __name__ == '__main__':
                 gr_colors = zpix_sub_cat_f["MAG_G"] - zpix_sub_cat_f["MAG_R"]
                 
                 zred_mask = (zpix_sub_cat_f["Z"] < 0.5)
-        
+
                 #uses r band magnitude
-                mstars_SAGA = get_stellar_mass(gr_colors[zred_mask].data, zpix_sub_cat_f["MAG_R"][zred_mask].data ,zpix_sub_cat_f["Z"][zred_mask].data )
+                #ignoring PV contribution, just estimating from cmb frame redshift
+                mstars_SAGA_VCMB = get_stellar_mass(gr_colors[zred_mask].data, zpix_sub_cat_f["MAG_R"][zred_mask].data ,zpix_sub_cat_f["Z_CMB"][zred_mask].data, d_in_mpc = zpix_sub_cat_f["DIST_MPC_VCMB"][zred_mask].data, input_zred=False )
+
+                mstars_SAGA_FIDU = get_stellar_mass(gr_colors[zred_mask].data, zpix_sub_cat_f["MAG_R"][zred_mask].data, zpix_sub_cat_f["Z_CMB"][zred_mask].data ,d_in_mpc = zpix_sub_cat_f["DIST_MPC_FIDU"][zred_mask].data, input_zred=False )
+
                 #uses g band magnitude
-                mstars_M24 = get_stellar_mass_mia(gr_colors[zred_mask].data, zpix_sub_cat_f["MAG_G"][zred_mask].data ,zpix_sub_cat_f["Z"][zred_mask].data)
-        
-                zpix_sub_cat_f["LOGM_SAGA"] = -99*np.ones(len(zpix_sub_cat_f))
-                zpix_sub_cat_f["LOGM_M24"] = -99*np.ones(len(zpix_sub_cat_f))
+                mstars_M24_VCMB = get_stellar_mass_mia(gr_colors[zred_mask].data, zpix_sub_cat_f["MAG_G"][zred_mask].data ,zpix_sub_cat_f["Z_CMB"][zred_mask].data)
+            
+                zpix_sub_cat_f["LOGM_SAGA_VCMB"] = -99*np.ones(len(zpix_sub_cat_f))
+                zpix_sub_cat_f["LOGM_SAGA_FIDU"] = -99*np.ones(len(zpix_sub_cat_f))
+                
+                zpix_sub_cat_f["LOGM_M24_VCMB"] = -99*np.ones(len(zpix_sub_cat_f))
         
                 #add the stellar masses
-                zpix_sub_cat_f["LOGM_M24"][zred_mask] = mstars_M24
-                zpix_sub_cat_f["LOGM_SAGA"][zred_mask] = mstars_SAGA
-        
+                zpix_sub_cat_f["LOGM_M24_VCMB"][zred_mask] = mstars_M24_VCMB
+                zpix_sub_cat_f["LOGM_SAGA_FIDU"][zred_mask] = mstars_SAGA_FIDU
+                zpix_sub_cat_f["LOGM_SAGA_VCMB"][zred_mask] = mstars_SAGA_VCMB
+
             ## for the final catalog, add info on the sweep file!
             zpix_sub_cat_f = add_sweeps_column(zpix_sub_cat_f)
     
@@ -1124,52 +1326,141 @@ if __name__ == '__main__':
             #we filter to make sure at least one observation in each filter for every source!!
             nobs_mask = (zpix_sub_cat_f["NOBS_G"] > 0) & (zpix_sub_cat_f["NOBS_R"] > 0) & (zpix_sub_cat_f["NOBS_Z"] > 0)
             zpix_sub_cat_f = zpix_sub_cat_f[nobs_mask]
-            print(f"Fraction remaining after NOBS cut = { np.sum(nobs_mask)/len(nobs_mask) }")
-    
+            print(f"{gal_type}: Fraction remaining after NOBS cut = { np.sum(nobs_mask)/len(nobs_mask) }")
 
+            print("Saving the intermediated step!!")
+            save_table(zpix_sub_cat_f,  save_folder + "/" + save_filename.replace(".fits","_INT.fits"),comment="")
+
+            
+    if False:
+        
+        for i,gal_type in enumerate(gal_types):
+            save_filename = save_filenames[gal_type]
+            
+            print("Reading the intermediated step!")
+            zpix_sub_cat_f = Table.read(save_folder + "/" + save_filename.replace(".fits","_INT.fits"))
+
+            print(f"{gal_type}: Number of all sources = {len(zpix_sub_cat_f)}")
+
+            #filtering by stellar mass as we do not need higher stellar mass objects!
+            zpix_sub_cat_f = zpix_sub_cat_f[ (zpix_sub_cat_f["LOGM_SAGA_FIDU"] < 9.25) ]
+
+            print(f"{gal_type}: Number of all sources with 9.25 stellar mass cut = {len(zpix_sub_cat_f)}")
+
+            ##identify the subset of sources whose photometry needs to be reprocessed!!
+            ##this includes first spliting into low fracflux and high fracflux cat
+            
+            #identifying objects with large fracflux
+            fracflux_grz = [f"FRACFLUX_{b}" for b in "GRZ"]
+            shred_queries = [Query(_n_or_more_lt(fracflux_grz, 2, 0.2)) ]
+            # note that the this is n_or_more_LT!! so be careful about that!
+            #these are masks for objects that did not satisfy the above condition!
+            shred_mask = get_remove_flag(zpix_sub_cat_f, shred_queries) == 0
+
+            zpix_likely_shred = zpix_sub_cat_f[shred_mask]
+            zpix_not_shred = zpix_sub_cat_f[~shred_mask]
+
+            print(f"{gal_type}: Fraction of sources likely shreds = {np.sum(shred_mask)/len(shred_mask)}")
+            #for the shredded sources, we do not care about the sigma as we will be remeasuring their photometry anyway!!
+            print(f"{gal_type}: Number of likely shredded sources: {len(zpix_likely_shred)}")
+
+            #now from the not shredded catalog we will split into 2 catalogs:
+            #1) poor model fits whose tractor photometry needs to be updated
+            #2) good model fits that we put in the robust modelled sources!
+        
+            ##getting the RCHISQ mask. Simply if even one band is above RCHISQ = 4, we will reprocess it!
+            rchisq_cut = 4
+            poor_model_fit = (zpix_not_shred["RCHISQ_G"] > rchisq_cut) | (zpix_not_shred["RCHISQ_R"] > rchisq_cut) | (zpix_not_shred["RCHISQ_Z"] > rchisq_cut) 
+
+            ##identifying the subset of sources to be moved into processing needed catalog
+            not_shred_bad_fit = poor_model_fit 
+            print(f"{gal_type}: Number of sources from not shredded to be moved to additional processing: {np.sum(not_shred_bad_fit)}")
+        
+            not_shred_good_fit = ~poor_model_fit 
+            print(f"{gal_type}: Number of sources from not shredded that have good model fits! No SIGMA_GOOD cut applied!: {np.sum(not_shred_good_fit)}")
+
+            ##combininig the different catalogs together!!
+            zpix_reprocess_needed  = vstack( [  zpix_likely_shred, zpix_not_shred[not_shred_bad_fit]  ]   )
+            zpix_reprocess_needed["GOOD_SIGMA"] = np.ones(len(zpix_reprocess_needed)) * -99
+
+            zpix_all_good = zpix_not_shred[not_shred_good_fit]
+
+            #From the robust tractor sources, seeing what fraction have SIGMA > 5 in at two bands
+            nsigma_bands = 2
+            sigma_grz = [f"SIGMA_GOOD_{b}" for b in "GRZ"]
+            nsigma_queries = [
+                _n_or_more_lt(sigma_grz, nsigma_bands, 5),  # 7
+                ]
+            good_sigma_good =  get_remove_flag(zpix_all_good, nsigma_queries) == 0
+        
+            print(f"{gal_type}: Number of sources from robust tractor with bad SIGMA!: {len(zpix_all_good) - np.sum(good_sigma_good)}")
+            zpix_all_good["GOOD_SIGMA"] = good_sigma_good.astype(int)
+            
+            zpix_reprocess_needed["PHOTO_REPROCESS"] = np.ones(len(zpix_reprocess_needed))
+            zpix_all_good["PHOTO_REPROCESS"] = np.zeros(len(zpix_all_good))
+
+            if np.max(zpix_all_good["RCHISQ_R"]) > 4:
+                raise ValueError("Some error in selecting robust sources!!")
+
+            #for pipeline purposes we will combine the other two catalogs and separate them later!
+            zpix_sub_total = vstack([ zpix_reprocess_needed, zpix_all_good ])
+
+            print(f"{gal_type}: Number of sources in bad fit + good fit catalog!: {len(zpix_sub_total )}")
+        
             #at the very end apply the SGA filtering cut to split the catalog.
             #One will be where MASKBIT is removed, and we will be dealing with the fragmentation in the normal typical way
             #the second one is where the sources have that MASKBIT and we will be choosing which objects are dwarfs and which are not.
     
             sga_queries = ["(MASKBITS >> 12) % 2 > 0"]
-            sga_mask = get_remove_flag(zpix_sub_cat_f, sga_queries) == 0
+            sga_mask = get_remove_flag(zpix_sub_total, sga_queries) == 0
     
-            zpix_sub_cat_w_sga = zpix_sub_cat_f[~sga_mask]
-            zpix_sub_cat_no_sga = zpix_sub_cat_f[sga_mask]
-    
+            zpix_sub_cat_w_sga = zpix_sub_total[~sga_mask]
+            zpix_sub_cat_no_sga = zpix_sub_total[sga_mask]
+            
             print(f"{gal_type}: Objects in with SGA catalog = {len(zpix_sub_cat_w_sga)}")
             print(f"{gal_type}: Objects not in SGA catalog = {len(zpix_sub_cat_no_sga)}")
-            print(f"{gal_type}: Fraction removed by SGA maskbit cut = {len(zpix_sub_cat_w_sga)/len(zpix_sub_cat_f)  }")
+            print(f"{gal_type}: Fraction with SGA maskbit cut = {len(zpix_sub_cat_w_sga)/len(zpix_sub_total)  }")
+
+            ##NOTE THAT WE HAVE ALREADY APPLIED THE <9.25 CUT FOR TRACTOR SOURCES
+            ##we are not really trying to compare against the 
+
+            ## save this catalog. This is catalog with the MASKBIT cut applied! However, note this still could include sources associated with SGA sources
+            print("Saving NO SGA file")
             
-            ## save this catalog. This is catalog with the MASBIT cut applied!
             save_table(zpix_sub_cat_no_sga,  save_folder + "/" + save_filename,comment="")
-    
+
             #save the with SGA catalog too
+            print("Saving WITH SGA file")
+
+            ##how many sources with SGA and need reprocessing?
+            print(f"{gal_type}: In SGA and need reprocessing = {len(zpix_sub_cat_w_sga[zpix_sub_cat_w_sga['PHOTO_REPROCESS'] == 1])}")
+            
+            #for the SGA ones we save all teh ones for reference, also not that many
             save_table(zpix_sub_cat_w_sga,  save_folder + "/" + save_filename.replace(".fits","_W_SGA.fits"),comment="")
+                
+        ##add the image size pix column
     
+        for sample_i in gal_types:
+            file_1 = save_folder + "/" + save_filenames[sample_i]
+            file_2 = save_folder + "/" + save_filenames[sample_i].replace(".fits","_W_SGA.fits")
+    
+            print(file_1)
+            print(file_2)
+            
+            zpix_cat_1 = Table.read(file_1)
+            zpix_cat_2 = Table.read(file_2)
+            
+            ##add column detailing info on the cutout size needed
+            zpix_cat_1["IMAGE_SIZE_PIX"] = get_image_size(zpix_cat_1["Z"].data,return_arcmin=False)
+            zpix_cat_2["IMAGE_SIZE_PIX"] = get_image_size(zpix_cat_2["Z"].data,return_arcmin=False)
+            
+            #save the file now!
+            save_table(zpix_cat_1,  file_1,comment="")
+            save_table(zpix_cat_2,  file_2,comment="")
 
-
-    ##add the image size pix column
-
-    for sample_i in gal_types:
-        file_1 = save_folder + "/" + save_filenames[sample_i]
-        file_2 = save_folder + "/" + save_filenames[sample_i].replace(".fits","_W_SGA.fits")
-
-        print(file_1)
-        print(file_2)
-        zpix_cat_1 = Table.read(file_1)
-        zpix_cat_2 = Table.read(file_2)
-        
-        ##add column detailing info on the cutout size needed
-        zpix_cat_1["IMAGE_SIZE_PIX"] = get_image_size(zpix_cat_1["Z"].data,return_arcmin=False)
-        zpix_cat_2["IMAGE_SIZE_PIX"] = get_image_size(zpix_cat_2["Z"].data,return_arcmin=False)
-        
-        #save the file now!
-        save_table(zpix_cat_1,  file_1,comment="")
-        save_table(zpix_cat_2,  file_2,comment="")
-        
     if process_sga:
-        ##by construction, the LOWZ and ELG samples do not overlap with the SGA catalog
+        # TODO INCORPORATE THE VI TO MAKE THE FINAL CLEAN+SHRED+SGA for comparison catalogs!
+        ##by construction, the LOWZ and ELG samples do not overlap with the SGA catalog :) 
 
         bgsb_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_bgs_bright_filter_zsucc_zrr02_allfracflux_W_SGA.fits")
         bgsf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_bgs_faint_filter_zsucc_zrr03_allfracflux_W_SGA.fits")
@@ -1180,22 +1471,85 @@ if __name__ == '__main__':
         print("Number of sources overlapping with SGA pixels: ", len(bgsb_cat), len(bgsf_cat))
         print("Note that all of these are not dwarf galaxies!")
 
-        desi_sga_cat = vstack([bgsb_cat, bgsf_cat])
+        samps_cat = { "BGS_BRIGHT" : bgsb_cat, "BGS_FAINT": bgsf_cat }
+        
+        for samp_i in samps_cat.keys():
+            print(samp_i)
+            process_sga_matches( samps_cat[samp_i] , gal_type = samp_i)
+            print("----"*5)
 
-        desi_sga_dwarfs = process_sga_matches(desi_sga_cat)
 
+        ##combine the catalogs to get the catalogs on which we will be running our pipeline!
 
+        #first we combine the catalogs that have SGA-photometry
+        bgsb_cat_sga_good = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_BGS_BRIGHT_SGA_GOOD_matched_dwarfs.fits")
+        bgsf_cat_sga_good = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_BGS_FAINT_SGA_GOOD_matched_dwarfs.fits")
+        desi_cat_sga_good = vstack([ bgsb_cat_sga_good, bgsf_cat_sga_good ])
+        print(f"Total number in DESI catalog (across robust+reprocess) that have SGA photo and candidate dwarf = {len(desi_cat_sga_good)}")
+        desi_cat_sga_good.write("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_SGA_GOOD_matched_dwarfs.fits", overwrite=True)
+
+        #combine the ones we need to VI
+        bgsb_cat_sga_bad_trac_bad = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_BGS_BRIGHT_SGA_ALL_BAD.fits")
+        bgsf_cat_sga_bad_trac_bad = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_BGS_FAINT_SGA_ALL_BAD.fits")
+        desi_cat_sga_bad_trac_bad = vstack([ bgsb_cat_sga_bad_trac_bad, bgsf_cat_sga_bad_trac_bad ])
+
+        print(f"DESI SGA_BAD_TRAC_BAD N = {len(desi_cat_sga_bad_trac_bad)}")
+
+        #save this file now!!
+        desi_cat_sga_bad_trac_bad.write("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_sga_bad_trac_bad_VI_NEEDED.fits", overwrite=True)
+        
+    
+        #combine the ones we need to send over to robust photometry catalog!!
+        bgsb_cat_sga_bad_trac_good = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_BGS_BRIGHT_SGA_BAD_TRACTOR_GOOD_matched_dwarfs.fits")
+        bgsf_cat_sga_bad_trac_good = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_BGS_FAINT_SGA_BAD_TRACTOR_GOOD_matched_dwarfs.fits")
+        desi_cat_sga_bad_trac_good = vstack([ bgsb_cat_sga_bad_trac_good, bgsf_cat_sga_bad_trac_good ])
+        
+        # remove_targetids = np.array([39633113705355525, 39627760049588529]) #this was based on a quick VI as only 52 sources in total
+        remove_targetids = np.array([39627760049588529]) #this was based on a quick VI as only 52 sources in total
+        
+#WE ONLY HAVE ONE VIA 
+        
+        print(f"DESI SGA_BAD_TRAC_GOOD N = {len(desi_cat_sga_bad_trac_good)}")
+        # Keep rows whose TARGETID is NOT in remove_targetids
+        mask = ~np.isin(desi_cat_sga_bad_trac_good["TARGETID"], remove_targetids)
+        desi_cat_sga_bad_trac_good = desi_cat_sga_bad_trac_good[mask]
+        print(f"DESI SGA_BAD_TRAC_GOOD, post mini VI, N = {len(desi_cat_sga_bad_trac_good)}")
+
+        #save this. We will merge this later with the total clean catalog sources! We will not run reprocessing on this as not needed. Cannot compare with SGA as well. 
+        #and we are already doing validation of robust tractor sources.
+        desi_cat_sga_bad_trac_good.write("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_sga_bad_trac_good_dwarfs_CLEAN.fits", overwrite=True)
+    
+        ##process the VI'ed bad SGA catalogs!!
+        if True:
+            print("Processing the VI catalogs")
+
+            cat_sga_bad_trac_bad_do_reprocess = process_sga_VI_catalog()
+            cat_sga_bad_trac_bad_do_reprocess["SAMPLE"] =  ["SGA"]*len(cat_sga_bad_trac_bad_do_reprocess)
+           
+            #this will be combined with the desi_sga catalog that we will reprocessing!! This will be done in the dwarf_photo_pipeline paper
+            cat_sga_bad_trac_bad_do_reprocess.write("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_sga_bad_trac_bad_REPROCESS.fits", overwrite=True)
+
+            ##we then add this reprocess column with the SGA catalog above as those all the SGA sources we will reprocess!
+
+            desi_cat_sga_good = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_SGA_GOOD_matched_dwarfs.fits")
+
+            desi_cat_sga_reprocess_final = vstack([ desi_cat_sga_good, cat_sga_bad_trac_bad_do_reprocess])
+
+            print(f"Total number of SGA sources that we will reprocess = {len(desi_cat_sga_reprocess_final)}")
+
+            #save this catalog
+            desi_cat_sga_reprocess_final.write("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_SGA_matched_dwarfs_REPROCESS.fits", overwrite=True)
+
+        
+        #we add a SGA MASKBIT12 file for reference! so we know for future reference
+
+        
+        ##WHY WAS I DOING THIS?? THIS SEEMS LIKE A TYPO, BECAUSE THIS CLEARLY IS A DWARF GALAXY .... and the cutout imaging works??
         ##39628526738999876 -> this object we want to remove as it is not a dwarf galaxy and has missing imaging 
         ## and thus the cutout viewer tool breaks there
+        # desi_sga_dwarfs = desi_sga_dwarfs[desi_sga_dwarfs["TARGETID"] != 39628526738999876]
 
-        desi_sga_dwarfs = desi_sga_dwarfs[desi_sga_dwarfs["TARGETID"] != 39628526738999876]
-
-        save_table(desi_sga_dwarfs,  save_folder + "/iron_sga_matched_dwarfs.fits",comment = "")
-
-        
-
-        
-
+    
 # ## According to Ashley Ross, the LSS catalogs contain the tile based redshift which would be slightly different than the healpix
 # ##based redshift. The below file would give us the tile based redshift. 
 

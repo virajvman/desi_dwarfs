@@ -123,12 +123,34 @@ def plan(comm=None,outdir_data='.', mp=1):
     alldec = np.array(out["DEC"],dtype = object)
     allobjids = np.array(out["TARGETID"],dtype = object)
     allsizes = np.array(out["IMAGE_SIZE_PIX"],dtype = object)
-    
-    file_names = []
-    for k in range(len(allobjids)):
-        file_i = outdir_data + f"/image_tgid_{allobjids[k]:d}_ra_{allra[k]:.3f}_dec_{alldec[k]:3f}.fits"         
-        file_names.append(file_i)
 
+    ##need to check what fraction of these files exist!!
+    file_names = []
+    need_inds = []
+    n = len(out)
+
+    print("Checking what images already exist!!")
+    for k in range(len(allobjids)):
+        file_i = outdir_data + f"/image_tgid_{allobjids[k]:d}_ra_{allra[k]:.3f}_dec_{alldec[k]:.3f}.fits"  
+        if os.path.exists(file_i):
+            pass
+        else:
+            file_names.append(file_i)
+            need_inds.append(k)
+
+        # log every 100 iterations
+        if (k + 1) % 1000 == 0 or (k + 1) == n:
+            print(f"Processed {k+1}/{n} ({(k+1)/n:.1%})")
+
+    need_inds = np.array(need_inds)
+
+    print(f"Need to download {len(need_inds)}/{len(allra)} images!")
+
+    allra = allra[need_inds]
+    alldec = alldec[need_inds]
+    allobjids = allobjids[need_inds]
+    allsizes = allsizes[need_inds]
+    
     ## we need to get the information now 
     jpegfiles = np.array(file_names, dtype = object)
     

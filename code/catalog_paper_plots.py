@@ -21,6 +21,7 @@ import matplotlib.cm as cm
 import matplotlib
 import matplotlib.colors as mcolors
 from astropy.cosmology import Planck18
+import cmasher as cmr
 
 
 sample_colors = {"BGS_BRIGHT" : "#882255", "BGS_FAINT": "#CC6677", "LOWZ":"#DDCC77", "ELG": "#88CCEE" }
@@ -509,7 +510,7 @@ def get_delta_mag_fracflux_plot(resample_bins=False):
 
         h, xedges, yedges, im = ax[0].hist2d(resampled_ff, resampled_dm, range = ( (1e-2, 5,), (-5, 2) ),
                      bins = [ np.logspace(-2, np.log10(5), bins), np.linspace(-5,2,bins) ],norm=LogNorm(vmin=10,vmax = 1000),
-                    cmap = "BuPu")
+                    cmap = cmr.dusk_r)
         
         ax[0].vlines(x = 0.2, ymin = -5, ymax = 2, color= "grey", ls = "--",lw = 1)
         ax[0].set_xlabel(r"FRACFLUX",fontsize = 13)
@@ -549,12 +550,15 @@ def measure_bias_scatter(quant_1, quant_2):
     print(med_val, sigma)
     return med_val, sigma
 
+
 def make_stellar_mass_comparison_plot():
     '''
     This function makes the stellar mass comparison plot
     '''
 
-    clean_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v2.fits")
+    from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+
+    clean_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4.fits")[:50000]
 
     print(len(clean_cat))
     clean_cat = clean_cat[clean_cat["LOGM_SAGA"] < 9.5]
@@ -590,21 +594,21 @@ def make_stellar_mass_comparison_plot():
     print("Finished matching fastspecfit!")
 
     ## loading the cosmos 2020 catalog
-    cos2020_data = np.load("/pscratch/sd/v/virajvm/desi2_lowz_data/catalogs/cosmos2020_data.npy")
-    iron = SkyCoord(np.array(clean_cat["RA"])*u.degree, np.array(clean_cat["DEC"])*u.degree  )
-    cos = SkyCoord( cos2020_data[0]*u.degree, cos2020_data[1]*u.degree  )
-    idx, d2d, _ = iron.match_to_catalog_sky(cos)
-    clean_cat_cos_match = clean_cat[d2d.arcsec < 1]
-    cos2020_mstar = cos2020_data[2][idx][d2d.arcsec < 1]
+    # cos2020_data = np.load("/pscratch/sd/v/virajvm/desi2_lowz_data/catalogs/cosmos2020_data.npy")
+    # iron = SkyCoord(np.array(clean_cat["RA"])*u.degree, np.array(clean_cat["DEC"])*u.degree  )
+    # cos = SkyCoord( cos2020_data[0]*u.degree, cos2020_data[1]*u.degree  )
+    # idx, d2d, _ = iron.match_to_catalog_sky(cos)
+    # clean_cat_cos_match = clean_cat[d2d.arcsec < 1]
+    # cos2020_mstar = cos2020_data[2][idx][d2d.arcsec < 1]
 
-    ##make the plot
+    # ##make the plot
 
-    ax = make_subplots(ncol = 5,nrow = 1,col_spacing = 0.25)
+    ax = make_subplots(ncol = 4,nrow = 1,col_spacing = 0.25)
 
     title_size = 14
 
     xmstar = "LOGM_SAGA"
-    cmap = "BuPu"
+    cmap = cmr.dusk_r
     
     vmin = 1
     vmax = 1000
@@ -618,9 +622,9 @@ def make_stellar_mass_comparison_plot():
 
     ax_id = 0
     ax[ax_id].set_title(r"CIGALE (no AGN)",fontsize = title_size )
-    h, xedges, yedges, im=ax[ax_id].hist2d(clean_cat_hu_match[xmstar],hu_match["LOGMSTAR_HU"],range= ( (6,9.5),(6,9.5)),bins= 50,norm=LogNorm(vmin=vmin,vmax=vmax) ,cmap=cmap)
+    # h, xedges, yedges, im=ax[ax_id].hist2d(clean_cat_hu_match[xmstar],hu_match["LOGMSTAR_HU"],range= ( (6,9.5),(6,9.5)),bins= 50,norm=LogNorm(vmin=vmin,vmax=vmax) ,cmap=cmap, rasterized=True)
 
-    bias, scatter = measure_bias_scatter(clean_cat_hu_match[xmstar].data,hu_match["LOGMSTAR_HU"])
+    # bias, scatter = measure_bias_scatter(clean_cat_hu_match[xmstar].data,hu_match["LOGMSTAR_HU"])
     
     ax[ax_id].text( xpos,ypos,rf"b = {bias:.2f}, $\sigma$ = {scatter:.2f}",fontsize = fsize)
 
@@ -634,17 +638,17 @@ def make_stellar_mass_comparison_plot():
         0.02  # Height (thin bar)
     ])
     
+    # ax_id = 1
+    # ax[ax_id].set_title(r"COSMOS2020",fontsize = title_size )
+    # ax[ax_id].scatter(clean_cat_cos_match[xmstar],cos2020_mstar,color = "purple",s=10,marker="s")
+
+    # bias, scatter = measure_bias_scatter(clean_cat_cos_match[xmstar].data,cos2020_mstar) 
+
+    # ax[ax_id].text( xpos,ypos,rf"b = {bias:.2f}, $\sigma$ = {scatter:.2f}",fontsize = fsize)
+
     ax_id = 1
-    ax[ax_id].set_title(r"COSMOS2020",fontsize = title_size )
-    ax[ax_id].scatter(clean_cat_cos_match[xmstar],cos2020_mstar,color = "purple",s=10,marker="s")
-
-    bias, scatter = measure_bias_scatter(clean_cat_cos_match[xmstar].data,cos2020_mstar) 
-
-    ax[ax_id].text( xpos,ypos,rf"b = {bias:.2f}, $\sigma$ = {scatter:.2f}",fontsize = fsize)
-
-    ax_id = 2
     ax[ax_id].set_title(r"GSWLC",fontsize = title_size )
-    h, xedges, yedges, im=  ax[ax_id].hist2d(clean_cat_gswlc_match[xmstar],gswlc_match["LOGMSTAR"],range= ( (6,9.5),(6,9.5)),bins= 50,norm=LogNorm(vmin=1, vmax=50) ,cmap=cmap)
+    h, xedges, yedges, im=  ax[ax_id].hist2d(clean_cat_gswlc_match[xmstar],gswlc_match["LOGMSTAR"],range= ( (6,9.5),(6,9.5)),bins= 50,norm=LogNorm(vmin=1, vmax=50) ,cmap=cmap, rasterized=True)
 
     bias, scatter = measure_bias_scatter(clean_cat_gswlc_match[xmstar].data,gswlc_match["LOGMSTAR"].data)
     ax[ax_id].text( xpos,ypos,rf"b = {bias:.2f}, $\sigma$ = {scatter:.2f}",fontsize = fsize)
@@ -659,9 +663,9 @@ def make_stellar_mass_comparison_plot():
     ])    
     
     #######
-    ax_id = 3
+    ax_id = 2
     ax[ax_id].set_title(r"Fastspecfit",fontsize = title_size )
-    h, xedges, yedges, im =  ax[ax_id].hist2d(clean_cat_fspec_match[xmstar],fspec_mstar_f,range= ( (6,9.5),(6,9.5)),bins= 50,norm=LogNorm(vmin=1, vmax=1000) ,cmap=cmap)
+    h, xedges, yedges, im =  ax[ax_id].hist2d(clean_cat_fspec_match[xmstar],fspec_mstar_f,range= ( (6,9.5),(6,9.5)),bins= 50,norm=LogNorm(vmin=1, vmax=1000) ,cmap=cmap, rasterized=True)
 
     bias, scatter = measure_bias_scatter(clean_cat_fspec_match[xmstar].data,fspec_mstar_f)
     ax[ax_id].text( xpos,ypos,rf"b = {bias:.2f}, $\sigma$ = {scatter:.2f}",fontsize = fsize)
@@ -676,9 +680,9 @@ def make_stellar_mass_comparison_plot():
     ])
 
     #######
-    ax_id = 4
+    ax_id = 3
     ax[ax_id].set_title(r"gr-based, de Los Reyes+(2024)",fontsize = title_size )
-    h, xedges, yedges, im =  ax[ax_id].hist2d(clean_cat[xmstar], clean_cat["LOGM_M24"] ,range= ( (6,9.5),(6,9.5)),bins= 50,norm=LogNorm(vmin=1, vmax=1000) ,cmap=cmap)
+    h, xedges, yedges, im =  ax[ax_id].hist2d(clean_cat[xmstar], clean_cat["LOGM_M24"] ,range= ( (6,9.5),(6,9.5)),bins= 50,norm=LogNorm(vmin=1, vmax=1000) ,cmap=cmap, rasterized=True)
 
     bias,scatter = measure_bias_scatter(clean_cat[xmstar],clean_cat["LOGM_M24"]) 
     ax[ax_id].text( xpos,ypos,rf"b = {bias:.2f}, $\sigma$ = {scatter:.2f}",fontsize = fsize)
@@ -694,17 +698,17 @@ def make_stellar_mass_comparison_plot():
     ])
 
     for i,axi in enumerate(ax):
-        axi.set_xlim([6.5,9.5])
-        axi.set_ylim([6.5,9.5])
+        axi.set_xlim([6.5,9.25])
+        axi.set_ylim([6.5,9.25])
         axi.plot([6,11],[6,11],color = "k",lw = 1)
-        axi.set_xlabel(r"gr-based $\log_{10}(M_{\star})$",size= 16)
-        ax[0].set_ylabel(r"$\log_{10}(M_{\star})$",size= 16)
+        axi.set_xlabel(r"gr-based $\log_{10}(M_{\bigstar})$",size= 16)
+        ax[0].set_ylabel(r"$\log_{10}(M_{\bigstar})$",size= 16)
         ax[0].grid(ls = ":",color = "lightgrey",alpha = 0.5)
     
         if i != 0:
             axi.set_yticklabels([])
 
-    plt.savefig("/global/homes/v/virajvm/DESI2_LOWZ/quenched_fracs_nbs/paper_plots/stellar_mass_comp.pdf",bbox_inches="tight",dpi=300)
+    plt.savefig("/global/homes/v/virajvm/DESI2_LOWZ/quenched_fracs_nbs/paper_plots/stellar_mass_comp.pdf",bbox_inches="tight")
     plt.close()
 
     return
@@ -1472,7 +1476,7 @@ if __name__ == '__main__':
 
     # make_shred_frac_plot()
 
-    make_pcnn_completeness()
+    # make_pcnn_completeness()
     
     # make_img_s_pcnn_panels()
 
@@ -1491,7 +1495,7 @@ if __name__ == '__main__':
 
     # halpha_lumi_plot()
     
-    # make_stellar_mass_comparison_plot()
+    make_stellar_mass_comparison_plot()
 
     # make_sky_density_plot()
     # 

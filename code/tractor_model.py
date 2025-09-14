@@ -28,6 +28,7 @@ import time
 import sys
 import argparse
 
+
 def simple_progress_bar(iteration, total, length=30):
     percent = iteration / total
     bar = '=' * int(length * percent) + '-' * (length - int(length * percent))
@@ -204,7 +205,6 @@ def compute_psf_sigma(tractor_subset, band, average_psfsize, mean=True):
 
 
 
-
 def build_model_image(tractor_subset, wcs, average_psfsize, mean_psf=False):
     return np.array([
         srcs2image(tractor_subset, wcs, band=band, allbands='grz', pixelized_psf=None, psf_sigma=compute_psf_sigma(tractor_subset, band, average_psfsize[band], mean=mean_psf))
@@ -260,33 +260,48 @@ def get_img_source(i, ra, dec, tgid, file_path, img_path, width, pixscale=0.262,
     Getting the model of the targeted DESI source
     '''
     
-    # if os.path.exists(f"{file_path}/tractor_source_model.npy"):
-    #     return
-
-    tractor = load_tractor(file_path)
+    if os.path.exists(f"{file_path}/tractor_source_model.npy"):
+        return
+    else:
+        tractor = load_tractor(file_path)
+        
+        seps = compute_separations(ra, dec, tractor.get("ra"), tractor.get("dec"))
     
-    seps = compute_separations(ra, dec, tractor.get("ra"), tractor.get("dec"))
+        #this is not a reliable way to get the source because there can be floating point errors? So maybe 0.1 arcsecs
+        tractor_source = tractor[np.argmin(seps)]
 
-    #this is not a reliable way to get the source because there can be floating point errors? So maybe 0.1 arcsecs
-    tractor_source = tractor[np.argmin(seps)]
 
-    if np.min(seps) > 1:
-        print(f"FYI, this object has rather large separation of {np.min(seps)} arcsec. Probably due to the LOWZ target catalog issue. RA={ra}, DEC={dec}, PATH={file_path}")
+        img_data = fits.open(img_path)[0].data
+        
+        if np.min(seps) > 1:
+            print(f"FYI, this object has rather large separation of {np.min(seps)} arcsec. Probably due to the LOWZ target catalog issue. RA={ra}, DEC={dec}, PATH={file_path}")
 
-    # if len(tractor_source) != 1:
-    #     print(f"Ambiguity for index {i} and coords ({ra}, {dec})")
-    #     raise ValueError("Tractor source match not unique.")
 
-    #if this source has a missing psfsize then we assume an average psfsize from the catalog
-    ave_psfsize_dict = { "g": np.mean(tractor.get("psfsize_g")), "r": np.mean(tractor.get("psfsize_r")),  "z": np.mean(tractor.get("psfsize_z"))    }
+        if ~np.isfinite(tractor_source.get("shape_r")):
+            print(f"The source size {tgid} was not finite! And we will not save the source. It will just be an empty array ")
 
-    wcs = make_custom_wcs(ra, dec, width, pixscale)
-    mod = build_model_image(tractor_source, wcs, ave_psfsize_dict)
-    np.save(f"{file_path}/tractor_source_model.npy", mod)
+            mod = np.zeros_like(img_data)
+            
+            np.save(f"{file_path}/tractor_source_model.npy",  mod) 
+        
+            save_rgb_tripanel(mod, img_data, file_path, tgid, width, testing,use_center_only=False)
 
-    img_data = fits.open(img_path)[0].data
-    
-    save_rgb_tripanel(mod, img_data, file_path, tgid, width, testing,use_center_only=False)
+        else:
+        
+            # if len(tractor_source) != 1:
+            #     print(f"Ambiguity for index {i} and coords ({ra}, {dec})")
+            #     raise ValueError("Tractor source match not unique.")
+        
+            #if this source has a missing psfsize then we assume an average psfsize from the catalog
+            ave_psfsize_dict = { "g": np.mean(tractor.get("psfsize_g")), "r": np.mean(tractor.get("psfsize_r")),  "z": np.mean(tractor.get("psfsize_z"))    }
+        
+            wcs = make_custom_wcs(ra, dec, width, pixscale)
+            mod = build_model_image(tractor_source, wcs, ave_psfsize_dict)
+            np.save(f"{file_path}/tractor_source_model.npy", mod)
+        
+            img_data = fits.open(img_path)[0].data
+            
+            save_rgb_tripanel(mod, img_data, file_path, tgid, width, testing,use_center_only=False)
 
     return
 
@@ -300,34 +315,49 @@ def get_bkg_sources(i, ra, dec, tgid, file_path, img_path, width, pixscale=0.262
 
     tractor = load_tractor(file_path)
     
-    segm = np.load(f"{file_path}/main_segment_map.npy")
-    img_data = fits.open(img_path)[0].data
-    wcs_cutout = WCS(fits.getheader(img_path))
+    #we want to also remove sources that do not have finite shape_r
+    finite_shaper_mask = np.isfinite(tractor.get("shape_r"))
+    tractor = tractor[finite_shaper_mask]
 
-    xpix, ypix, _ = wcs_cutout.all_world2pix(tractor.get("ra"), tractor.get("dec"), 0, 1)
-
-    #we want to remove sources that are at the edge of the box
-    on_edge_mask = (ypix.astype(int) == width) |  (xpix.astype(int) == width)
-
-    tractor = tractor[~on_edge_mask]
-    xpix = xpix[~on_edge_mask]
-    ypix = ypix[~on_edge_mask]
+    if os.path.exists(f"{file_path}/main_segment_map.npy"):
+        
+        segm = np.load(f"{file_path}/main_segment_map.npy")
     
-    on_main = ~np.isnan(segm[ypix.astype(int), xpix.astype(int)])
-    bkg_sources = tractor[~on_main]
+        if np.max(segm) == 0:
+            print(f"Main segment map does not exist: {tgid}")
+            return
+            
+        else: 
+            img_data = fits.open(img_path)[0].data
+            wcs_cutout = WCS(fits.getheader(img_path))
+        
+            xpix, ypix, _ = wcs_cutout.all_world2pix(tractor.get("ra"), tractor.get("dec"), 0, 1)
+        
+            #we want to remove sources that are at the edge of the box
+            on_edge_mask = (ypix.astype(int) == width) |  (xpix.astype(int) == width)
+        
+            tractor = tractor[~on_edge_mask]
+            xpix = xpix[~on_edge_mask]
+            ypix = ypix[~on_edge_mask]
+            
+            on_main = ~np.isnan(segm[ypix.astype(int), xpix.astype(int)])
+            bkg_sources = tractor[~on_main]
+        
+            wcs = make_custom_wcs(ra, dec, width, pixscale)
+        
+            #if this source has a missing psfsize then we assume an average psfsize from the catalog
+            ave_psfsize_dict = { "g": np.mean(tractor.get("psfsize_g")), "r": np.mean(tractor.get("psfsize_r")),  "z": np.mean(tractor.get("psfsize_z"))    }
+            
+            mod = build_model_image(bkg_sources, wcs, ave_psfsize_dict, mean_psf=True)
+            
+            np.save(f"{file_path}/tractor_background_model.npy", mod)
+        
+            save_rgb_tripanel(mod, img_data, file_path, tgid, testing,use_center_only=False)
+            
+            return
 
-    wcs = make_custom_wcs(ra, dec, width, pixscale)
-
-    #if this source has a missing psfsize then we assume an average psfsize from the catalog
-    ave_psfsize_dict = { "g": np.mean(tractor.get("psfsize_g")), "r": np.mean(tractor.get("psfsize_r")),  "z": np.mean(tractor.get("psfsize_z"))    }
-    
-    mod = build_model_image(bkg_sources, wcs, ave_psfsize_dict, mean_psf=True)
-    
-    np.save(f"{file_path}/tractor_background_model.npy", mod)
-
-    save_rgb_tripanel(mod, img_data, file_path, tgid, testing,use_center_only=False)
-    
-    return
+    else:
+        return
 
 
 def get_blended_remove_sources(i, ra, dec, tgid, file_path, img_path, width,pixscale=0.262, testing=True):
@@ -340,50 +370,64 @@ def get_blended_remove_sources(i, ra, dec, tgid, file_path, img_path, width,pixs
 
     tractor = load_tractor(file_path)
 
+    #we want to also remove sources that do not have finite shape_r
+    finite_shaper_mask = np.isfinite(tractor.get("shape_r"))
+    tractor = tractor[finite_shaper_mask]
+    
+
     #load the source catalog that we are removing
-    blend_remove_cat = Table.read(file_path + "/blended_source_remove_cat.fits")
-
-    if len(blend_remove_cat) == 0:
-        #there were no sources to subtract and so we can save an empty array!
-        np.save(f"{file_path}/tractor_blend_remove_model.npy", np.zeros((3, width, width))  )
-    else: 
-        br_ras = blend_remove_cat["ra"]
-        br_decs = blend_remove_cat["dec"]
-    
-        #we need to get all the pixel locations of these sources given the wcs and see which ones lie on the main segment
-        #sources not on the main segment will be on a zero!
-        ra_all = tractor.get("ra")
-        dec_all = tractor.get("dec")
-    
-        #find all the sources that match the blend_remove_cat objects!
-        c = SkyCoord(ra= br_ras* u.degree, dec= br_decs*u.degree )
-        catalog = SkyCoord(ra=ra_all*u.degree, dec=dec_all*u.degree )
-        idx, d2d, d3d = c.match_to_catalog_sky(catalog)
-    
-        #get the indices of objects in the ra_all catalog that match and have zero separation!
-        blend_remove_inds = idx[d2d.arcsec == 0]
-    
-        tractor_blend_re = tractor[blend_remove_inds]
-
-        #if this source has a missing psfsize then we assume an average psfsize from the catalog
-        ave_psfsize_dict = { "g": np.mean(tractor.get("psfsize_g")), "r": np.mean(tractor.get("psfsize_r")),  "z": np.mean(tractor.get("psfsize_z"))    }
+    if os.path.exists(file_path + "/blended_source_remove_cat.fits"):
         
-        if len(tractor_blend_re) != 0:    
-            wcs = make_custom_wcs(ra, dec, width, pixscale)
-
-            
-            mod = build_model_image(tractor_blend_re, wcs, ave_psfsize_dict, mean_psf=True)
-            
-            np.save(f"{file_path}/tractor_blend_remove_model.npy", mod)
-        
-            img_data = fits.open(img_path)[0].data
-            save_rgb_tripanel(mod, img_data, file_path, tgid, testing,use_center_only=False)
-        else:
+        blend_remove_cat = Table.read(file_path + "/blended_source_remove_cat.fits")
+    
+        if len(blend_remove_cat) == 0:
             #there were no sources to subtract and so we can save an empty array!
             np.save(f"{file_path}/tractor_blend_remove_model.npy", np.zeros((3, width, width))  )
+        else: 
+            #make sure these columns do not have any units!
+            br_ras = blend_remove_cat["ra"].data
+            br_decs = blend_remove_cat["dec"].data
+        
+            #we need to get all the pixel locations of these sources given the wcs and see which ones lie on the main segment
+            #sources not on the main segment will be on a zero!
+            ra_all = tractor.get("ra")
+            dec_all = tractor.get("dec")
+    
+            #find all the sources that match the blend_remove_cat objects!
+            c = SkyCoord(ra= br_ras* u.degree, dec= br_decs*u.degree )
+            catalog = SkyCoord(ra=ra_all*u.degree, dec=dec_all*u.degree )
+            idx, d2d, d3d = c.match_to_catalog_sky(catalog)
+    
+        
+            #get the indices of objects in the ra_all catalog that match and have zero separation!
+            blend_remove_inds = idx[d2d.arcsec == 0]
+        
+            tractor_blend_re = tractor[blend_remove_inds]
+    
+            #if this source has a missing psfsize then we assume an average psfsize from the catalog
+            ave_psfsize_dict = { "g": np.mean(tractor.get("psfsize_g")), "r": np.mean(tractor.get("psfsize_r")),  "z": np.mean(tractor.get("psfsize_z"))    }
+            
+            if len(tractor_blend_re) != 0:    
+                wcs = make_custom_wcs(ra, dec, width, pixscale)
+    
+                
+                mod = build_model_image(tractor_blend_re, wcs, ave_psfsize_dict, mean_psf=True)
+                
+                np.save(f"{file_path}/tractor_blend_remove_model.npy", mod)
+            
+                img_data = fits.open(img_path)[0].data
+                save_rgb_tripanel(mod, img_data, file_path, tgid, testing,use_center_only=False)
+            else:
+                #there were no sources to subtract and so we can save an empty array!
+                np.save(f"{file_path}/tractor_blend_remove_model.npy", np.zeros((3, width, width))  )
+
+
+        return
+        
+    else:
+        return
         
     
-    return
 
 
 def get_main_blob_sources(i, ra, dec, tgid, file_path, img_path, width, pixscale=0.262,testing=False):
@@ -398,12 +442,16 @@ def get_main_blob_sources(i, ra, dec, tgid, file_path, img_path, width, pixscale
 
     if os.path.exists(parent_source_file):
         tractor = load_tractor(file_path)
+
+        #we want to also remove sources that do not have finite shape_r
+        finite_shaper_mask = np.isfinite(tractor.get("shape_r"))
+        tractor = tractor[finite_shaper_mask]
     
         #we will be saving models for all these sources!
         parent_source_cat = Table.read(parent_source_file)
     
-        ps_ras = parent_source_cat["ra"]
-        ps_decs = parent_source_cat["dec"]
+        ps_ras = parent_source_cat["ra"].data
+        ps_decs = parent_source_cat["dec"].data
         
         #we need to get all the pixel locations of these sources given the wcs and see which ones lie on the main segment
         #sources not on the main segment will be on a zero!
@@ -460,9 +508,7 @@ def get_main_blob_sources(i, ra, dec, tgid, file_path, img_path, width, pixscale
     
     return
 
-    
-
-    
+        
 ## another function to consider, if it is fast enough in the future is to store the tractor model for each object and then just add the ones we want at the end !!
 
 
@@ -519,9 +565,13 @@ if __name__ == '__main__':
     print(f"Reading the sample = {use_sample}")
 
     if use_sample == "sga":
-        dwarf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_sga_matched_dwarfs.fits")
+        dwarf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_SGA_matched_dwarfs_REPROCESS.fits")
     if use_sample == "clean":
         dwarf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4_RUN_W_APER.fits")
+        #we added the below condition as we changed our definition recently!
+        #this goes from 40k -> 39.4k
+        dwarf_cat = dwarf_cat[(dwarf_cat["RCHISQ_R"] < 4 ) & (dwarf_cat["RCHISQ_G"] < 4 )  & (dwarf_cat["RCHISQ_Z"] < 4 )   ]
+        
     if use_sample == "shred":
         dwarf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v4.fits")
 
@@ -539,7 +589,8 @@ if __name__ == '__main__':
         completed = 0
         for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_img_source ) for i in range(total)], chunksize = 500 ):
             completed += 1
-            simple_progress_bar(completed, total-1)
+            if completed % 1000 == 0 or completed == total:
+                simple_progress_bar(completed, total-1)
         pool.close()
         pool.join()
 
@@ -551,7 +602,8 @@ if __name__ == '__main__':
         completed = 0
         for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_bkg_sources ) for i in range(total)], chunksize = 500 ):
             completed += 1
-            simple_progress_bar(completed, total-1)
+            if completed % 1000 == 0 or completed == total:
+                simple_progress_bar(completed, total-1)
     
         pool.close()
         pool.join()
@@ -563,7 +615,8 @@ if __name__ == '__main__':
         completed = 0
         for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_blended_remove_sources) for i in range(total)], chunksize = 500 ):
             completed += 1
-            simple_progress_bar(completed, total-1)
+            if completed % 1000 == 0 or completed == total:
+                simple_progress_bar(completed, total-1)
     
         pool.close()
         pool.join()
@@ -576,7 +629,8 @@ if __name__ == '__main__':
         completed = 0
         for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_main_blob_sources) for i in range(total)], chunksize = 500 ):
             completed += 1
-            simple_progress_bar(completed, total-1)
+            if completed % 1000 == 0 or completed == total:
+                simple_progress_bar(completed, total-1)
     
         pool.close()
         pool.join()
