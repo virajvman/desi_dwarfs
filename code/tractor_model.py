@@ -432,14 +432,15 @@ def get_blended_remove_sources(i, ra, dec, tgid, file_path, img_path, width,pixs
 
 def get_main_blob_sources(i, ra, dec, tgid, file_path, img_path, width, pixscale=0.262,testing=False):
     '''
-    Function that gets all the tractor sources for things on the main blob that are considered to be the galaxy of interest!
-    The goal is that we will use this as a model image for our parent galaxy and just add up the component magnitudes to get the total photometry.
+    Function that gets all the tractor sources for things on the main blob. This will contain sources that we also removed via a color cut. But we will do that step in the cog function. Here for the simple photo purposes as well, we will save all the non-stars sources on the segment! 
+    
 
     The models for individual sources are stored separately and in a folder
     '''
 
-    parent_source_file = file_path + "/parent_galaxy_sources.fits"
-
+    # parent_source_file = file_path + "/parent_galaxy_sources.fits"
+    parent_source_file = file_path + "/source_cat_all_main_segment.fits"
+    
     if os.path.exists(parent_source_file):
         tractor = load_tractor(file_path)
 
@@ -492,10 +493,12 @@ def get_main_blob_sources(i, ra, dec, tgid, file_path, img_path, width, pixscale
                 mod = build_model_image(tractor_parent[k], wcs, ave_psfsize_dict, mean_psf=True)
                 total_model += mod
                 np.save(f"{tractor_save_dir}/tractor_parent_source_model_{parent_source_cat["source_objid_new"].data[k]:d}.npy", mod)
+
+            #save the total model
+            np.save(f"{file_path}/tractor_main_segment_model.npy", total_model)
     
             #save the total combined image for reference!
-            save_rgb_single_panel(total_model, file_path, image_name="tractor_parent_galaxy_model_presmooth_mask")
-    
+            save_rgb_single_panel(total_model, file_path, image_name="tractor_main_segment_galaxy_model")
         else:
             print(f"The parent source catalog existed for {tgid}, but no sources remain after parent mask.")
             
@@ -585,7 +588,7 @@ if __name__ == '__main__':
 
     if img_source:
         print("Getting img source models")
-        pool = mp.Pool(64)
+        pool = mp.Pool(62)
         completed = 0
         for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_img_source ) for i in range(total)], chunksize = 500 ):
             completed += 1
@@ -597,7 +600,7 @@ if __name__ == '__main__':
 
     if bkg_source:
         print("Getting bkg source models")
-        pool = mp.Pool(64)
+        pool = mp.Pool(62)
         
         completed = 0
         for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_bkg_sources ) for i in range(total)], chunksize = 500 ):
@@ -610,7 +613,7 @@ if __name__ == '__main__':
 
     if blend_remove_source:
         print("Getting blend remove source models")
-        pool = mp.Pool(64)
+        pool = mp.Pool(62)
         
         completed = 0
         for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_blended_remove_sources) for i in range(total)], chunksize = 500 ):
@@ -624,7 +627,7 @@ if __name__ == '__main__':
 
     if parent_galaxy:
         print("Getting the parent galaxy source models")
-        pool = mp.Pool(64)
+        pool = mp.Pool(62)
         
         completed = 0
         for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_main_blob_sources) for i in range(total)], chunksize = 500 ):

@@ -48,10 +48,10 @@ fi
 
 shifterimg pull docker:legacysurvey/legacypipe:DR10.3.4
 
-shifter --image docker:legacysurvey/legacypipe:DR10.3.4 \
+srun --cpu-bind=cores shifter --image docker:legacysurvey/legacypipe:DR10.3.4 \
     python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -img_source -use_sample shred
 
-shifter --image docker:legacysurvey/legacypipe:DR10.3.4 \
+srun --cpu-bind=cores shifter --image docker:legacysurvey/legacypipe:DR10.3.4 \
     python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -parent_galaxy -bkg_source -blend_remove_source -use_sample shred
 
 if [ "$RUN_COG" = true ]; then

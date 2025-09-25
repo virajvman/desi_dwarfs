@@ -59,6 +59,7 @@ def get_nearby_source_catalog(ra_k, dec_k, objid_k, brickid_k, box_size, wcat, b
             fluxs = source_cat_f[f"flux_{BAND}"]
             good_fluxs = np.where(fluxs > 0, fluxs, np.nan)
             source_cat_f[f"mag_{BAND}"] = 22.5 - 2.5*np.log10(good_fluxs)
+            ##Note that magnitudes are not extinction corrected!!
 
     #filtering to ensure the source is detected at 5 sigma atleast in one band
     # source_cat_f = source_cat_f[ (source_cat_f["sigma_r"] > 3) | (source_cat_f["sigma_g"] > 3) | (source_cat_f["sigma_z"] > 3) ]

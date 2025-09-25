@@ -43,16 +43,57 @@ import concurrent.futures
 import pickle
 from photutils.segmentation import make_2dgaussian_kernel
 from astropy.convolution import convolve
-from aperture_cogs import get_elliptical_aperture, find_nearest_island
+from aperture_cogs import get_elliptical_aperture
 from photutils.background import StdBackgroundRMS, MADStdBackgroundRMS
 from astropy.stats import SigmaClip
 from scipy.stats import skew, kurtosis
-from alternative_photometry_methods import get_simplest_photometry
 from desi_lowz_funcs import get_elliptical_aperture, measure_elliptical_aperture_area_fraction_masked
 
 rootdir = '/global/u1/v/virajvm/'
 sys.path.append(os.path.join(rootdir, 'DESI2_LOWZ'))
 from desi_lowz_funcs import print_stage, check_path_existence, get_remove_flag, _n_or_more_lt, is_target_in_south, match_c_to_catalog, calc_normalized_dist, get_sweep_filename, get_random_markers, save_table, make_subplots, sdss_rgb
+
+
+
+    
+def find_nearest_island(segment_map_v2,fiber_xpix, fiber_ypix):
+    '''
+    This function is used in the rare case that the DESI fiber is not on top of a segment island detected by photutils. This happens only for the ELGs that are very faint sources
+
+    segment_map_v2 is the segment map by photutils and fiber_xpix, fiber_ypix are the pixel locations of the DESI fiber
+    '''
+
+    #if the source fiber lies on a pixel classified as background
+    #and if a source island is not found within 10'', we then manually drop a source!
+    
+    all_xpixs, all_ypixs = np.meshgrid( np.arange(np.shape(segment_map_v2)[0]), np.arange(np.shape(segment_map_v2)[1]) )
+    
+    all_dists = np.sqrt ( ( all_xpixs - fiber_xpix)**2 + ( all_ypixs - fiber_ypix)**2 )
+    
+    #get all the distances to the pixels that are not background
+    all_segs_notbg = segment_map_v2[ (segment_map_v2 != 0) ]
+    all_dists_segpixs = all_dists[ (segment_map_v2 != 0)  ]
+
+    #get distance in arcsec
+    if np.min(all_dists_segpixs)*0.262 > 10:
+        #IF THE DISTANCE IS MORE THAN 10'', then we just revert back to the original tractor source!
+        #This is an arbitrary distance cutoff. For smaller distances, we will be keeping tabs on the distance for reference
+
+        return None, None, None, None, np.nan
+        
+    else:
+        island_num = all_segs_notbg[ np.argmin(all_dists_segpixs) ]
+
+        #get the positions of hte closest co-ordinate
+        xpix_new = all_xpixs[ (segment_map_v2 != 0) ][np.argmin(all_dists_segpixs) ]
+        ypix_new = all_ypixs[ (segment_map_v2 != 0) ][np.argmin(all_dists_segpixs) ]
+        #we update the source center with this new co-ordinate
+        fiber_xpix = xpix_new
+        fiber_ypix = ypix_new
+        
+    return segment_map_v2, island_num, fiber_xpix, fiber_ypix, np.min(all_dists_segpixs)
+
+
 
 def conf_interval(x, pdf, conf_level):
     return np.sum(pdf[pdf > x])-conf_level
@@ -192,7 +233,6 @@ def run_aperture_pipe(input_dict):
     npixels_min = input_dict["npixels_min"]
     threshold_rms_scale = input_dict["threshold_rms_scale"]
     image_size = input_dict["image_size"]
-    run_simple_photo = input_dict["run_simple_photo"]
     
     verbose=False
 
@@ -313,10 +353,7 @@ def run_aperture_pipe(input_dict):
                     "closest_star_norm_dist": closest_star_norm_dist,
                     "lie_on_segment_island": False,
                     "aper_frac_mask_badpix": np.nan, 
-                    "img_frac_mask_badpix":  np.nan,
-                    "simple_photo_mags": 3*[np.nan], 
-                    "simple_photo_island_dist_pix": np.nan,
-                    "simplest_photo_aper_frac_in_image" : np.nan
+                    "img_frac_mask_badpix":  np.nan
                 }
 
             return output_dict
@@ -456,10 +493,7 @@ def run_aperture_pipe(input_dict):
                         "lie_on_segment_island": lie_on_segment_island,
                         "first_min_dist_island_pix" : min_dist_pix,
                         "aper_frac_mask_badpix": np.nan, 
-                        "img_frac_mask_badpix":  np.nan,
-                        "simple_photo_mags": 3*[np.nan], 
-                        "simple_photo_island_dist_pix": np.nan,
-                        "simplest_photo_aper_frac_in_image" : np.nan
+                        "img_frac_mask_badpix":  np.nan
                     }
  
                 return output_dict
@@ -694,6 +728,8 @@ def run_aperture_pipe(input_dict):
         source_cat_inseg_signi = source_cat_f[ in_main_islands ]
         #updating the source type masks
         is_star_inseg_signi = is_star[ in_main_islands ]
+
+        
         
         markers_rnd = get_random_markers(len(source_cat_inseg_signi) )
         source_cat_inseg_signi["marker"] = markers_rnd
@@ -784,6 +820,10 @@ def run_aperture_pipe(input_dict):
         source_cat_nostars_inseg_inds = []
 
         source_cat_nostars_inseg = source_cat_inseg_signi[~is_star_inseg_signi]
+
+        ##we save this catalog!! this will be used for the simple alternative photometry
+        source_cat_nostars_inseg["source_objid_new"] = np.arange(len(source_cat_nostars_inseg))
+        source_cat_nostars_inseg.write(save_path + "/source_cat_all_main_segment.fits", overwrite=True )
 
         source_cat_nostars_inseg_COPY = source_cat_nostars_inseg.copy()
         #we include only the ==0 objects here because those are the ones being removed below
@@ -962,21 +1002,8 @@ def run_aperture_pipe(input_dict):
 
         #save this catalog!
         #before saving this let us add a column of unique object ids to identify them 
-        source_cat_galaxy_objs["source_objid_new"] = np.arange(len(source_cat_galaxy_objs))
         source_cat_galaxy_objs.write( save_path + "/parent_galaxy_sources.fits", overwrite=True)
         
-        ##NOTE!! we will have to update this again based on the second deblending step we do in the last step!
-        ##These catalogs contain the pixel positions so we can use that if need be!
-        #^the above catalog contains sources that satisfy the color cuts! The simple photo sources are saved as part of the below function
-        
-        #we run the simplest photometry here!!
-        if run_simple_photo:
-            simplest_photo_mags, simplest_photo_island_dist_pix, simplest_photo_aper_frac_in_image  = get_simplest_photometry(data_arr,  noise_dict["r"], fiber_xpix, fiber_ypix, source_cat_f[~is_star], save_path,source_zred=None)
-        else:
-            simplest_photo_mags = 3*[np.nan]
-            simplest_photo_island_dist_pix = 0
-            simplest_photo_aper_frac_in_image = 0
-
         ##########################################
         ### PLOTTING CODE
         ##########################################
@@ -1271,9 +1298,6 @@ def run_aperture_pipe(input_dict):
                 "first_min_dist_island_pix" : min_dist_pix,
                 "aper_frac_mask_badpix": aper_frac_mask_badpix, 
                 "img_frac_mask_badpix":  img_frac_mask_badpix,
-                "simple_photo_mags": simplest_photo_mags, 
-                "simple_photo_island_dist_pix": simplest_photo_island_dist_pix,
-                "simplest_photo_aper_frac_in_image": simplest_photo_aper_frac_in_image
             }
         
 

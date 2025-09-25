@@ -9,7 +9,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=192GB
-#SBATCH --time=01:30:00
+#SBATCH --time=06:00:00
 #SBATCH --job-name=bgsb_shred
 #SBATCH --output=aperture_shred_job_bgsb.log
 
@@ -28,7 +28,7 @@ export NUMEXPR_NUM_THREADS=1
 # ------------------------------
 SAMPLE="BGS_BRIGHT"
 MAKE_CATS=false      # set true/false
-RUN_APER=false
+RUN_APER=true
 RUN_COG=true
 
 # Command-line args
@@ -48,10 +48,10 @@ fi
 
 # shifterimg pull docker:legacysurvey/legacypipe:DR10.3.4
 
-# shifter --image docker:legacysurvey/legacypipe:DR10.3.4 \
+# srun --cpu-bind=cores shifter --image docker:legacysurvey/legacypipe:DR10.3.4 \
 #     python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -img_source -use_sample shred
 
-# shifter --image docker:legacysurvey/legacypipe:DR10.3.4 \
+# srun --cpu-bind=cores shifter --image docker:legacysurvey/legacypipe:DR10.3.4 \
 #     python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -parent_galaxy -bkg_source -blend_remove_source -use_sample shred
 
 if [ "$RUN_COG" = true ]; then

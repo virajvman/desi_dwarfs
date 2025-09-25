@@ -29,6 +29,28 @@ import requests
 import json
 
 
+def find_nearest_island(segment_map, fiber_xpix,fiber_ypix):
+    '''
+    Function that finds the nearest segment and returns its index!!
+
+    Is a general function that we will use nuemerous times!
+    '''
+    
+    all_xpixs, all_ypixs = np.meshgrid( np.arange(np.shape(segment_map)[0]), np.arange(np.shape(segment_map)[1]) )
+    all_dists = np.sqrt ( ( all_xpixs - fiber_xpix)**2 + ( all_ypixs - fiber_ypix)**2 )
+
+    #get all the distances to the pixels that are not background
+    all_segs_notbg = segment_map[ (segment_map != 0) ]
+    all_dists_segpixs = all_dists[ (segment_map != 0)  ]
+
+    #the id of the closest segment that we will call our galaxy!
+    close_island_num = all_segs_notbg[ np.argmin(all_dists_segpixs) ]
+
+    #the closest distance in puxels
+    closest_dist_pix = np.min(all_dists_segpixs)
+    
+    return close_island_num, closest_dist_pix
+    
 
 def measure_elliptical_aperture_area_fraction_masked(image_shape, good_pixel_mask, ell_aper_obj):
     '''
@@ -187,6 +209,34 @@ def parse_tgids(value):
 def generate_random_string(length):
     characters = string.ascii_letters + string.digits  # Includes A-Z, a-z, 0-9
     return ''.join(random.choices(characters, k=length))
+
+
+def sdss_gray(img, band="r", scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03):
+    # Default scale dictionary
+    rgbscales = {'u': (2,1.5),
+                 'g': (2,2.5),
+                 'r': (1,1.5),
+                 'i': (0,1.0),
+                 'z': (0,0.4)}
+    
+    if scales is not None:
+        rgbscales.update(scales)
+
+    plane, scale = rgbscales[band]
+
+    # Apply scaling and offset
+    img = np.maximum(0, img * scale + m)
+
+    # Stretch as in sdss_rgb
+    Q = 20
+    fI = np.arcsinh(Q * img) / np.sqrt(Q)
+
+    # Normalize to [0,1]
+    gray = fI / fI.max()
+    gray = np.clip(gray, 0, 1)
+
+    return gray
+
 
 def sdss_rgb(imgs, bands=["g","r","z"], scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)),m = 0.03):
     rgbscales = {'u': (2,1.5), #1.0,
@@ -1662,6 +1712,17 @@ def download_few_spectra(data_cat,ncores=2):
 
 from photutils.aperture import aperture_photometry, EllipticalAperture
 from photutils.morphology import data_properties
+
+
+def measure_elliptical_aperture_area_in_image_pix(image_shape, ell_aper_obj):
+    # aperture: EllipticalAperture object
+    # image_shape: (ny, nx)
+    
+    mask = ell_aper_obj.to_mask(method='exact')  # or method='center' for faster, coarser estimate
+    aperture_mask = mask.to_image(image_shape)  # same shape as image
+    # Compute area fraction
+    area_in_image = np.nansum(aperture_mask)         # pixel values are fractions from 0 to 1
+    return area_in_image
 
 def measure_elliptical_aperture_area_fraction(image_shape, ell_aper_obj):
     # aperture: EllipticalAperture object

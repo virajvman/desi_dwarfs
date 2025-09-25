@@ -18,12 +18,11 @@ from astropy.convolution import convolve
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import numpy as np
-from alternative_photometry_methods import find_nearest_island
-from desi_lowz_funcs import make_subplots
+from desi_lowz_funcs import make_subplots, find_nearest_island
 from scipy.ndimage import generic_filter
 from matplotlib.colors import LogNorm
 from scipy.ndimage import gaussian_filter
-from desi_lowz_funcs import get_elliptical_aperture
+from desi_lowz_funcs import get_elliptical_aperture, sdss_rgb
 from photutils.aperture import aperture_photometry, EllipticalAperture
 from photutils.morphology import data_properties
 import numpy.ma as ma
@@ -56,6 +55,7 @@ def make_custom_cmap(n_colors, cmap_name="rainbow"):
     
     return mcolors.ListedColormap(colors)
 
+cmap_cstm = make_custom_cmap(8, cmap_name="tab10")
 
 def jaccard(a, b):
     # a, b: boolean masks
@@ -140,9 +140,8 @@ def find_contrast_run(ncontrast, all_jacc_desi, all_jacc_largest, thresh=0.95, r
     return None, np.nan  # nothing found
 
 
-    
 
-def find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_map, nlevel_val = 4,save_path = None, pcnn_val=None,radec=None, tgid=None, mu_rough=None, source_zred=None, mu_r_smooth = None):
+def find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_map, nlevel_val = 4,save_path = None, pcnn_val=None,radec=None, tgid=None, mu_aperture=None, source_zred=None):
     '''
     In this function, we find the optimal ncontrast value with which we will deblend.
     We also save a plot regarding this!!
@@ -172,14 +171,12 @@ def find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_ma
     ax[-3].text(0.5,0.9, "(%.4f)"%(source_zred) ,color = "white",fontsize = 9,
                ha="center",va="center",transform = ax[-3].transAxes)
 
-    ax[-3].set_title(f"Recon, mur_s = {mu_r_smooth:.2f}",fontsize = 8)
+    ax[-3].set_title(f"MU_R = {mu_aperture:.2f}",fontsize = 8)
     ax[-3].imshow(img_rgb_mask,origin="lower")
 
-    ax[-2].set_title(f"PCNN = {pcnn_val:.2f}",fontsize = 8)
+# ,    ax[-2].set_title(f"PCNN = {pcnn_val:.2f}",fontsize = 8)
     #plot the smoothed segment that is being deblended
     ax[-2].imshow(segment_map.data,cmap = "tab10",origin="lower")
-
-    
 
     for i in range(len(ncontrast)):
         segm_deblend_ni_map = deblend_sources(convolved_tot_data,segment_map,
@@ -226,7 +223,6 @@ def find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_ma
         ncontrast_opt = 0.2
 
     #now plot the most optimal ncontrast value!!
-    ax[-1].set_title(f"mus = {mu_rough[0]:.1f}, {mu_rough[1]:.1f}, {mu_rough[2]:.1f}",fontsize = 8)
     ax[-1].imshow(segm_deblend_optimal.data,cmap ="tab20",origin="lower")
 
     jaccard_img_path = save_path + f"/jaccard_smoothing_nlevel_{nlevel_val}.png"
@@ -235,6 +231,7 @@ def find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_ma
     plt.close()
     
     return ncontrast_opt, jaccard_img_path
+
 
 def process_deblend_image(segment_map, segm_deblend, fiber_xpix, fiber_ypix, save_path):
     '''
@@ -249,8 +246,9 @@ def process_deblend_image(segment_map, segm_deblend, fiber_xpix, fiber_ypix, sav
     island_num = segment_map.data[int(fiber_ypix),int(fiber_xpix)]
 
     #if the island num is zero (on bkg), we get the closest one!
+    nearest_blob_dist_pix = 0
     if island_num == 0:
-        island_num, _ = find_nearest_island(segment_map_v2_copy, fiber_xpix,fiber_ypix)
+        island_num, nearest_blob_dist_pix = find_nearest_island(segment_map_v2_copy, fiber_xpix,fiber_ypix)
     
     #pixels that are part of main blob are called 2
     segment_map_v2[segment_map_v2_copy == island_num] = 2
@@ -282,11 +280,7 @@ def process_deblend_image(segment_map, segm_deblend, fiber_xpix, fiber_ypix, sav
     deblend_island_num = segm_deblend_v3[int(fiber_ypix),int(fiber_xpix)]
     
     if deblend_island_num == 0:
-        deblend_island_num, nearest_deblend_dist_pix = find_nearest_island(segm_deblend_v3, fiber_xpix,fiber_ypix)
-        lie_on_smooth_segment=False
-    else:
-        nearest_deblend_dist_pix = 0
-        lie_on_smooth_segment=True
+        deblend_island_num, _ = find_nearest_island(segm_deblend_v3, fiber_xpix,fiber_ypix)
 
     #given this deblend island num, get the mask of just the parent galaxy of interest
     parent_galaxy_mask = (segm_deblend_v3 == deblend_island_num)
@@ -299,25 +293,25 @@ def process_deblend_image(segment_map, segm_deblend, fiber_xpix, fiber_ypix, sav
     ##how many deblended segments are on the main blob?
     num_deblend_segs_main_blob = len(deblend_ids)
 
-    return segm_deblend_v3, num_deblend_segs_main_blob, parent_galaxy_mask.astype(int), not_parent_galaxy_mask,  nearest_deblend_dist_pix, lie_on_smooth_segment
+    return segm_deblend_v3, num_deblend_segs_main_blob, parent_galaxy_mask.astype(int), not_parent_galaxy_mask, nearest_blob_dist_pix
 
 
-def simple_interpolate_mask(image, mask, footprint_size=5):
-    filled = image.copy()
-    temp = filled.astype(float)
-    temp[mask] = np.nan
+# def simple_interpolate_mask(image, mask, footprint_size=5):
+#     filled = image.copy()
+#     temp = filled.astype(float)
+#     temp[mask] = np.nan
 
-    # local mean ignoring NaNs
-    def mean_ignore_nan(values):
-        return np.nanmean(values)
+#     # local mean ignoring NaNs
+#     def mean_ignore_nan(values):
+#         return np.nanmean(values)
 
-    footprint = np.ones((footprint_size, footprint_size))
-    interpolated = generic_filter(temp, mean_ignore_nan, footprint=footprint, mode='nearest')
+#     footprint = np.ones((footprint_size, footprint_size))
+#     interpolated = generic_filter(temp, mean_ignore_nan, footprint=footprint, mode='nearest')
 
-    filled[mask] = interpolated[mask]
-    return filled
+#     filled[mask] = interpolated[mask]
+#     return filled
 
-from scipy.interpolate import griddata
+# from scipy.interpolate import griddata
 
 # def linear_interpolate_mask_SMOOTH(org_image, smooth_image, segment_map_v2, mask):
 #     '''
@@ -333,127 +327,86 @@ from scipy.interpolate import griddata
     
 #     return filled
 
-def linear_interpolate_mask(org_image, segment_map_v2, mask):
-    '''
-    We will use the smoothed image for interpolation to fill into the unsmoothed image! We only want to interpolate on pixels that are on the main blob. Rest will be left as is. Thus the only pixels tha we will be updating are those that are masked and segment_map_v2 = 2.
-    '''
-    filled = org_image.copy()
-    y, x = np.indices(org_image.shape)
+# def linear_interpolate_mask(org_image, segment_map_v2, mask):
+#     '''
+#     We will use the smoothed image for interpolation to fill into the unsmoothed image! We only want to interpolate on pixels that are on the main blob. Rest will be left as is. Thus the only pixels tha we will be updating are those that are masked and segment_map_v2 = 2.
+#     '''
+#     filled = org_image.copy()
+#     y, x = np.indices(org_image.shape)
     
-    points = np.column_stack((x[~mask], y[~mask]))
-    values = org_image[~mask]
+#     points = np.column_stack((x[~mask], y[~mask]))
+#     values = org_image[~mask]
 
     
-    # Target (masked + blob=2) pixels
-    sel = mask & (segment_map_v2 == 2)
-    # Safety check: if no valid input, skip
-    if points.size == 0 or values.size == 0 or np.sum(sel) == 0:
-        return filled
+#     # Target (masked + blob=2) pixels
+#     sel = mask & (segment_map_v2 == 2)
+#     # Safety check: if no valid input, skip
+#     if points.size == 0 or values.size == 0 or np.sum(sel) == 0:
+#         return filled
 
-    filled[mask & (segment_map_v2 == 2)] = griddata(points, values, (x[mask & (segment_map_v2 == 2)], y[mask & (segment_map_v2 == 2)]), method='linear')
+#     filled[mask & (segment_map_v2 == 2)] = griddata(points, values, (x[mask & (segment_map_v2 == 2)], y[mask & (segment_map_v2 == 2)]), method='linear')
     
-    return filled
+#     return filled
+    
+# def mean_surface_brightness(mag, ellip_area):
+#     '''
+#     # Function to compute surface brightness. We will use this in the r-band data and the input is the area in arcsec2 of the ellipse in which we are measuring the rough photo
+#     # '''
+    # return mag + 2.5*np.log10(ellip_area)
 
     
-def mean_surface_brightness(mag, ellip_area):
-    '''
-    Function to compute surface brightness. We will use this in the r-band data and the input is the area in arcsec2 of the ellipse in which we are measuring the rough photo
-    '''
-    return mag + 2.5*np.log10(ellip_area)
-
-    
-def get_isolate_galaxy_mask(img_rgb=None, img_rgb_mask=None, r_band_data=None, r_rms=None, fiber_xpix=None, fiber_ypix=None, file_path=None,  tgid=None, aperture_mask=None, pcnn_val=None, radec=None, mu_rough = None, segment_map_v2 = None, source_zred=None):
+def get_isolate_galaxy_mask(img_rgb=None, img_rgb_mask=None, r_band_trac_model=None, r_rms=None, fiber_xpix=None, fiber_ypix=None, file_path=None,  tgid=None, radec=None, r_mu_aperture = None, segment_map_v2 = None, source_zred=None, pcnn_val=None):
     '''
     Function that returns the deblended segment used for isolating the parent galaxy. 
     Note that this function is only run when z > 0.01, and that flag is applied in the aperture_cogs.py script when this function is called
 
-    Note that the r_band_data here is not the original r band image, but is from the final reconstructed image where some parts are already masked
+    The r_band_data here is the r-band tractor model image. A few benefits of this: avoids the weirdness of having to interpolate over masked regions and deal with stars. Also avoids issues with bright stars. Secondly, tractor naturally smooths out the strucutre at some level so make over-deblending less of an issue, but still possible. Furthermore, more meaningful computation of surface brightness (no artifical inflation of aperture due to bad pixels). Secondly, in case in a dense cluter environment, with strong light background from outside, that is not always included in the model image as the source is outside. So a natural way to deal with this. 
+
+    Will need to VI to check that the smoothing scale and jaccard method is working well! 
+    The other potential issue is that if tractor rchisq is very poor, then this may not work well? Need to VI the ones with bad rchisq to check.
+
+    I could find that the smoothing scale is too aggresive .. 
     '''
     
     npixels_min = 10
     threshold_rms_scale = 1.5
 
-    ##setting the masked regions to be nans so we can interpolate over them in the convolution
-    # r_band_data[aperture_mask] = np.nan
-    #filling in the masked regions with some approximate pixels so we do not bias any measurements
-    # r_band_data = simple_interpolate_mask(r_band_data, aperture_mask, footprint_size=30)
-    #Smooth the image lightly (sigma ~ 1-2 pixels)
-
-    if np.sum(  (segment_map_v2 == 2) & (aperture_mask) ) > 0:
-        
-        # smoothed_r_image = gaussian_filter(r_band_data, sigma=1.0)
-        # r_band_data_intp = linear_interpolate_mask_SMOOTH(r_band_data, smoothed_r_image, segment_map_v2, aperture_mask)
-        r_band_data_intp = linear_interpolate_mask(r_band_data, segment_map_v2, aperture_mask)
-
-        if np.max(r_band_data_intp) == np.min(r_band_data_intp):
-            print(f"Invalid plotting in isolate galaxy mask for {tgid}")
-
-        else:        
-             # Handle invalid values: mask NaNs, zeros, negatives
-            r_band_data_safe = ma.masked_where(r_band_data <= 0, r_band_data)
-            r_band_data_intp_safe = ma.masked_where(r_band_data_intp <= 0, r_band_data_intp)
-        
-            # Colormap: invalid/masked pixels in white
-            cmap = plt.cm.viridis.copy()
-            cmap.set_bad(color="white")
-        
-            # Plot pre- and post-interpolation
-            fig, ax = plt.subplots(1, 2, figsize=(8, 4))
-        
-            ax[0].set_title("Pre-interpolate")
-            im0 = ax[0].imshow(r_band_data_safe, origin="lower", norm=LogNorm(), cmap=cmap)
-            fig.colorbar(im0, ax=ax[0])
-        
-            ax[1].set_title("Post-interpolate")
-            im1 = ax[1].imshow(r_band_data_intp_safe, origin="lower", norm=LogNorm(), cmap=cmap)
-            fig.colorbar(im1, ax=ax[1])
-        
-            # Save and close figure
-            fig.savefig(os.path.join(file_path, "interpolated_r_band_data.png"))
-            plt.close(fig)
-
-    
-    else:
-        r_band_data_intp = np.copy(r_band_data)
+    #we are 
 
     ###get the updated deblend values!!
     kernel = make_2dgaussian_kernel(15, size=29)  # FWHM = 3.0
 
     threshold = threshold_rms_scale * r_rms
-    convolved_tot_data = convolve( r_band_data_intp, kernel)
+    convolved_tot_data = convolve( r_band_trac_model, kernel)
     
     segment_map = detect_sources(convolved_tot_data, threshold, npixels=npixels_min) 
 
     #we want sources where we detect something!! If we do not detect anything, we return a non valyue
     if segment_map is None:
-        print(f"Nothing found in this smooth segmentation: {tgid}! Returning Nones. In such cases, we will revert back to the tractor photometry!")
-        r_mu_smooth = 0
-        return None, 0, None, None, np.nan, None, r_mu_smooth
+        print(f"Nothing found in this smooth segmentation: {tgid}! Returning Nones.")
+
+        # segm_deblend_opt, num_deblend_segs_main_blob, parent_galaxy_mask, not_parent_galaxy_mask, nearest_deblend_blob_dist_pix, nearest_main_blob_dist_pix, jaccard_img_path
+        
+        return None, 0, None, None, np.nan, None, np.nan
     else:
         segment_map_data = segment_map.data
 
-        ##estimate the approximate surface brightness on this r_band_data_intp!    
-        aper_smooth, _,_,aper_smooth_params = get_elliptical_aperture(segment_map_data, sigma = 2)    
-        #measure photometry within this rough aperture!
-        phot_r_smooth = aperture_photometry( r_band_data_intp , aper_smooth)
-        r_mag_smooth = 22.5 - 2.5*np.log10( phot_r_smooth["aperture_sum"].data[0] )
-        #get the area of this aperture in arcsec^2 so convert the pixel sizes to arcsec! Area = pi*a*b
-        aper_smooth_area = np.pi * (aper_smooth_params[0]*0.262) * (aper_smooth_params[0] * aper_smooth_params[1] * 0.262)        
-        r_mu_smooth = mean_surface_brightness( r_mag_smooth,  aper_smooth_area )
-
-        ncontrast_opt, jaccard_img_path = find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_map, nlevel_val = 4, save_path = file_path, pcnn_val=pcnn_val, radec=radec, tgid=tgid, mu_rough = mu_rough, source_zred=source_zred, mu_r_smooth = r_mu_smooth )
+        ncontrast_opt, jaccard_img_path = find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_map, nlevel_val = 4, save_path = file_path, pcnn_val=pcnn_val, radec=radec, tgid=tgid, source_zred=source_zred, mu_aperture = r_mu_aperture)
         
         segm_deblend_opt = deblend_sources(convolved_tot_data,segment_map,
                                            npixels=npixels_min,nlevels=4, contrast=ncontrast_opt,
                                            progress_bar=False)
 
-        segm_deblend_opt, num_deblend_segs_main_blob, parent_galaxy_mask,not_parent_galaxy_mask, nearest_deblend_dist_pix, lie_on_smooth_segment = process_deblend_image(segment_map, segm_deblend_opt, fiber_xpix, fiber_ypix, file_path)
+        
+        segm_deblend_opt, num_deblend_segs_main_blob, parent_galaxy_mask, not_parent_galaxy_mask, nearest_blob_dist_pix = process_deblend_image(segment_map, segm_deblend_opt, fiber_xpix, fiber_ypix, file_path)
 
         #segm_deblend_opt is the optimally deblended image with just the deblended segments on main blob highlighted
         #num_deblend_segs_main_blob is the number of deblended segments identified in the main blob
-        #if it is equal to 1, we do not change anything
-        #parent_galaxy_mask is the mask that contains only the parent galaxy of interest 
-        #no_parent_galaxy_mask is a mask for the other deblended blobs identified in the main blob and is the mask that we will apply in COG pipeline
+        #if it is equal to 1, nothing to mask
+        
+        #parent_galaxy_mask is the mask that contains only the parent galaxy of interest. This is used to estimate the aperture!
+        
+        #no_parent_galaxy_mask is a mask for the other deblended blobs identified in the main blob and is the mask that we will apply in COG pipeline.
 
         if num_deblend_segs_main_blob == 0:
             raise ValueError(f"Incorrect number of deblended blobs found in main blob in isolate galaxy mask! -> {tgid} ")
@@ -461,6 +414,29 @@ def get_isolate_galaxy_mask(img_rgb=None, img_rgb_mask=None, r_band_data=None, r
     ##let us do a binary dilation on the not_parent_galaxy_mask to avoid some of the extremeities!!
     structure = np.ones((3, 3), dtype=bool)
     not_parent_galaxy_mask = binary_dilation(not_parent_galaxy_mask, structure=structure, iterations=2)
+
+    ###save the summary plot, which we will use for the VI
     
-    return segm_deblend_opt, num_deblend_segs_main_blob, parent_galaxy_mask, not_parent_galaxy_mask, nearest_deblend_dist_pix, jaccard_img_path, r_mu_smooth
+    g_fake = np.zeros_like(r_band_trac_model)
+    z_fake = np.zeros_like(r_band_trac_model)
+    r_only_grz_data = np.array([g_fake, r_band_trac_model, z_fake ])
+    
+    fig, ax = make_subplots(ncol = 4, nrow = 1,col_spacing = 0.05, return_fig=True)
+    ax[0].imshow(img_rgb, origin="lower")
+    ax[1].imshow(img_rgb_mask, origin="lower")
+    
+    trac_r_rgb = sdss_rgb(r_only_grz_data)
+    ax[2].set_title(f"mu_r = {r_mu_aperture:.2f}")
+    ax[2].imshow(trac_r_rgb, origin="lower")
+
+    #plot the deblended image?
+    ax[3].imshow(segm_deblend_opt, origin="lower", cmap = cmap_cstm, interpolation=None)
+
+    for axi in ax:    
+        axi.set_xticks([])
+        axi.set_yticks([])
+    plt.savefig(file_path + "/parent_isolate_VI.png",bbox_inches="tight")
+    plt.close(fig)
+    
+    return segm_deblend_opt, num_deblend_segs_main_blob, parent_galaxy_mask, not_parent_galaxy_mask, nearest_blob_dist_pix, jaccard_img_path, ncontrast_opt
     
