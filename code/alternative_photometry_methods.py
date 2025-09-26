@@ -29,21 +29,7 @@ import pickle
 from photutils.segmentation import make_2dgaussian_kernel
 from astropy.convolution import convolve
 from desi_lowz_funcs import make_subplots, sdss_rgb, get_elliptical_aperture, find_nearest_island
-
-
-def mags_to_flux(mags, zeropoint=22.5):
-    return 10**((zeropoint - mags) / 2.5)
-
-
-def flux_to_mag(flux, zeropoint=22.5):
-    # Protect against zero/negative flux
-    if flux > 0:
-        return zeropoint - 2.5*np.log10(flux)
-    else:
-        return np.nan  # or some sentinel value
-
-
-
+from desi_lowz_funcs import mags_to_flux, flux_to_mag
 
 
 def process_deblend_image(segment_map, segm_deblend, fiber_xpix, fiber_ypix):

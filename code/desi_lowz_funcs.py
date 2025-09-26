@@ -29,6 +29,21 @@ import requests
 import json
 
 
+def mags_to_flux(mags, zeropoint=22.5):
+    return 10**((zeropoint - mags) / 2.5)
+
+
+def flux_to_mag(flux, zeropoint=22.5):
+    # Protect against zero/negative flux
+    if flux > 0:
+        return zeropoint - 2.5*np.log10(flux)
+    else:
+        return np.nan  # or some sentinel value
+
+
+
+
+
 def find_nearest_island(segment_map, fiber_xpix,fiber_ypix):
     '''
     Function that finds the nearest segment and returns its index!!

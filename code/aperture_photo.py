@@ -48,6 +48,8 @@ from photutils.background import StdBackgroundRMS, MADStdBackgroundRMS
 from astropy.stats import SigmaClip
 from scipy.stats import skew, kurtosis
 from desi_lowz_funcs import get_elliptical_aperture, measure_elliptical_aperture_area_fraction_masked
+from desi_lowz_funcs import flux_to_mag
+
 
 rootdir = '/global/u1/v/virajvm/'
 sys.path.append(os.path.join(rootdir, 'DESI2_LOWZ'))
@@ -101,14 +103,6 @@ def conf_interval(x, pdf, conf_level):
 def mask_bad_flux(flux_vals):
     good_flux_vals = np.where(flux_vals > 0, flux_vals, np.nan)
     return good_flux_vals
-
-
-def flux_to_mag(flux, zeropoint=22.5):
-    # Protect against zero/negative flux
-    if flux > 0:
-        return zeropoint - 2.5*np.log10(flux)
-    else:
-        return np.nan  # or some sentinel value
 
 
 def substitute_bad_mag(source_cat_f):

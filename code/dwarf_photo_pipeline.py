@@ -37,8 +37,20 @@ from datetime import datetime
 from shred_photometry_maskbits import create_shred_maskbits
 import glob
 from shred_classifier import get_pcnn_data_inputs
+from aperture_cogs import make_empty_tractor_cog_dict
 
 
+def stack_results(results, key):
+    '''
+    Stack outputs from different sources into a common array to be fed to astropy table
+    '''
+    arrs = [np.atleast_1d(r[key]) for r in results]
+    out = np.vstack(arrs)
+    if out.shape[1] == 1:  # scalar case
+        out = out[:, 0]    # flatten to (N,)
+    return out
+
+    
 def argument_parser():
     '''
     Function that parses the arguments passed while running a script
@@ -1207,6 +1219,12 @@ if __name__ == '__main__':
                 final_apercen_radec_no_isolate_mask = np.vstack([ r["aper_radec_cen_no_isolate"] for r in results])
                 final_apercen_xy_pix_no_isolate_mask = np.vstack([ r["aper_xy_pix_cen_no_isolate"] for r in results])
                 final_mask_frac_r4_no_isolate_mask = np.array([ r["mask_frac_r4_no_isolate"] for r in results])
+
+                ##get the tractor cog params!!
+                empty_tractor_cog_dict = make_empty_tractor_cog_dict
+                
+                
+                
 
                 ##THESE ARE COG OUTPUTS THAT ARE COMMON TO ALL!
                 final_deblend_smooth_num_seg = np.array([ r["deblend_smooth_num_seg"] for r in results])
