@@ -141,7 +141,7 @@ def find_contrast_run(ncontrast, all_jacc_desi, all_jacc_largest, thresh=0.95, r
 
 
 
-def find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_map, nlevel_val = 4,save_path = None, pcnn_val=None,radec=None, tgid=None, mu_aperture=None, source_zred=None):
+def find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_map, nlevel_val = 4,save_path = None, pcnn_val=None,radec=None, tgid=None, mu_aperture=None, source_zred=None, mu_island = None):
     '''
     In this function, we find the optimal ncontrast value with which we will deblend.
     We also save a plot regarding this!!
@@ -171,7 +171,7 @@ def find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_ma
     ax[-3].text(0.5,0.9, "(%.4f)"%(source_zred) ,color = "white",fontsize = 9,
                ha="center",va="center",transform = ax[-3].transAxes)
 
-    ax[-3].set_title(f"MU_R = {mu_aperture:.2f}",fontsize = 8)
+    ax[-3].set_title(f"mu_r(ellip.) = {mu_aperture:.2f}, mu_r(island) = {mu_island:.2f}",fontsize = 6)
     ax[-3].imshow(img_rgb_mask,origin="lower")
 
 # ,    ax[-2].set_title(f"PCNN = {pcnn_val:.2f}",fontsize = 8)
@@ -355,7 +355,7 @@ def process_deblend_image(segment_map, segm_deblend, fiber_xpix, fiber_ypix, sav
     # return mag + 2.5*np.log10(ellip_area)
 
     
-def get_isolate_galaxy_mask(img_rgb=None, img_rgb_mask=None, r_band_trac_model=None, r_rms=None, fiber_xpix=None, fiber_ypix=None, file_path=None,  tgid=None, radec=None, r_mu_aperture = None, segment_map_v2 = None, source_zred=None, pcnn_val=None):
+def get_isolate_galaxy_mask(img_rgb=None, img_rgb_mask=None, r_band_trac_model=None, r_rms=None, fiber_xpix=None, fiber_ypix=None, file_path=None,  tgid=None, radec=None, r_mu_aperture = None, segment_map_v2 = None, source_zred=None, pcnn_val=None, r_mu_island =None):
     '''
     Function that returns the deblended segment used for isolating the parent galaxy. 
     Note that this function is only run when z > 0.01, and that flag is applied in the aperture_cogs.py script when this function is called
@@ -391,7 +391,7 @@ def get_isolate_galaxy_mask(img_rgb=None, img_rgb_mask=None, r_band_trac_model=N
     else:
         segment_map_data = segment_map.data
 
-        ncontrast_opt, jaccard_img_path = find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_map, nlevel_val = 4, save_path = file_path, pcnn_val=pcnn_val, radec=radec, tgid=tgid, source_zred=source_zred, mu_aperture = r_mu_aperture)
+        ncontrast_opt, jaccard_img_path = find_optimal_ncontrast(img_rgb, img_rgb_mask, convolved_tot_data, segment_map, nlevel_val = 4, save_path = file_path, pcnn_val=pcnn_val, radec=radec, tgid=tgid, source_zred=source_zred, mu_aperture = r_mu_aperture, mu_island = r_mu_island)
         
         segm_deblend_opt = deblend_sources(convolved_tot_data,segment_map,
                                            npixels=npixels_min,nlevels=4, contrast=ncontrast_opt,

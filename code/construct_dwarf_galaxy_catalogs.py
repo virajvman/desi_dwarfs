@@ -307,7 +307,11 @@ def get_final_catalogs(zpix_cat, zpix_trac, sample_name):
         zpix_cat[f"MAG_{bi}_ERR"] = mag_err_bi
 
     ##adding the not extinction corrected fiber magnitude to the catalog
-    zpix_cat["FIBERMAG_R"] = 22.5 - 2.5*np.log10(zpix_cat["FIBERFLUX_R"])
+
+    if sample_name == "LOWZ":
+        zpix_cat["FIBERMAG_R"] = 22.5 - 2.5*np.log10(zpix_trac["FIBERFLUX_R"])
+    else:
+        zpix_cat["FIBERMAG_R"] = 22.5 - 2.5*np.log10(zpix_cat["FIBERFLUX_R"])
 
     
     #confirm that the two fiber flux match!
@@ -1120,6 +1124,8 @@ if __name__ == '__main__':
         for i,gal_type in enumerate(gal_types):
             zred_cut = zred_cuts[gal_type]
             save_filename = save_filenames[gal_type]
+
+            TODO: SOMETHING WEIRD HAPPENIG WITH FIBERMAGS IN LOWZ CATALOG, THEY ARE ALL ZERO ... 
             
             if gal_type == "LOWZ":
                 #read in the lowz redshift and tractor phot catalogs
@@ -1459,7 +1465,6 @@ if __name__ == '__main__':
             save_table(zpix_cat_2,  file_2,comment="")
 
     if process_sga:
-        # TODO INCORPORATE THE VI TO MAKE THE FINAL CLEAN+SHRED+SGA for comparison catalogs!
         ##by construction, the LOWZ and ELG samples do not overlap with the SGA catalog :) 
 
         bgsb_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_bgs_bright_filter_zsucc_zrr02_allfracflux_W_SGA.fits")

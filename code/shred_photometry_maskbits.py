@@ -37,6 +37,8 @@ def create_shred_maskbits(cat):
         6: 64,       # 2^6
         7: 128,      # 2^7
         8: 256,      # 2^8
+        9: 512,      # 2^9
+        
     }
 
     # Boolean arrays from your flag functions
@@ -49,7 +51,8 @@ def create_shred_maskbits(cat):
         image_mask_frac(cat),
         bad_colors(cat),
         source_not_on_segment_mask(cat),
-        very_near_bstar(cat)
+        very_near_bstar(cat),
+        aper_cen_masked(cat)
     ]
 
         # large_frac_cog_aper_out(cat),
@@ -124,6 +127,7 @@ def cog_mag_converge(catalog, mag_cut=0.5, verbose=True):
         print(f"MASKBIT=1 fraction: {frac:4f}")
         
     return bad_mask
+
 
 def bad_cog_resid(cat,chi2_cut = 0.5, verbose=False):
     '''
@@ -262,7 +266,30 @@ def very_near_bstar(catalog, radius_cut = 0.5):
 
     return bad_mask
 
+def aper_cen_masked(cat):
+    '''
+    Sources where the aperture center is on a masked pixel is masked!! 
+    What will happen to do this when the we do the light-weighted mask and no geometrical mask?
+    '''
 
+    bad_mask = cat["APER_CEN_MASKED_FINAL"].data
+
+    bad_frac = np.sum(bad_mask)/len(bad_mask)
+    print(f"MASKBIT=10 fraction: {bad_frac:4f}")
+
+    return bad_mask
+
+
+def cog_mag_smaller_tractor(cat, mag_cut = 0.5):
+    '''
+    What happens if the cog mag is much smaller than the tractor based mag? This could happen if significant parts of the galaxy are masked etc.
+    Or aperture is too small. 
+    So if the cog curves are not decreasing in any band, but tractor based mag is still much brigther, we will use the tractor based mag.
+
+    There are potential issues here for instance if the tractor model is not accurate or something, but need to VI a bit to see what are these cases ...
+    '''
+
+    
 # #mask sources where the nearest smooth blob final is not on the DESI fiber?: 39627462455334432
 
 

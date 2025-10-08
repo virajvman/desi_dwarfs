@@ -43,7 +43,6 @@ import concurrent.futures
 import pickle
 from photutils.segmentation import make_2dgaussian_kernel
 from astropy.convolution import convolve
-from aperture_cogs import get_elliptical_aperture
 from photutils.background import StdBackgroundRMS, MADStdBackgroundRMS
 from astropy.stats import SigmaClip
 from scipy.stats import skew, kurtosis
@@ -204,9 +203,92 @@ def fmt_mag(mag):
     return "NaN" if not np.isfinite(mag) else f"{mag:.2f}"
 
 
+def safe_get_col(col, fill_value=""):
+    """
+    Safely extract an astropy Table column as a numpy array of strings.
+
+    Works for:
+        - Column or MaskedColumn
+        - Single-row or multi-row tables
+        - Byte strings or Python strings
+    """
+    # Handle masked columns
+    if hasattr(col, "filled"):
+        arr = col.filled(fill_value)
+    else:
+        arr = np.asarray(col)
+
+    # If arr is scalar (0-d), make it 1D
+    arr = np.atleast_1d(arr)
+
+    # Convert byte strings to Python strings
+    arr = np.array([x.decode() if isinstance(x, bytes) else str(x) for x in arr])
+
+    return arr
+    
+
+def select_dup_stars_g2(source_cat_f, g2_dup_star, radius_arcsec=2.0):
+    """
+    Find all PSF sources within `radius_arcsec` of DUP G2 sources.
+
+    Parameters
+    ----------
+    source_cat_f : Table or structured array
+        Full source catalog containing RA, DEC, type, ref_cat, etc.
+    g2_dup_star : boolean array
+        Mask selecting the DUP G2 sources from source_cat_f.
+    radius_arcsec : float, optional
+        Matching radius in arcseconds (default = 2.0).
+
+    Returns
+    -------
+    mask : np.ndarray (bool)
+        Boolean mask of the same length as source_cat_f,
+        True for PSF sources that are within `radius_arcsec` of any DUP G2.
+    """
+
+    # Separate DUP and PSF sources
+    g2_dup_sources = source_cat_f[g2_dup_star]
+
+    type_col = np.array(safe_get_col(source_cat_f["type"]))
+    ref_col  = np.array(safe_get_col(source_cat_f["ref_cat"]))
+
+    # psf_mask = (source_cat_f["type"] == "PSF") & (source_cat_f["ref_cat"] != "G2")
+    psf_mask = (type_col == "PSF") & (ref_col != "G2")
+
+    psf_sources = source_cat_f[psf_mask]
+    
+    if len(psf_sources) == 0:
+        mask = np.zeros(len(source_cat_f), dtype=bool)
+        return mask
+    else:
+
+        #THIS IS ALL WRONG!! THIS IS NOT SELECTING THE CORRECT SOURCE
+        
+        # Build SkyCoord objects
+        dup_coords = SkyCoord(g2_dup_sources["ra"], g2_dup_sources["dec"], unit="deg")
+        psf_coords = SkyCoord(psf_sources["ra"], psf_sources["dec"], unit="deg")
+    
+        # Find all pairs within radius
+        idx_dup, idx_psf, sep2d, _ = psf_coords.search_around_sky(dup_coords, radius_arcsec * u.arcsec)
+        #https://docs.astropy.org/en/latest/coordinates/matchsep.html#searching-around-coordinates#
+        #the above link is useful to look at to understand the ordering of the coords and idx. 
+    
+        if len(idx_psf) == 0:
+            mask = np.zeros(len(source_cat_f), dtype=bool)
+            return mask
+
+        # Convert matched PSF indices back to the full catalog
+        psf_idx_in_full = np.nonzero(psf_mask)[0][idx_psf]
+    
+        # Build the mask
+        mask = np.zeros(len(source_cat_f), dtype=bool)
+        mask[psf_idx_in_full] = True
+
+        return mask
 
 
-
+        
 def run_aperture_pipe(input_dict):
     '''
     Main function that runs the initial aperture photometry pipeline. Identifying the main blob, applying the color associated criterion etc.
@@ -281,14 +363,26 @@ def run_aperture_pipe(input_dict):
     signi_pm = ( np.abs(source_cat_f["pmra"]) * np.sqrt(source_cat_f["pmra_ivar"]) > 2) | ( np.abs(source_cat_f["pmdec"]) * np.sqrt(source_cat_f["pmdec_ivar"]) > 2)
     star_model = ((source_cat_f['type'] == "PSF") | (source_cat_f['type'] == "DUP") )
 
+    ##there are some subtleties about gaia stars that are DUP. If a star is DUP, there is likely another PSF source nearby within 1'' that has similar magnitude but no ref_cat=G2.
+    #we will identify such sources as well. According to Dustin, this likely only happens for SGA galaxies
+
+    #get all the DUP sources that are G2 stars
+    g2_dup_star = (source_cat_f["ref_cat"] == "G2") &  (source_cat_f['type'] == "DUP") & signi_pm 
+
+    #the below is a mask of sources that are PSF and not G2, and are very close to G2 DUP sources and also similar magnitude
+    other_stars_dup_assoc = select_dup_stars_g2(source_cat_f, g2_dup_star)
+
+    if np.sum(other_stars_dup_assoc) > 0:
+        print(f"{np.sum(other_stars_dup_assoc)} duplicated stars associated with G2 found: {save_path}")
+
     ##some stuff choices here. There are some birght HII regions that are also in Gaia and tractor often models them as PSF. So to be lax on star definition. I think I will relax the PMRA cuts
     # is_star = (source_cat_f["ref_cat"] == "G2")  &  ( 
     #     (source_cat_f['type'] == "PSF")  | signi_pm 
     # )     
-    is_star = (source_cat_f["ref_cat"] == "G2")  &  star_model  & signi_pm  
 
-    #could also include the DUPLICATE TYPE?
-
+    #so stars are objects that are either in G2 with significant PM or are the duplicated Gaia sources that are coincident with it, but not in G2 so not selected from earlier criterion
+    is_star = ((source_cat_f["ref_cat"] == "G2")  &  star_model  & signi_pm ) | other_stars_dup_assoc 
+    
     #what is the distance to the closest star from us?
     all_stars = source_cat_f[is_star]
     if len(all_stars) > 0:
@@ -493,8 +587,7 @@ def run_aperture_pipe(input_dict):
                 return output_dict
             
 
-                
-    
+
         #define the aperture that will be used for plotting the bright star
         #these should be in the pixel coordinates
         #converting star center ra,dec into pixels
@@ -506,7 +599,6 @@ def run_aperture_pipe(input_dict):
             aperture_for_bstar_12 = CircularAperture( (float(bstar_xpix), float(bstar_ypix)) , r =  0.5*bstar_radius_pix)
 
         source_cat_all_stars = source_cat_f[is_star]
-
 
         ##compute the max mag of this star
         source_cat_all_stars["max_mag"] = np.min( (  np.array(source_cat_all_stars["gaia_phot_bp_mean_mag"]), np.array(source_cat_all_stars["gaia_phot_rp_mean_mag"]),np.array(source_cat_all_stars["gaia_phot_g_mean_mag"])    )       ,axis = 0)
@@ -538,8 +630,12 @@ def run_aperture_pipe(input_dict):
                 pass           
             else:
                 #compute its radius and mask it! It is returned in degrees and so convert to arcseconds
-                star_radius_i_as =  mask_radius_for_mag( float(source_cat_all_stars["max_mag"][j])) * 3600
 
+                if float(source_cat_all_stars["max_mag"][j]) > 0:
+                    star_radius_i_as =  mask_radius_for_mag( float(source_cat_all_stars["max_mag"][j])) * 3600
+                else:
+                    star_radius_i_as =  0
+                    
                 #same thing as before
                 mask_radius_frac = 0.5
     
@@ -549,7 +645,7 @@ def run_aperture_pipe(input_dict):
 
         star_mask = star_mask.astype(bool)
         ## the star mask is ready!!!
-
+        
         #construct the mask from the saturated pixels from bright spikes around stars
         good_pixel_mask = make_new_saturated_mask(invvar_arr)
 
@@ -970,11 +1066,9 @@ def run_aperture_pipe(input_dict):
         #saving the blended source catalog that needs to be subtracted
         source_cat_nostars_inseg_inds = np.array(source_cat_nostars_inseg_inds)
 
-        #print(f"SOURCE_CAT 7: {len(source_cat_nostars_inseg_inds)}")
 
         source_cat_nostars_inseg_remove = source_cat_nostars_inseg[source_cat_nostars_inseg_inds]
 
-        #print(f"SOURCE_CAT 8: {len(source_cat_nostars_inseg_remove)}")
 
         source_cat_nostars_inseg_remove.write( save_path + "/blended_source_remove_cat.fits", overwrite=True)
         #this catalog will be used to get the tractor model of the blended sources
@@ -1062,7 +1156,6 @@ def run_aperture_pipe(input_dict):
         # aperture_for_phot_noscale.plot(ax = ax[7], color = "r", lw = 1, ls = "dotted")
         ax[ax_id].scatter( sources_f_xpix,sources_f_ypix, s=5,color = "white",marker="^") 
         
-        #print(f"SOURCE_CAT 9: {len( sources_f_xpix)}")
 
         
         #sources that are stars!
@@ -1085,12 +1178,10 @@ def run_aperture_pipe(input_dict):
                    interpolation='nearest')
         #plotting the sources in the main segment
 
-        #print(f"SOURCE_CAT 10.5: {len( source_cat_inseg_signi)}")
 
         
         plot_now = source_cat_inseg_signi[(~is_star_inseg_signi)]
 
-        #print(f"SOURCE_CAT 10: {len( plot_now)}")
 
         
         for p in range(len(plot_now)):
@@ -1123,7 +1214,6 @@ def run_aperture_pipe(input_dict):
         
         plot_now = source_cat_inseg_signi[(~is_star_inseg_signi)]
 
-        #print(f"SOURCE_CAT 11: {len( plot_now)}")
 
         
         for p in range(len(plot_now)):
@@ -1157,7 +1247,6 @@ def run_aperture_pipe(input_dict):
 
         plot_now = source_cat_inseg_signi[(~is_star_inseg_signi) ]
 
-        #print(f"SOURCE_CAT 12: {len( plot_now)}")
 
         
         gr_new, rz_new = get_updated_gr_rz(plot_now["g-r"].data, plot_now["r-z"].data)

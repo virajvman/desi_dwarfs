@@ -813,7 +813,7 @@ if __name__ == '__main__':
                 "SGA": "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_SGA_sga_catalog_w_aper_mags.fits"}
 
     if True:
-        get_all_data = True
+        get_all_data = False
 
         for sample_i in file_dict.keys():
             print(f"Reading {sample_i} catalog")
@@ -849,7 +849,7 @@ if __name__ == '__main__':
                 np.save(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/all_shred_metadata_scaled_{sample_i}.npy", all_metadata_scaled)
         
             else:
-                all_shred_images_unnorm = np.load(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/all_shred_data_N_6_96_96.npy_{sample_i}")
+                all_shred_images_unnorm = np.load(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/all_shred_data_N_6_96_96_{sample_i}.npy")
                 all_metadata_scaled = np.load(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/all_shred_metadata_scaled_{sample_i}.npy")
     
             print("Images finished generated/reading!")

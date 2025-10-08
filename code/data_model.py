@@ -3,12 +3,113 @@ import numpy as np
 
 # Example datamodel template
 
-main_datamodel = {
-
-#different distance estimates, stellar mass estimates, final best photometry
+#different distance estimates, stellar mass estimates, final best photometry, quality_maskbits
 #incluce information on closest angular distance to SGA galaxy
+import numpy as np
+import astropy.units as u
 
+logM_sun = u.def_unit('log(solMass)', format={'latex': r'\log(M_\odot)'})
+
+main_datamodel = {
+    "TARGETID": {
+        "unit": None,
+        "description": "DESI TARGET ID",
+        "blank_value": np.nan,
+        "dtype": "int64"
+    },
+    "SURVEY": {
+        "unit": None,
+        "description": "Survey name",
+        "blank_value": "",
+        "dtype": "str"
+    },
+    "PROGRAM": {
+        "unit": None,
+        "description": "Program name",
+        "blank_value": "",
+        "dtype": "str"
+    },
+    "Z": {
+        "unit": None,
+        "description": "Redrock Redshift",
+        "blank_value": np.nan,
+        "dtype": "float64"
+    },
+    "DELTACHI2": {
+        "unit": None,
+        "description": "Redrock delta-chi-squared",
+        "blank_value": np.nan,
+        "dtype": "float64"
+    },
+    "ZWARN": {
+        "unit": None,
+        "description": "Redrock zwarning bit",
+        "blank_value": np.nan,
+        "dtype": "int8"
+    },
+    "RA_TARGET": {
+        "unit": "deg",
+        "description": "Right Ascension from target catalog",
+        "blank_value": np.nan,
+        "dtype": "float64"
+    },
+    "DEC_TARGET": {
+        "unit": "deg",
+        "description": "Declination from target catalog",
+        "blank_value": np.nan,
+        "dtype": "float64"
+    },
+    "DESINAME": {
+        "unit": None,
+        "description": "DESI object name",
+        "blank_value": "",
+        "dtype": "str"
+    },
+    "DIST_MPC_FIDU": {
+        "unit": "Mpc",
+        "description": "Fiducial luminosity distance in Mpc",
+        "blank_value": np.nan,
+        "dtype": "float32"
+    },
+    "LOGM_SAGA_FIDU": {
+        "unit": logM_sun,
+        "description": "Log stellar mass using the fiducial luminosity distance and SAGA gr-based approximation",
+        "blank_value": np.nan,
+        "dtype": "float32"
+    },
+    "LOGM_M24_VCMB": {
+        "unit": logM_sun,
+        "description": "Log stellar mass using the fiducial luminosity distance and de los Reyes et al. 2024 gr-based approximation",
+        "blank_value": np.nan,
+        "dtype": "float32"
+    },
+    "MAG_G": {
+        "unit": u.mag,
+        "description": "g-band magnitude (MW extinction corrected)",
+        "blank_value": np.nan,
+        "dtype": "float32"
+    },
+    "MAG_R": {
+        "unit": u.mag,
+        "description": "r-band magnitude (MW extinction corrected)",
+        "blank_value": np.nan,
+        "dtype": "float32"
+    },
+    "MAG_Z": {
+        "unit": u.mag,
+        "description": "z-band magnitude (MW extinction corrected)",
+        "blank_value": np.nan,
+        "dtype": "float32"
+    },
+    "SAMPLE": {
+        "unit": None,
+        "description": "DESI target class (e.g., BGS_BRIGHT, BGS_FAINT) ",
+        "blank_value": "",
+        "dtype": "str"
+    }
 }
+
+
 
 zcat_datamodel = {
 
@@ -438,7 +539,7 @@ photo_datamodel = {
     "APER_SOURCE_ON_ORG_BLOB": {
         "unit": None,
         "description": "Bool indicating whether DESI source location lies on the unsmoothed detection blob",
-        "blank_value": False
+        "blank_value": False,
         "dtype": "bool"
         
     },
@@ -491,47 +592,10 @@ photo_datamodel = {
 }
 
 
-spectra_datamodel = {
-
-}
+spectra_datamodel = {}
 
 
-imaging_datamodel = {
-
-
-}
+imaging_datamodel = {}
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    
-}

@@ -28,8 +28,9 @@ import time
 import sys
 import argparse
 
-
 def simple_progress_bar(iteration, total, length=30):
+    if total == 0:
+        total = 1
     percent = iteration / total
     bar = '=' * int(length * percent) + '-' * (length - int(length * percent))
     sys.stdout.write(f'\r|{bar}| {percent:.3%}')
@@ -430,6 +431,45 @@ def get_blended_remove_sources(i, ra, dec, tgid, file_path, img_path, width,pixs
     
 
 
+# def save_main_tractor_models(tractor_parent, parent_source_cat, wcs, ave_psfsize_dict,
+#                         tractor_save_dir, file_path, tgid, width):
+#     """
+#     Saves individual or HDF5-packed tractor source models depending on source count.
+#     """
+#     if len(tractor_parent) == 0:
+#         print(f"The parent source catalog existed for {tgid}, but no sources remain after parent mask.")
+#         return
+
+#     max_ra_diff = np.max(np.abs(tractor_parent.get("ra") - parent_source_cat["ra"]))
+#     if max_ra_diff > 0:
+#         raise ValueError(f"Inconsistent RA values in get_main_blob_sources : {max_ra_diff}")
+    
+#     total_model = np.zeros((3, width, width))
+#     use_hdf5 = False #len(tractor_parent) > 100
+
+#     if use_hdf5:
+#         h5_path = f"{tractor_save_dir}/tractor_parent_source_models.h5"
+#         print(f"FYI: Writing {len(tractor_parent)} models to combined HDF5 file: {h5_path}")
+#         with h5py.File(h5_path, "w") as f:
+#             for k in range(len(tractor_parent)):
+#                 objid = int(parent_source_cat["source_objid_new"].data[k])
+#                 mod = build_model_image(tractor_parent[k], wcs, ave_psfsize_dict, mean_psf=True)
+#                 total_model += mod
+#                 f.create_dataset(str(objid), data=mod, compression="gzip", chunks=True)
+#     else:
+#         for k in range(len(tractor_parent)):
+#             objid = int(parent_source_cat["source_objid_new"].data[k])
+#             mod = build_model_image(tractor_parent[k], wcs, ave_psfsize_dict, mean_psf=True)
+#             total_model += mod
+#             np.save(f"{tractor_save_dir}/tractor_parent_source_model_{objid}.npy", mod)
+
+#     # Save the combined model and visualization
+#     np.save(f"{file_path}/tractor_main_segment_model.npy", total_model)
+#     save_rgb_single_panel(total_model, file_path, image_name="tractor_main_segment_galaxy_model")
+
+#     return
+
+
 def get_main_blob_sources(i, ra, dec, tgid, file_path, img_path, width, pixscale=0.262,testing=False):
     '''
     Function that gets all the tractor sources for things on the main blob. This will contain sources that we also removed via a color cut. But we will do that step in the cog function. Here for the simple photo purposes as well, we will save all the non-stars sources on the segment! 
@@ -477,17 +517,29 @@ def get_main_blob_sources(i, ra, dec, tgid, file_path, img_path, width, pixscale
         tractor_save_dir = file_path + "/tractor_models"
         
         os.makedirs(tractor_save_dir, exist_ok=True)
-    
+
+        #if files already exist, we want to remove them to avoid any confusions
+        for filename in os.listdir(tractor_save_dir):
+            if filename.endswith(".npy") or filename.endswith(".npz"):
+                file_path_i = os.path.join(tractor_save_dir, filename)
+                try:
+                    os.remove(file_path_i)
+                except Exception as e:
+                    print(f"Warning: failed to delete {file_path_i}. Reason: {e}")
+
+        wcs = make_custom_wcs(ra, dec, width, pixscale)
+
+        # save_main_tractor_models(tractor_parent, parent_source_cat, wcs, ave_psfsize_dict,
+        #                     tractor_save_dir, file_path, tgid, width)
+               
         if len(tractor_parent) != 0:
 
             max_ra_diff = np.max(np.abs(tractor_parent.get("ra") - parent_source_cat["ra"]))
             if max_ra_diff > 0:
                 raise ValueError(f"Inconsistent RA values in get_main_blob_sources : {max_ra_diff}")
                 
-            wcs = make_custom_wcs(ra, dec, width, pixscale)
-            
             total_model = np.zeros((3, width, width))
-            
+
             #loop through each source model image!
             for k in range(len(tractor_parent)):
                 mod = build_model_image(tractor_parent[k], wcs, ave_psfsize_dict, mean_psf=True)
@@ -511,9 +563,6 @@ def get_main_blob_sources(i, ra, dec, tgid, file_path, img_path, width, pixscale
     
     return
 
-        
-## another function to consider, if it is fast enough in the future is to store the tractor model for each object and then just add the ones we want at the end !!
-
 
 def worker(args):
     i, dwarf_cat, func = args
@@ -530,6 +579,11 @@ def worker(args):
     return 1  # for progress counting
 
 
+def parse_tgids(value):
+    if not value:
+        return None
+    return [int(x) for x in value.split(',')]
+
     
 def argument_parser():
     '''
@@ -543,7 +597,8 @@ def argument_parser():
     result.add_argument('-bkg_source',dest='bkg_source', action = "store_true")    
     result.add_argument('-max_num',dest='max_num',type = int, default= 100000 )  
     result.add_argument('-blend_remove_source',dest='blend_remove_source', action = "store_true")  
-    result.add_argument('-parent_galaxy',dest='parent_galaxy', action = "store_true")    
+    result.add_argument('-parent_galaxy',dest='parent_galaxy', action = "store_true")
+    result.add_argument('-tgids',dest="tgids_list", type=parse_tgids) 
     
     return result
 
@@ -563,7 +618,7 @@ if __name__ == '__main__':
     blend_remove_source = args.blend_remove_source
     parent_galaxy = args.parent_galaxy
     max_num = args.max_num
-    
+    tgids_list = args.tgids_list
     
     print(f"Reading the sample = {use_sample}")
 
@@ -581,8 +636,14 @@ if __name__ == '__main__':
     print(f"Reading the sample = {sample}")
     dwarf_cat = dwarf_cat[dwarf_cat["SAMPLE"] == sample]
 
-    dwarf_cat = dwarf_cat[:max_num]
 
+    if tgids_list is not None:
+        print("List of targetids to process:",tgids_list)
+        dwarf_cat = dwarf_cat[np.isin(dwarf_cat['TARGETID'], np.array(tgids_list) )]
+        print("Number of targetids to process =", len(dwarf_cat))
+
+    dwarf_cat = dwarf_cat[:max_num]
+    
     print(len(dwarf_cat))
     total = len(dwarf_cat)
 

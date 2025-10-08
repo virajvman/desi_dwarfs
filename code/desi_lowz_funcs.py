@@ -1740,6 +1740,9 @@ def measure_elliptical_aperture_area_in_image_pix(image_shape, ell_aper_obj):
     return area_in_image
 
 def measure_elliptical_aperture_area_fraction(image_shape, ell_aper_obj):
+    '''
+    The fraction of the aperture that is inside the image?
+    '''
     # aperture: EllipticalAperture object
     # image_shape: (ny, nx)
     
@@ -1754,13 +1757,15 @@ def measure_elliptical_aperture_area_fraction(image_shape, ell_aper_obj):
 
     return fraction
 
-def get_elliptical_aperture(segment_mask, sigma = 3, aperture_mask = None, id_num = None ):
+def get_elliptical_aperture(segment_mask, grz_image = None, sigma = 3, aperture_mask = None, id_num = None, img_type = "binary"):
     '''
     Function that takes in a segment mask and fits an aperture to it!
 
     Note that the sizes etc. obtained here does not have much to do with actual size of the galaxy. We are just using this to get some fiducial size and 
     and to scale the aperture. If we wanted light weighted aperture, we would have to work with the actual image and not the pixel mask.
-    
+
+    img_type is the kind of image on which we want to do apeture estimation. If img_type = "binary", then it will use segment_mask.
+    if img_type = "light", then it will be on the g+r+z added image?
     '''
 
     if id_num is not None:
@@ -1774,11 +1779,22 @@ def get_elliptical_aperture(segment_mask, sigma = 3, aperture_mask = None, id_nu
         if np.sum( segment_mask) == 0:
             #in case source is too close to the star, then we do not code to crash so we unmask it again
             segment_mask[aperture_mask] = 1
+
+        if grz_image is not None:
+            grz_image[aperture_mask] = 0
+
+    #for the light type, we do not want to give the entire image, rather the actual image where we have the segment non-zero
+    if img_type == "light":
+        grz_image[segment_mask == 0] = 0 
         
     #segment_mask is a binary mask.
     #use this trick to get properties of the main segment 
-    cat = data_properties(segment_mask, mask=None)
 
+    if img_type == "binary":
+        cat = data_properties(segment_mask, mask=None)
+    if img_type == "light":
+        cat = data_properties(grz_image, mask=None)
+    
     columns = ['label', 'xcentroid', 'ycentroid', 'semimajor_sigma',
                'semiminor_sigma', 'orientation']
     tbl = cat.to_table(columns=columns)
@@ -1796,6 +1812,7 @@ def get_elliptical_aperture(segment_mask, sigma = 3, aperture_mask = None, id_nu
     area_fraction = measure_elliptical_aperture_area_fraction(segment_mask.shape, aperture)
 
     return aperture, area_fraction, xypos, [cat.semimajor_sigma.value, b/a, theta]
+
 
 import scipy.optimize as opt
 

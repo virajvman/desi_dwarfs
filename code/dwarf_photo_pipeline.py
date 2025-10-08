@@ -11,7 +11,7 @@ from astropy.coordinates import SkyCoord
 import argparse
 from astropy.io import fits
 from astropy.wcs import WCS
-from astropy.table import Table, vstack, join
+from astropy.table import Table, vstack, join, hstack
 import multiprocessing as mp
 from tqdm import tqdm, trange
 url_prefix = 'https://www.legacysurvey.org/viewer/'
@@ -1020,31 +1020,44 @@ if __name__ == '__main__':
                         results.append( run_aperture_pipe(all_inputs[i]) )
         
                 ### saving the results of the photometry pipeline
-                # results = np.array(results)
-            
+                
                 print_stage("Done running aperture photometry!!")
 
-                final_close_star_dists = np.array([r["closest_star_norm_dist"] for r in results])
-                final_close_star_maxmags  = np.array([r["closest_star_mag"] for r in results])
-                final_aper_r3_mags     = np.vstack([r["aper_r3_mags"] for r in results])  # if same shape
-               
-                final_trac_mags           = np.vstack([r["tractor_dr9_mags"] for r in results]) 
+                #ADDING COG OUTPUTS WITHOUT ISOLATE MASK
+                aper_output_dict = {}
+                #dict keys that directly map from output dict to astropy table!
+                aper_table_keys = {"closest_star_norm_dist": "NEAREST_STAR_NORM_DIST",
+                                   "closest_star_mag": "NEAREST_STAR_MAX_MAG",
+                                   "aper_r3_mags": "APER_ORG_R3_MAG",
+                                   "save_path": "SAVE_PATH",
+                                   "lie_on_segment_island": "APER_SOURCE_ON_ORG_BLOB" ,
+                                   "save_summary_png": "SAVE_SUMMARY_APER_PATH",
+                                   "aper_frac_mask_badpix": "APER_ORG_R3_FRAC_MASK_PIX", 
+                                   "img_frac_mask_badpix": "IMAGE_MASK_PIX_FRAC", 
+                                        }
                 
-                final_save_paths         = [r["save_path"] for r in results]
-                on_segment_island        = np.array([r["lie_on_segment_island"] for r in results])
-                final_image_paths       = [r["save_summary_png"] for r in results]
+                #looping over the keys!!
+                for keys in aper_table_keys.keys():
+                    aper_output_dict[ aper_table_keys[keys] ] = stack_results(results, keys)
 
-                aper_frac_mask_badpix = [r["aper_frac_mask_badpix"] for r in results]
-                img_frac_mask_badpix = [r["img_frac_mask_badpix"] for r in results]
+                #make into a table
+                aper_output_table = Table(aper_output_dict)
 
+                #hstack this with the shreds_focus_i
+                shreds_focus_i = hstack([shreds_focus_i, aper_output_table])
+
+                final_image_paths = list( shreds_focus_i["SAVE_SUMMARY_APER_PATH"].data )            
+    
+                final_trac_mags = stack_results(results, "tractor_dr9_mags") 
+   
                 if chunk_i == 0:
                     print_stage("Example outputs from aperture pipeline")
-                    print("fidu aper mags shape : ",final_aper_r3_mags.shape)
-                    print("final close star_dists shape : ", final_close_star_dists.shape)
+                    print("fidu aper mags shape : ",shreds_focus_i["APER_ORG_R3_MAG"].data.shape)
+                    print("final close star_dists shape : ",  shreds_focus_i["NEAREST_STAR_NORM_DIST"].data.shape )
                     #print some values for testing
-                    print("aper_mags : ", final_aper_r3_mags[0])
-                    print("aper frac mask badpix : ", aper_frac_mask_badpix[0] )
-                    print("img frac mask badpix : ", img_frac_mask_badpix[0] )
+                    print("aper_mags : ", shreds_focus_i["APER_ORG_R3_MAG"].data[0] )
+                    print("aper frac mask badpix : ", shreds_focus_i["APER_ORG_R3_FRAC_MASK_PIX"].data[0] )
+                    print("img frac mask badpix : ", shreds_focus_i["IMAGE_MASK_PIX_FRAC"].data[0] )
                     
                     print("---"*5)
                     
@@ -1056,33 +1069,12 @@ if __name__ == '__main__':
                 ##if within 1.5 of the stellar radius and the star is within 45 arcsecs of ths source
                 special_plot_mask += list( (shreds_focus_i["STARFDIST"] < 1.5) & (shreds_focus_i["STARDIST_DEG"]*3600 < 45) )
                 
-
                 #check that the org mags make sense
                 print("Maximum Abs difference between org mags = ",np.max( np.abs(final_trac_mags[:,0] - shreds_focus_i["MAG_G"]) ))
                 print("Median Abs difference between org mags = ",np.median( np.abs(final_trac_mags[:,0] - shreds_focus_i["MAG_G"]) ))
                 
-                #check that the org mags make sense
-                # print("Maximum Abs difference between org mags = ",np.max( np.abs(final_org_mags[:,0] - shreds_focus_i["MAG_G"]) ))
-                
-                shreds_focus_i["NEAREST_STAR_NORM_DIST"] = final_close_star_dists
-                shreds_focus_i["NEAREST_STAR_MAX_MAG"] = final_close_star_maxmags
-
-                shreds_focus_i["APER_ORG_R3_MAG_G"] = final_aper_r3_mags[:,0]
-                shreds_focus_i["APER_ORG_R3_MAG_R"] = final_aper_r3_mags[:,1]
-                shreds_focus_i["APER_ORG_R3_MAG_Z"] = final_aper_r3_mags[:,2]
-
-                shreds_focus_i["SAVE_PATH"] = final_save_paths 
-                #the file path to the aper summary image
-                shreds_focus_i["SAVE_SUMMARY_APER_PATH"] = final_image_paths
-                
-                shreds_focus_i["APER_SOURCE_ON_ORG_BLOB"] = on_segment_island.astype(bool)
-
-                shreds_focus_i["APER_ORG_R3_FRAC_MASK_PIX"] = aper_frac_mask_badpix
-                shreds_focus_i["IMAGE_MASK_PIX_FRAC"] = img_frac_mask_badpix
-
-                print("Compute aperture-photometry based stellar masses now!")
-
-                shreds_focus_i = compute_aperture_masses(shreds_focus_i, rband_key="APER_ORG_R3_MAG_R", gband_key="APER_ORG_R3_MAG_G", z_key="Z", output_key="LOGM_SAGA_APER_ORG_R3")
+                # print("Compute aperture-photometry based stellar masses now!")
+                # shreds_focus_i = compute_aperture_masses(shreds_focus_i, rband_key="APER_ORG_R3_MAG_R", gband_key="APER_ORG_R3_MAG_G", z_key="Z", output_key="LOGM_SAGA_APER_ORG_R3")
                     
                 #then save this file!
                 if tgids_list is None:
@@ -1128,7 +1120,6 @@ if __name__ == '__main__':
                     raise ValueError("The LIE_ON_APER_SEGMENT clause did not get added properly to the dictionary")
                 #and to the input dictionary, add info on whether cog should be run or not!
     
-
                 ##I CAN CHECK IF THE CHUNK I AM AT HAS ALREADY SAVED ALL THE COG PARAMS??
                 #Do not need to repeat the analysis then
                 if os.path.exists(file_save) and tgids_list is None:
@@ -1151,108 +1142,179 @@ if __name__ == '__main__':
                         results.append( run_cog_pipe(all_inputs[i]) )
         
                 ### saving the results of the photometry pipeline
+
+                #saving the different magnitudes
+
+                #isolate mags
+                final_aper_r4_mags    = stack_results( results, "aper_r4_mags")
+                final_cog_mags        = stack_results( results, "cog_mags")
+                final_tractor_only_mags_isolate        = stack_results( results, "tractor_parent_isolate_mags")
+
+                #these already include the isolate mask
+                final_simple_mags        = stack_results( results, "simple_photo_mags")
+
+                #no isolate mags
+                final_aper_r4_mags_no_isolate    = stack_results( results, "aper_r4_mags_no_isolate")
+                final_cog_mags_no_isolate        = stack_results( results, "cog_mags_no_isolate")
+                final_tractor_only_mags_no_isolate        = stack_results( results, "tractor_parent_no_isolate_mags")
+                
+                final_tractor_brightest_source_mag_isolate = stack_results( results, "tractor_brightest_source_mags_w_isolate")
+                final_tractor_brightest_source_mag_no_isolate = stack_results( results, "tractor_brightest_source_mags_no_isolate")
+                            
+                all_mags_output_dict = {"COG_MAG_G_ISOLATE": final_cog_mags[:,0] ,
+                                        "COG_MAG_R_ISOLATE": final_cog_mags[:,1] ,
+                                        "COG_MAG_Z_ISOLATE": final_cog_mags[:,2] ,
+                                        "COG_MAG_G_NO_ISOLATE": final_cog_mags_no_isolate[:,0] ,
+                                        "COG_MAG_R_NO_ISOLATE": final_cog_mags_no_isolate[:,1] ,
+                                        "COG_MAG_Z_NO_ISOLATE": final_cog_mags_no_isolate[:,2] ,
+                                        "APER_R4_MAG_G_ISOLATE": final_aper_r4_mags[:,0] ,
+                                        "APER_R4_MAG_R_ISOLATE": final_aper_r4_mags[:,1] ,
+                                        "APER_R4_MAG_Z_ISOLATE": final_aper_r4_mags[:,2] ,
+                                        "APER_R4_MAG_G_NO_ISOLATE": final_aper_r4_mags_no_isolate[:,0] ,
+                                        "APER_R4_MAG_R_NO_ISOLATE": final_aper_r4_mags_no_isolate[:,1] ,
+                                        "APER_R4_MAG_Z_NO_ISOLATE": final_aper_r4_mags_no_isolate[:,2] ,
+                                        "TRACTOR_ONLY_MAG_G_ISOLATE": final_tractor_only_mags_isolate[:,0] ,
+                                        "TRACTOR_ONLY_MAG_R_ISOLATE": final_tractor_only_mags_isolate[:,1] ,
+                                        "TRACTOR_ONLY_MAG_Z_ISOLATE": final_tractor_only_mags_isolate[:,2] ,
+                                        "TRACTOR_ONLY_MAG_G_NO_ISOLATE": final_tractor_only_mags_no_isolate[:,0] ,
+                                        "TRACTOR_ONLY_MAG_R_NO_ISOLATE": final_tractor_only_mags_no_isolate[:,1] ,
+                                        "TRACTOR_ONLY_MAG_Z_NO_ISOLATE": final_tractor_only_mags_no_isolate[:,2],
+                                        "TRACTOR_BRIGHTEST_SOURCE_MAGS_ISOLATE": final_tractor_brightest_source_mag_isolate,
+                                        "TRACTOR_BRIGHTEST_SOURCE_MAGS_NO_ISOLATE": final_tractor_brightest_source_mag_no_isolate,
+                                        "SIMPLE_PHOTO_MAG_G" : final_simple_mags[:,0],
+                                        "SIMPLE_PHOTO_MAG_R" : final_simple_mags[:,1],
+                                        "SIMPLE_PHOTO_MAG_Z" : final_simple_mags[:,2]}
+
+
+                # Convert to an Astropy table
+                all_mags_table = Table(all_mags_output_dict)
+    
+                with_isolate_output_dict = {}            
+                #ADDING COG OUTPUTS WHEN USING ISOLATE MASK
+                with_isolate_table_keys = {"cog_mags_err": "COG_MAG_ERR_ISOLATE",
+                                        "fiber_mags" : "FIBER_MAG_ISOLATE" ,
+                                        "cog_params_g": "COG_PARAMS_G_ISOLATE" ,
+                                        "cog_params_r": "COG_PARAMS_R_ISOLATE",
+                                        "cog_params_z": "COG_PARAMS_Z_ISOLATE",
+                                        "cog_params_g_err": "COG_PARAMS_G_ERR_ISOLATE" ,
+                                        "cog_params_r_err": "COG_PARAMS_R_ERR_ISOLATE",
+                                        "cog_params_z_err": "COG_PARAMS_Z_ERR_ISOLATE",
+                                         "aper_r4_frac_in_image": "APER_R4_FRAC_IN_IMG_ISOLATE",
+                                         "cog_chi2": "COG_CHI2_ISOLATE" ,
+                                         "cog_dof": "COG_DOF_ISOLATE",
+                                         "cog_decrease_len": "COG_DECREASE_MAX_LEN_ISOLATE",
+                                        "cog_decrease_mag": "COG_DECREASE_MAX_MAG_ISOLATE",
+                                         "aper_params": 'APER_PARAMS_ISOLATE' ,
+                                         "aper_radec_cen": 'APER_CEN_RADEC_ISOLATE',
+                                         "aper_xy_pix_cen": 'APER_CEN_XY_PIX_ISOLATE',
+                                         "mask_frac_r4": 'APER_R4_MASK_FRAC_ISOLATE',
+                                        "aper_cen_masked_bool": 'APER_CEN_MASKED_ISOLATE' 
+                                        }
+
+                #looping over the keys!!
+                for keys in with_isolate_table_keys.keys():
+                    with_isolate_output_dict[ with_isolate_table_keys[keys] ] = stack_results(results, keys)
+                
+
+                #ADDING COG OUTPUTS WITHOUT ISOLATE MASK
+                no_isolate_output_dict = {}
+                #dict keys that directly map from output dict to astropy table!
+                no_isolate_table_keys = {"cog_mags_err_no_isolate": "COG_MAG_ERR_NO_ISOLATE",
+                                          "fiber_mags_no_isolate" : "FIBER_MAG_NO_ISOLATE" ,
+                                        "cog_params_g_no_isolate": "COG_PARAMS_G_NO_ISOLATE" ,
+                                        "cog_params_r_no_isolate": "COG_PARAMS_R_NO_ISOLATE",
+                                        "cog_params_z_no_isolate": "COG_PARAMS_Z_NO_ISOLATE",
+                                        "cog_params_g_err_no_isolate": "COG_PARAMS_G_ERR_NO_ISOLATE" ,
+                                        "cog_params_r_err_no_isolate": "COG_PARAMS_R_ERR_NO_ISOLATE",
+                                        "cog_params_z_err_no_isolate": "COG_PARAMS_Z_ERR_NO_ISOLATE",
+                                         "aper_r4_frac_in_image_no_isolate": "APER_R4_FRAC_IN_IMG_NO_ISOLATE",
+                                         "cog_chi2_no_isolate": "COG_CHI2_NO_ISOLATE" ,
+                                         "cog_dof_no_isolate": "COG_DOF_NO_ISOLATE",
+                                         "cog_decrease_len_no_isolate": "COG_DECREASE_MAX_LEN_NO_ISOLATE",
+                                        "cog_decrease_mag_no_isolate": "COG_DECREASE_MAX_MAG_NO_ISOLATE",
+                                         "aper_params_no_isolate": 'APER_PARAMS_NO_ISOLATE' ,
+                                         "aper_radec_cen_no_isolate": 'APER_CEN_RADEC_NO_ISOLATE',
+                                         "aper_xy_pix_cen_no_isolate": 'APER_CEN_XY_PIX_NO_ISOLATE',
+                                         "mask_frac_r4_no_isolate": 'APER_R4_MASK_FRAC_NO_ISOLATE',
+                                         "aper_cen_masked_bool_no_isolate": 'APER_CEN_MASKED_NO_ISOLATE' 
+                                        }
+                
+                #looping over the keys!!
+                for keys in no_isolate_table_keys.keys():
+                    no_isolate_output_dict[ no_isolate_table_keys[keys] ] = stack_results(results, keys)
+
+                total_output_dict = with_isolate_output_dict | no_isolate_output_dict
+                total_output_table = Table(total_output_dict)
+                    
+                ##adding the tractor catalog outputs. both isolate and no isolate
+                tractor_output_dict = {}
+
+                tractor_output_table_keys_isolate = {
+                    "tractor_cog_mags_w_isolate": "TRACTOR_ONLY_COG_MAG_ISOLATE",
+                    "tractor_fiber_mags_w_isolate": "TRACTOR_ONLY_FIBER_MAG_ISOLATE",
+                    "tractor_cog_mags_err_w_isolate": "TRACTOR_ONLY_COG_MAG_ERR_ISOLATE",
+                    "tractor_cog_params_g_w_isolate": "TRACTOR_ONLY_COG_PARAMS_G_ISOLATE",
+                    "tractor_cog_params_g_err_w_isolate": "TRACTOR_ONLY_COG_PARAMS_G_ERR_ISOLATE",
+                    "tractor_cog_params_r_w_isolate": "TRACTOR_ONLY_COG_PARAMS_R_ISOLATE",
+                    "tractor_cog_params_r_err_w_isolate": "TRACTOR_ONLY_COG_PARAMS_R_ERR_ISOLATE", 
+                    "tractor_cog_params_z_w_isolate": "TRACTOR_ONLY_COG_PARAMS_Z_ISOLATE",
+                    "tractor_cog_params_z_err_w_isolate": "TRACTOR_ONLY_COG_PARAMS_Z_ERR_ISOLATE",
+                    "tractor_cog_chi2_w_isolate": "TRACTOR_ONLY_COG_CHI2_ISOLATE", 
+                    "tractor_aper_radec_cen_w_isolate": "TRACTOR_ONLY_APER_CEN_RADEC_ISOLATE", 
+                    "tractor_aper_params_w_isolate": "TRACTOR_ONLY_APER_PARAMS_ISOLATE",
+                    "tractor_aper_cen_masked_bool_w_isolate": "TRACTOR_APER_CEN_MASKED_ISOLATE"
+                }
+
+                tractor_output_table_keys_no_isolate = {
+                    "tractor_cog_mags_no_isolate": "TRACTOR_ONLY_COG_MAG_NO_ISOLATE",
+                    "tractor_fiber_mags_no_isolate": "TRACTOR_ONLY_FIBER_MAG_NO_ISOLATE",
+                    "tractor_cog_mags_err_no_isolate": "TRACTOR_ONLY_COG_MAG_ERR_NO_ISOLATE",
+                    "tractor_cog_params_g_no_isolate": "TRACTOR_ONLY_COG_PARAMS_G_NO_ISOLATE",
+                    "tractor_cog_params_g_err_no_isolate": "TRACTOR_ONLY_COG_PARAMS_G_ERR_NO_ISOLATE",
+                    "tractor_cog_params_r_no_isolate": "TRACTOR_ONLY_COG_PARAMS_R_NO_ISOLATE",
+                    "tractor_cog_params_r_err_no_isolate": "TRACTOR_ONLY_COG_PARAMS_R_ERR_NO_ISOLATE", 
+                    "tractor_cog_params_z_no_isolate": "TRACTOR_ONLY_COG_PARAMS_Z_NO_ISOLATE",
+                    "tractor_cog_params_z_err_no_isolate": "TRACTOR_ONLY_COG_PARAMS_Z_ERR_NO_ISOLATE",
+                    "tractor_cog_chi2_no_isolate": "TRACTOR_ONLY_COG_CHI2_NO_ISOLATE", 
+                    "tractor_aper_radec_cen_no_isolate": "TRACTOR_ONLY_APER_CEN_RADEC_NO_ISOLATE", 
+                    "tractor_aper_params_no_isolate": "TRACTOR_ONLY_APER_PARAMS_NO_ISOLATE",
+                    "tractor_aper_cen_masked_bool_no_isolate": "TRACTOR_APER_CEN_MASKED_NO_ISOLATE"
+                }
+
+                #combining the above dictionaries into one!
+                tractor_output_table_keys = tractor_output_table_keys_isolate | tractor_output_table_keys_no_isolate
+
+                #looping over the keys!!
+                for keys in tractor_output_table_keys.keys():
+                    tractor_output_dict[ tractor_output_table_keys[keys] ] = stack_results(results, keys)
+
+                tractor_output_table = Table(tractor_output_dict)
+                                
+                ## add the other columns!
+                other_output_dict = {}
+                #dict keys that directly map from output dict to astropy table!
+                other_table_keys = {"deblend_smooth_num_seg": "DEBLEND_SMOOTH_NUM_BLOB" ,
+                                    "revert_to_org_tractor": "REVERT_TO_OLD_TRACTOR",
+                                    "aper_r2_mu_r_ellipse_tractor" : "APER_R2_MU_R_ELLIPSE_TRACTOR", 
+                                    "aper_r2_mu_r_island_tractor": "APER_R2_MU_R_ISLAND_TRACTOR",
+                                    "deblend_blob_dist_pix": "DEBLEND_BLOB_DIST_PIX",
+                                    "cog_segment_nseg" : "COG_NUM_SEG",
+                                    "cog_segment_nseg_smooth" : "COG_NUM_SEG_SMOOTH",
+                                    "cog_segment_on_blob" : "COG_SEG_ON_BLOB" ,
+                                    "num_trac_source_no_isolate": "NUM_TRACTOR_SOURCES_NO_ISOLATE" ,
+                                    "num_trac_source_isolate" : "NUM_TRACTOR_SOURCES_ISOLATE",
+                                    "simple_photo_island_dist_pix" :"SIMPLE_BLOB_DIST_PIX" ,
+                                    "simplest_photo_aper_frac_in_image" : "SIMPLE_APER_R4_FRAC_IN_IMG" ,
+                                    "areafrac_in_grz_image_r4":  "APER_R4_DATA_FRAC_IN_IMAGE_NO_ISOLATE"
+                                        }
+    
+                #looping over the keys!!
+                for keys in other_table_keys .keys():
+                    other_output_dict[ other_table_keys[keys] ] = stack_results(results, keys)
+
+                other_output_table = Table(other_output_dict)
         
-                # Each element of results is:
-                # "aper_r4_mags": all_aper_mags_r4,
-                # "cog_mags": cog_mags,
-                # "cog_mags_err": final_cog_mags_err,
-                # "cog_params_g":  cog_output_dict["cog_params"]["g"],
-                # "cog_params_r":  cog_output_dict["cog_params"]["r"],
-                # "cog_params_z":  cog_output_dict["cog_params"]["z"],
-                # "cog_params_g_err": cog_output_dict["cog_params_err"]["g"],
-                # "cog_params_r_err": cog_output_dict["cog_params_err"]["r"],
-                # "cog_params_z_err": cog_output_dict["cog_params_err"]["z"],
-                # "img_path": cog_output_dict["save_img_path"],
-                # "cog_chi2" : cog_output_dict["cog_chi2"], 
-                # "cog_dof" : cog_output_dict["cog_dof"],
-                # "aper_r4_frac_in_image": cog_output_dict["aper_r4_frac_in_image"],
-                # "cog_decrease_len": cog_output_dict["cog_decrease_len"], 
-                # "cog_decrease_mag": cog_output_dict["cog_decrease_len"],
-                # "aper_ra_cen": cog_output_dict["aper_radec_cen"][0],
-                # "aper_dec_cen": cog_output_dict["aper_radec_cen"][1],
-                # "aper_xpix_cen": cog_output_dict["aper_xy_pix_cen"][0],
-                # "aper_ypix_cen": cog_output_dict["aper_xy_pix_cen"][1],
-                # "aper_params": cog_output_dict["aper_params"],
-                # "jaccard_path": cog_output_dict["jaccard_img_path"],
-                # "deblend_smooth_num_seg": cog_output_dict["deblend_smooth_num_seg"],
-                # "deblend_smooth_dist_pix": cog_output_dict["deblend_smooth_dist_pix"],
-                # "tractor_parent_mask_mags": cog_output_dict["parent_tractor_only_mags"],
-                # "revert_to_org_tractor": cog_output_dict["revert_to_org_tractor"] 
-
-                #ADDING COG MAGS WHEN USING ISOLATE MASK
-                final_aper_r4_mags    = np.vstack([r["aper_r4_mags"] for r in results])
-                final_cog_mags        = np.vstack([r["cog_mags"] for r in results])
-                final_cog_mags_err    = np.array([r["cog_mags_err"] for r in results])
-                final_cog_params_g     = np.vstack([r["cog_params_g"] for r in results])
-                final_cog_params_r     = np.vstack([r["cog_params_r"] for r in results])
-                final_cog_params_z     = np.vstack([r["cog_params_z"] for r in results])
-                final_cog_params_g_err = np.vstack([r["cog_params_g_err"] for r in results])
-                final_cog_params_r_err = np.vstack([r["cog_params_r_err"] for r in results])
-                final_cog_params_z_err = np.vstack([r["cog_params_z_err"] for r in results])
-                final_aper_r4_frac_in_image = np.array([r["aper_r4_frac_in_image"] for r in results])
-                final_cog_chi2 = np.vstack( [r["cog_chi2"] for r in results] )
-                final_cog_dof = np.vstack( [r["cog_dof"] for r in results] )
-                final_cog_decrease_len = np.vstack( [r["cog_decrease_len"] for r in results] )
-                final_cog_decrease_mag = np.vstack( [r["cog_decrease_mag"] for r in results] )
-                final_aper_params = np.vstack( [r["aper_params"] for r in results] )
-                final_apercen_radec = np.vstack([ r["aper_radec_cen"] for r in results])
-                final_apercen_xy_pix = np.vstack([ r["aper_xy_pix_cen"] for r in results])
-                final_mask_frac_r4 = np.array([ r["mask_frac_r4"] for r in results])
-                
-
-                #ADDING COG MAGS WITHOUT ISOLATE MASK
-                final_aper_r4_mags_no_isolate_mask    = np.vstack([r["aper_r4_mags_no_isolate"] for r in results])
-                final_cog_mags_no_isolate_mask        = np.vstack([r["cog_mags_no_isolate"] for r in results])
-                final_cog_mags_err_no_isolate_mask    = np.array([r["cog_mags_err_no_isolate"] for r in results])
-                final_cog_params_g_no_isolate_mask     = np.vstack([r["cog_params_g_no_isolate"] for r in results])
-                final_cog_params_r_no_isolate_mask     = np.vstack([r["cog_params_r_no_isolate"] for r in results])
-                final_cog_params_z_no_isolate_mask     = np.vstack([r["cog_params_z_no_isolate"] for r in results])
-                final_cog_params_g_err_no_isolate_mask = np.vstack([r["cog_params_g_err_no_isolate"] for r in results])
-                final_cog_params_r_err_no_isolate_mask = np.vstack([r["cog_params_r_err_no_isolate"] for r in results])
-                final_cog_params_z_err_no_isolate_mask = np.vstack([r["cog_params_z_err_no_isolate"] for r in results])
-                final_aper_r4_frac_in_image_no_isolate_mask = np.array([r["aper_r4_frac_in_image_no_isolate"] for r in results])
-                final_cog_chi2_no_isolate_mask = np.vstack( [r["cog_chi2_no_isolate"] for r in results] )
-                final_cog_dof_no_isolate_mask = np.vstack( [r["cog_dof_no_isolate"] for r in results] )
-                final_cog_decrease_len_no_isolate_mask = np.vstack( [r["cog_decrease_len_no_isolate"] for r in results] )
-                final_cog_decrease_mag_no_isolate_mask = np.vstack( [r["cog_decrease_mag_no_isolate"] for r in results] )
-                final_aper_params_no_isolate_mask = np.vstack( [r["aper_params_no_isolate"] for r in results] )
-                final_apercen_radec_no_isolate_mask = np.vstack([ r["aper_radec_cen_no_isolate"] for r in results])
-                final_apercen_xy_pix_no_isolate_mask = np.vstack([ r["aper_xy_pix_cen_no_isolate"] for r in results])
-                final_mask_frac_r4_no_isolate_mask = np.array([ r["mask_frac_r4_no_isolate"] for r in results])
-
-                ##get the tractor cog params!!
-                empty_tractor_cog_dict = make_empty_tractor_cog_dict
-                
-                
-                
-
-                ##THESE ARE COG OUTPUTS THAT ARE COMMON TO ALL!
-                final_deblend_smooth_num_seg = np.array([ r["deblend_smooth_num_seg"] for r in results])
-                final_revert_to_org_tractor = np.array([ r["revert_to_org_tractor"] for r in results])
-                final_tractor_parent_isolate_mags = np.vstack([ r["tractor_parent_isolate_mags"] for r in results])
-                final_tractor_parent_no_isolate_mags = np.vstack([ r["tractor_parent_no_isolate_mags"] for r in results])
-                
-                #the mu grz values useful in identifying when a galaxy is too LSB to use the smooth deblending params
-                final_aper_r2_mu_r_ellipse_tractor= np.array([ r["aper_r2_mu_r_ellipse_tractor"] for r in results ]  )
-                final_aper_r2_mu_r_island_tractor = np.array([ r["aper_r2_mu_r_island_tractor"] for r in results ]  )
-                
-
-                final_deblend_blob_dist_pix = np.array([ r["deblend_blob_dist_pix"] for r in results])
-                final_cog_segment_nseg = np.array([ r["cog_segment_nseg"] for r in results])
-                final_cog_segment_nseg_smooth = np.array([ r["cog_segment_nseg_smooth"] for r in results])
-                final_cog_segment_on_blob = np.array([ r["cog_segment_on_blob"] for r in results])
-                final_num_trac_source_no_isolate = np.array([ r["num_trac_source_no_isolate"] for r in results])
-                final_num_trac_source_isolate = np.array([ r["num_trac_source_isolate"] for r in results])
-                
-                final_areafrac_in_image_r4 = np.array([ r["areafrac_in_image_r4"] for r in results])
-                
-                final_simple_mags     = np.vstack([r["simple_photo_mags"] for r in results]) 
-                final_simple_island_dist_pix     = np.array([r["simple_photo_island_dist_pix"] for r in results])
-                final_simple_aper_r4_frac_in_image     = np.array([r["simplest_photo_aper_frac_in_image"] for r in results])
-                
-                  
                 #add the image paths to the total lists
-
                 final_cog_saveimgs = filter_saveimgs_paths(results, "img_path")
                 final_jaccard_saveimgs = filter_saveimgs_paths(results, "jaccard_path")
                 
@@ -1261,23 +1323,20 @@ if __name__ == '__main__':
                 
                 if chunk_i == 0:
                     print_stage("Example outputs from cog pipeline")
-                    print("final aper mags R4 shape : ",final_aper_r4_mags.shape)
-                    print("final cog mags shape : ",final_cog_mags.shape)
-                    print("final cog chi2 mags shape : ",final_cog_chi2.shape)
-                    print("final cog params g-band shape : ",final_cog_mags.shape)
+                    print("final g-aper mags R4 shape: ",all_mags_table["APER_R4_MAG_G_ISOLATE"].data.shape)
+                    print("final g-cog mags shape : ",all_mags_table["COG_MAG_G_ISOLATE"].data.shape)
                     #print some values for testing
-                    print("cog_mags : ", final_cog_mags[0])
-                    print("cog_mags_err : ", final_cog_mags_err[0])
-                    print("cog params g : ",final_cog_params_g[0])
-                    print("cog params g err  : ", final_cog_params_g_err[0])
-                    print("cog aper frac-in-image : ", final_aper_r4_frac_in_image[0] )
+                    print("cog_mags err: ", total_output_table["COG_MAG_ERR_NO_ISOLATE"][0])
+                    print("fiber mags data: ", total_output_table["FIBER_MAG_NO_ISOLATE"][0])
+                    print("fiber mags tractor: ", tractor_output_table["TRACTOR_ONLY_FIBER_MAG_NO_ISOLATE"][0])
+                    print("tractor brightest source tractor: ", all_mags_table["TRACTOR_BRIGHTEST_SOURCE_MAGS_NO_ISOLATE"].data[0] )
+                    print("cog params g : ", total_output_table["COG_PARAMS_G_NO_ISOLATE"][0])
                     print("cog saveimg : ", final_cog_saveimgs[0])
                     print("---"*5)
-                    
+
                 print_stage("Done running curve of growth pipeline!")
 
                 #if run_aper was not run before then we read in the files again
-                #this is in the rare case (maybe only the first time) where we will have run cog separately from run_aper as we do not have the tractor models yet
                 if run_aper == False:
                     shreds_focus_i = Table.read(file_save)
                 #if run_aper = True, then we already have defined shreds_focus_i variable!
@@ -1289,113 +1348,14 @@ if __name__ == '__main__':
                 except NameError:
                     raise RuntimeError("Missing variable: 'shreds_focus_i'. Did you forget to run `run_aper()`? This would be the case if you are running this on a few TGIDs.")
 
-                ##these are columns to be added per band
-                shreds_focus_i["COG_MAG_G_ISOLATE"] = final_cog_mags[:,0]
-                shreds_focus_i["COG_MAG_R_ISOLATE"] = final_cog_mags[:,1]
-                shreds_focus_i["COG_MAG_Z_ISOLATE"] = final_cog_mags[:,2]
-
-                shreds_focus_i["COG_MAG_G_NO_ISOLATE"] = final_cog_mags_no_isolate_mask[:,0]
-                shreds_focus_i["COG_MAG_R_NO_ISOLATE"] = final_cog_mags_no_isolate_mask[:,1]
-                shreds_focus_i["COG_MAG_Z_NO_ISOLATE"] = final_cog_mags_no_isolate_mask[:,2]
-                
-                shreds_focus_i["APER_R4_MAG_G_ISOLATE"] = final_aper_r4_mags[:,0]
-                shreds_focus_i["APER_R4_MAG_R_ISOLATE"] = final_aper_r4_mags[:,1]
-                shreds_focus_i["APER_R4_MAG_Z_ISOLATE"] = final_aper_r4_mags[:,2]
-
-                shreds_focus_i["APER_R4_MAG_G_NO_ISOLATE"] = final_aper_r4_mags_no_isolate_mask[:,0]
-                shreds_focus_i["APER_R4_MAG_R_NO_ISOLATE"] = final_aper_r4_mags_no_isolate_mask[:,1]
-                shreds_focus_i["APER_R4_MAG_Z_NO_ISOLATE"] = final_aper_r4_mags_no_isolate_mask[:,2]
-
-                shreds_focus_i["APER_R4_FRAC_IN_IMG_ISOLATE"] = final_aper_r4_frac_in_image
-                shreds_focus_i["APER_R4_FRAC_IN_IMG_NO_ISOLATE"] = final_aper_r4_frac_in_image_no_isolate_mask
-                
-                #these columns are common to both! This is with the isolate mask applied
-                shreds_focus_i["TRACTOR_PARENT_MAG_G_ISOLATE"] = final_tractor_parent_isolate_mags[:,0]
-                shreds_focus_i["TRACTOR_PARENT_MAG_R_ISOLATE"] = final_tractor_parent_isolate_mags[:,1]
-                shreds_focus_i["TRACTOR_PARENT_MAG_Z_ISOLATE"] = final_tractor_parent_isolate_mags[:,2]
-                
-                shreds_focus_i["TRACTOR_PARENT_MAG_G_NO_ISOLATE"] = final_tractor_parent_no_isolate_mags[:,0]
-                shreds_focus_i["TRACTOR_PARENT_MAG_R_NO_ISOLATE"] = final_tractor_parent_no_isolate_mags[:,1]
-                shreds_focus_i["TRACTOR_PARENT_MAG_Z_NO_ISOLATE"] = final_tractor_parent_no_isolate_mags[:,2]
-
-                shreds_focus_i["DEBLEND_SMOOTH_NUM_BLOB"] = final_deblend_smooth_num_seg
-                shreds_focus_i["REVERT_TO_OLD_TRACTOR"] = final_revert_to_org_tractor
-
-                shreds_focus_i["APER_R2_MU_R_ELLIPSE_TRACTOR"] = final_aper_r2_mu_r_ellipse_tractor
-                shreds_focus_i["APER_R2_MU_R_ISLAND_TRACTOR"] = final_aper_r2_mu_r_island_tractor
-        
-                shreds_focus_i["DEBLEND_BLOB_DIST_PIX"] = final_deblend_blob_dist_pix
-                shreds_focus_i["COG_NUM_SEG"] = final_cog_segment_nseg
-                shreds_focus_i["COG_NUM_SEG_SMOOTH"] = final_cog_segment_nseg_smooth
-                shreds_focus_i["COG_SEG_ON_BLOB"] = final_cog_segment_on_blob
-                
-                shreds_focus_i["NUM_TRACTOR_SOURCES_NO_ISOLATE"] = final_num_trac_source_no_isolate
-                shreds_focus_i["NUM_TRACTOR_SOURCES_ISOLATE"] = final_num_trac_source_isolate
-
-                #this is for aperture estimated on the grz data main segment (check beginning of aperture cog function)
-                shreds_focus_i["APER_R4_DATA_FRAC_IN_IMAGE_NO_ISOLATE"] =  final_areafrac_in_image_r4
-                     
-                shreds_focus_i["SIMPLE_PHOTO_MAG_G"] = final_simple_mags[:,0]
-                shreds_focus_i["SIMPLE_PHOTO_MAG_R"] = final_simple_mags[:,1]
-                shreds_focus_i["SIMPLE_PHOTO_MAG_Z"] = final_simple_mags[:,2]
-                
-                shreds_focus_i["SIMPLE_APER_R4_FRAC_IN_IMG"] = final_simple_aper_r4_frac_in_image
-                shreds_focus_i["SIMPLE_BLOB_DIST_PIX"] = final_simple_island_dist_pix
-                
-
-
-                ##these are columns that will arrays 
-                column_dict = {"COG_CHI2_ISOLATE": final_cog_chi2,
-                              "COG_DOF_ISOLATE": final_cog_dof,
-                              "COG_MAG_ERR_ISOLATE" : final_cog_mags_err,
-                               "COG_PARAMS_G_ISOLATE": final_cog_params_g,
-                               "COG_PARAMS_R_ISOLATE": final_cog_params_r,
-                               "COG_PARAMS_Z_ISOLATE": final_cog_params_z,
-                                "COG_PARAMS_G_ERR_ISOLATE": final_cog_params_g_err,
-                               "COG_PARAMS_R_ERR_ISOLATE": final_cog_params_r_err,
-                               "COG_PARAMS_Z_ERR_ISOLATE": final_cog_params_z_err,
-                               "COG_DECREASE_MAX_L3EN_ISOLATE": final_cog_decrease_len,
-                               "COG_DECREASE_MAX_MAG_ISOLATE": final_cog_decrease_mag,
-                               'APER_CEN_RADEC_ISOLATE': final_apercen_radec,
-                               'APER_CEN_XY_PIX_ISOLATE': final_apercen_xy_pix,
-                               'APER_PARAMS_ISOLATE':final_aper_params,   
-                               'APER_R4_MASK_FRAC_ISOLATE': final_mask_frac_r4
-                              }
-                
-                column_dict_no_isolate = {
-                               "COG_CHI2_NO_ISOLATE": final_cog_chi2_no_isolate_mask,
-                              "COG_DOF_NO_ISOLATE": final_cog_dof_no_isolate_mask,
-                              "COG_MAG_ERR_NO_ISOLATE" : final_cog_mags_err_no_isolate_mask,
-                               "COG_PARAMS_G_NO_ISOLATE": final_cog_params_g_no_isolate_mask,
-                               "COG_PARAMS_R_NO_ISOLATE": final_cog_params_r_no_isolate_mask,
-                               "COG_PARAMS_Z_NO_ISOLATE": final_cog_params_z_no_isolate_mask,
-                                "COG_PARAMS_G_ERR_NO_ISOLATE": final_cog_params_g_err_no_isolate_mask,
-                               "COG_PARAMS_R_ERR_NO_ISOLATE": final_cog_params_r_err_no_isolate_mask,
-                               "COG_PARAMS_Z_ERR_NO_ISOLATE": final_cog_params_z_err_no_isolate_mask,
-                               "COG_DECREASE_MAX_LEN_NO_ISOLATE": final_cog_decrease_len_no_isolate_mask,
-                               "COG_DECREASE_MAX_MAG_NO_ISOLATE": final_cog_decrease_mag_no_isolate_mask,
-                               'APER_CEN_RADEC_NO_ISOLATE': final_apercen_radec_no_isolate_mask,
-                               'APER_CEN_XY_PIX_NO_ISOLATE': final_apercen_xy_pix_no_isolate_mask,
-                               'APER_PARAMS_NO_ISOLATE':final_aper_params_no_isolate_mask,
-                               'APER_R4_MASK_FRAC_NO_ISOLATE': final_mask_frac_r4_no_isolate_mask
-                              }
-
-                TODO: ADD A SINGLE DIAGNOSTIC CUTOUT PLOT SHOWING THE ORIGINAL GRZ IMAGE WITH CENTER AND APERTURE, along with the final masked reconstructed iamge .
-                THIS WILL BE USED FOR A QUICK DISPLAY FOR HOW THE OBJECT IS ! And make an associated function that given ra,dec or targetid, will pull up the diagnostic plot if relevant
-                
-
-                #combining the above dictionaries into one!
-                column_dict_total = column_dict | column_dict_no_isolate
-
-                #this should automatically add columns!
-                for ki, values in column_dict_total.items():
-                    shreds_focus_i[ki] = values
-
+                ##HSTACK THE DIFFERENT ASTROPY TABLES NOW 
+                shreds_focus_i = hstack([shreds_focus_i, all_mags_table, total_output_table, tractor_output_table, other_output_table])
+                    
                 #Get the cog based stellar mass, get the 2 kinds of stellar masses!!    
                 
-                shreds_focus_i = compute_aperture_masses(shreds_focus_i, rband_key="COG_MAG_R_ISOLATE", gband_key="COG_MAG_G_ISOLATE", z_key="Z_CMB", dmpc_key = "DIST_MPC_FIDU", output_key="LOGM_SAGA_COG_ISOLATE")
+                # shreds_focus_i = compute_aperture_masses(shreds_focus_i, rband_key="COG_MAG_R_ISOLATE", gband_key="COG_MAG_G_ISOLATE", z_key="Z_CMB", dmpc_key = "DIST_MPC_FIDU", output_key="LOGM_SAGA_COG_ISOLATE")
 
-                shreds_focus_i = compute_aperture_masses(shreds_focus_i, rband_key="COG_MAG_R_NO_ISOLATE", gband_key="COG_MAG_G_NO_ISOLATE", z_key="Z_CMB", dmpc_key = "DIST_MPC_FIDU", output_key="LOGM_SAGA_COG_NO_ISOLATE")
+                # shreds_focus_i = compute_aperture_masses(shreds_focus_i, rband_key="COG_MAG_R_NO_ISOLATE", gband_key="COG_MAG_G_NO_ISOLATE", z_key="Z_CMB", dmpc_key = "DIST_MPC_FIDU", output_key="LOGM_SAGA_COG_NO_ISOLATE")
                 
                 if tgids_list is None:
                     save_table( shreds_focus_i, file_save)   
