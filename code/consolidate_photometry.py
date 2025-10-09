@@ -200,6 +200,7 @@ def create_photometry_data_model():
     
 #     # Write out to new FITS file
 
-
+##TODO: use the fastspec function in the desi_lowz_funcs to add all the relevant stuff. Make sure to port over their datamodel?
+## to make it easy save these different extensions as different fits file and then later simply combine them into different extensions!
 
 
