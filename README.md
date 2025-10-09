@@ -11,6 +11,128 @@
 
 <br>
 
+<div style="overflow-x:auto;">
+
+<table style="border-collapse: collapse; width: 100%; min-width: 800px;">
+  <thead>
+    <tr style="background-color: #f2f2f2;">
+      <th style="border: 1px solid #ddd; padding: 8px;">Name</th>
+      <th style="border: 1px solid #ddd; padding: 8px;">Type</th>
+      <th style="border: 1px solid #ddd; padding: 8px;">Units</th>
+      <th style="border: 1px solid #ddd; padding: 8px;">Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr style="background-color: #ffffff;">
+      <td style="border: 1px solid #ddd; padding: 8px;">TARGETID</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">int64</td>
+      <td style="border: 1px solid #ddd; padding: 8px;"></td>
+      <td style="border: 1px solid #ddd; padding: 8px;">DESI TARGET ID</td>
+    </tr>
+    <tr style="background-color: #f9f9f9;">
+      <td style="border: 1px solid #ddd; padding: 8px;">SURVEY</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">str</td>
+      <td style="border: 1px solid #ddd; padding: 8px;"></td>
+      <td style="border: 1px solid #ddd; padding: 8px;">Survey name</td>
+    </tr>
+    <tr style="background-color: #ffffff;">
+      <td style="border: 1px solid #ddd; padding: 8px;">PROGRAM</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">str</td>
+      <td style="border: 1px solid #ddd; padding: 8px;"></td>
+      <td style="border: 1px solid #ddd; padding: 8px;">Program name</td>
+    </tr>
+    <tr style="background-color: #f9f9f9;">
+      <td style="border: 1px solid #ddd; padding: 8px;">Z</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">float64</td>
+      <td style="border: 1px solid #ddd; padding: 8px;"></td>
+      <td style="border: 1px solid #ddd; padding: 8px;">Redrock Redshift</td>
+    </tr>
+    <tr style="background-color: #ffffff;">
+      <td style="border: 1px solid #ddd; padding: 8px;">DELTACHI2</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">float64</td>
+      <td style="border: 1px solid #ddd; padding: 8px;"></td>
+      <td style="border: 1px solid #ddd; padding: 8px;">Redrock delta-chi-squared</td>
+    </tr>
+    <tr style="background-color: #f9f9f9;">
+      <td style="border: 1px solid #ddd; padding: 8px;">ZWARN</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">int8</td>
+      <td style="border: 1px solid #ddd; padding: 8px;"></td>
+      <td style="border: 1px solid #ddd; padding: 8px;">Redrock zwarning bit</td>
+    </tr>
+    <tr style="background-color: #ffffff;">
+      <td style="border: 1px solid #ddd; padding: 8px;">RA_TARGET</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">float64</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">deg</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">Right Ascension from target catalog</td>
+    </tr>
+    <tr style="background-color: #f9f9f9;">
+      <td style="border: 1px solid #ddd; padding: 8px;">DEC_TARGET</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">float64</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">deg</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">Declination from target catalog</td>
+    </tr>
+    <tr style="background-color: #ffffff;">
+      <td style="border: 1px solid #ddd; padding: 8px;">DESINAME</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">str</td>
+      <td style="border: 1px solid #ddd; padding: 8px;"></td>
+      <td style="border: 1px solid #ddd; padding: 8px;">DESI object name</td>
+    </tr>
+    <tr style="background-color: #f9f9f9;">
+      <td style="border: 1px solid #ddd; padding: 8px;">DIST_MPC_FIDU</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">float32</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">Mpc</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">Fiducial luminosity distance in Mpc</td>
+    </tr>
+    <tr style="background-color: #ffffff;">
+      <td style="border: 1px solid #ddd; padding: 8px;">LOGM_SAGA_FIDU</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">float32</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">$\mathrm{\log(M_\odot)}$</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">Log stellar mass using the fiducial luminosity distance and SAGA gr-based approximation</td>
+    </tr>
+    <tr style="background-color: #f9f9f9;">
+      <td style="border: 1px solid #ddd; padding: 8px;">LOGM_M24_VCMB</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">float32</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">$\mathrm{\log(M_\odot)}$</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">Log stellar mass using the fiducial luminosity distance and de los Reyes et al. 2024 gr-based approximation</td>
+    </tr>
+    <tr style="background-color: #ffffff;">
+      <td style="border: 1px solid #ddd; padding: 8px;">MAG_G</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">float32</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">$\mathrm{mag}$</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">g-band magnitude (MW extinction corrected)</td>
+    </tr>
+    <tr style="background-color: #f9f9f9;">
+      <td style="border: 1px solid #ddd; padding: 8px;">MAG_R</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">float32</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">$\mathrm{mag}$</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">r-band magnitude (MW extinction corrected)</td>
+    </tr>
+    <tr style="background-color: #ffffff;">
+      <td style="border: 1px solid #ddd; padding: 8px;">MAG_Z</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">float32</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">$\mathrm{mag}$</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">z-band magnitude (MW extinction corrected)</td>
+    </tr>
+    <tr style="background-color: #f9f9f9;">
+      <td style="border: 1px solid #ddd; padding: 8px;">SAMPLE</td>
+      <td style="border: 1px solid #ddd; padding: 8px;">str</td>
+      <td style="border: 1px solid #ddd; padding: 8px;"></td>
+      <td style="border: 1px solid #ddd; padding: 8px;">DESI target class (e.g., BGS_BRIGHT, BGS_FAINT)</td>
+    </tr>
+  </tbody>
+</table>
+
+</div>
+
+</details>
+
+
+
+<details>
+<summary><strong>Extension: MAIN</strong></summary>
+
+<br>
+
 
 | Name | Type | Units | Description |
 |------|------|-------|-------------|
