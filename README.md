@@ -1,3 +1,13 @@
+
+
+## DESI DR1 Extragalactic Dwarf Galaxy Catalog — Data Model
+
+<details>
+<summary><strong>Extension: MAIN</strong></summary>
+
+<br>
+
+
 | Name | Type | Units | Description |
 |------|------|-------|-------------|
 | TARGETID | int64 |  | DESI TARGET ID |
@@ -17,3 +27,4 @@
 | MAG_Z | float32 | $\mathrm{mag}$ | z-band magnitude (MW extinction corrected) |
 | SAMPLE | str |  | DESI target class (e.g., BGS_BRIGHT, BGS_FAINT)  |
 
+</details>

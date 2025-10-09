@@ -110,8 +110,130 @@ main_datamodel = {
 }
 
 
-
 zcat_datamodel = {
+     "TARGETID": {
+        "unit": None,
+        "description": "DESI TARGET ID",
+        "blank_value": np.nan,
+        "dtype": "int64"
+    },
+    "COADD_FIBERSTATUS": {
+        "unit": None,
+        "description": "Fiber status bit",
+        "blank_value": np.nan,
+        "dtype": "int64"
+    },
+    "CMX_TARGET": {
+        "unit": None,
+        "description": "Commissioning (CMX) targeting bit",
+        "blank_value": np.nan,
+        "dtype": "int64"
+    },
+    "DESI_TARGET": {
+        "unit": None,
+        "description": "DESI targeting bit",
+        "blank_value": np.nan,
+        "dtype": "int64"
+    },
+    "BGS_TARGET": {
+        "unit": None,
+        "description": "BGS targeting bit",
+        "blank_value": np.nan,
+        "dtype": "int64"
+    },
+    "MWS_TARGET": {
+        "unit": None,
+        "description": "MWS targeting bit",
+        "blank_value": np.nan,
+        "dtype": "int64"
+    },
+    "SCND_TARGET": {
+        "unit": None,
+        "description": "Secondary target targeting bit",
+        "blank_value": np.nan,
+        "dtype": "int64"
+    },
+    "SV1_DESI_TARGET": {
+        "unit": None,
+        "description": "SV1 DESI targeting bit",
+        "blank_value": np.nan,
+        "dtype": "int64"
+    },
+    "SV1_BGS_TARGET": {
+        "unit": None,
+        "description": "SV1 BGS targeting bit",
+        "blank_value": np.nan,
+        "dtype": "int64"
+    },
+    "SV1_MWS_TARGET": {
+        "unit": None,
+        "description": "SV1 MWS targeting bit",
+        "blank_value": np.nan,
+        "dtype": "int64"
+    },
+    "SV2_DESI_TARGET": {
+        "unit": None,
+        "description": "SV2 DESI targeting bit",
+        "blank_value": np.nan,
+        "dtype": "int64"
+    },
+    "SV2_BGS_TARGET": {
+        "unit": None,
+        "description": "SV2 BGS targeting bit",
+        "blank_value": np.nan,
+        "dtype": "int64"
+    },
+    "SV2_MWS_TARGET": {
+        "unit": None,
+        "description": "SV2 MWS targeting bit",
+        "blank_value": np.nan,
+        "dtype": "int64"
+    },
+    "SV3_DESI_TARGET": {
+        "unit": None,
+        "description": "SV3 DESI targeting bit",
+        "blank_value": np.nan,
+        "dtype": "int64"
+    },
+    "SV3_BGS_TARGET": {
+        "unit": None,
+        "description": "SV3 BGS targeting bit",
+        "blank_value": np.nan,
+        "dtype": "int64"
+    },
+    "SV3_MWS_TARGET": {
+        "unit": None,
+        "description": "SV3 MWS targeting bit",
+        "blank_value": np.nan,
+        "dtype": "int64"
+    },
+    "SV1_SCND_TARGET": {
+        "unit": None,
+        "description": "SV1 secondary targeting bit",
+        "blank_value": np.nan,
+        "dtype": "int64"
+    },
+    "SV2_SCND_TARGET": {
+        "unit": None,
+        "description": "SV2 secondary targeting bit",
+        "blank_value": np.nan,
+        "dtype": "int64"
+    },
+    "SV3_SCND_TARGET": {
+        "unit": None,
+        "description": "SV3 secondary targeting bit",
+        "blank_value": np.nan,
+        "dtype": "int64"
+    },
+    "TSNR2_LRG": {
+        "unit": None,
+        "description": "TSNR2 for LRG targets (like TSNR2_BGS)",
+        "blank_value": np.nan,
+        "dtype": "float32"
+    },
+
+    NEED TO ADD MORE COLUMNS HERE!!
+}
 
 
 }
