@@ -1227,7 +1227,7 @@ if __name__ == '__main__':
                                         "cog_params_g_err_no_isolate": "COG_PARAMS_G_ERR_NO_ISOLATE" ,
                                         "cog_params_r_err_no_isolate": "COG_PARAMS_R_ERR_NO_ISOLATE",
                                         "cog_params_z_err_no_isolate": "COG_PARAMS_Z_ERR_NO_ISOLATE",
-                                         "aper_r4_frac_in_image_no_isolate": "APER_R4_FRAC_IN_IMG_NO_ISOLATE",
+                                         "aper_r4_frac_in_image_no_isolate": "APERFRAC_R4_IN_IMG_NO_ISOLATE",
                                          "cog_chi2_no_isolate": "COG_CHI2_NO_ISOLATE" ,
                                          "cog_dof_no_isolate": "COG_DOF_NO_ISOLATE",
                                          "cog_decrease_len_no_isolate": "COG_DECREASE_MAX_LEN_NO_ISOLATE",
@@ -1262,7 +1262,8 @@ if __name__ == '__main__':
                     "tractor_cog_chi2_w_isolate": "TRACTOR_ONLY_COG_CHI2_ISOLATE", 
                     "tractor_aper_radec_cen_w_isolate": "TRACTOR_ONLY_APER_CEN_RADEC_ISOLATE", 
                     "tractor_aper_params_w_isolate": "TRACTOR_ONLY_APER_PARAMS_ISOLATE",
-                    "tractor_aper_cen_masked_bool_w_isolate": "TRACTOR_APER_CEN_MASKED_ISOLATE"
+                    "tractor_aper_cen_masked_bool_w_isolate": "TRACTOR_APER_CEN_MASKED_ISOLATE",
+                    "tractor_aperfrac_in_image_w_isolate": "TRACTOR_APERFRAC_R4_IN_IMG_ISOLATE"
                 }
 
                 tractor_output_table_keys_no_isolate = {
@@ -1278,7 +1279,8 @@ if __name__ == '__main__':
                     "tractor_cog_chi2_no_isolate": "TRACTOR_ONLY_COG_CHI2_NO_ISOLATE", 
                     "tractor_aper_radec_cen_no_isolate": "TRACTOR_ONLY_APER_CEN_RADEC_NO_ISOLATE", 
                     "tractor_aper_params_no_isolate": "TRACTOR_ONLY_APER_PARAMS_NO_ISOLATE",
-                    "tractor_aper_cen_masked_bool_no_isolate": "TRACTOR_APER_CEN_MASKED_NO_ISOLATE"
+                    "tractor_aper_cen_masked_bool_no_isolate": "TRACTOR_APER_CEN_MASKED_NO_ISOLATE",
+                    "tractor_aperfrac_in_image_no_isolate": "TRACTOR_APERFRAC_R4_IN_IMG_NO_ISOLATE"
                 }
 
                 #combining the above dictionaries into one!
@@ -1305,7 +1307,7 @@ if __name__ == '__main__':
                                     "num_trac_source_isolate" : "NUM_TRACTOR_SOURCES_ISOLATE",
                                     "simple_photo_island_dist_pix" :"SIMPLE_BLOB_DIST_PIX" ,
                                     "simplest_photo_aper_frac_in_image" : "SIMPLE_APER_R4_FRAC_IN_IMG" ,
-                                    "areafrac_in_grz_image_r4":  "APER_R4_DATA_FRAC_IN_IMAGE_NO_ISOLATE"
+                                    "aperfrac_in_image_data_r4":  "APERFRAC_R4_IN_IMG_DATA_NO_ISOLATE"
                                         }
     
                 #looping over the keys!!

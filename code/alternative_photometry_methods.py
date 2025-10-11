@@ -117,7 +117,7 @@ def get_simplest_photometry(rgb_img, r_rms, fiber_xpix, fiber_ypix, save_path, n
     
     segment_map = detect_sources(convolved_tot_data, threshold, npixels=npixels_min) 
 
-    if segment_map is None:        
+    if segment_map is None or len(source_cat) == 0:        
         np.save(save_path + "/simplest_photometry_binary_mask.npy",  np.zeros_like(r_band_tractor ) )
         
         # np.save(save_path + "/simplest_photo_rgb_mask_image.npy", np.ones_like(data_arr) )

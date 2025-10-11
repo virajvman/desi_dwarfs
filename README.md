@@ -1,6 +1,6 @@
 
 
-## DESI DR1 Extragalactic Dwarf Galaxy Catalog Code
+## DESI DR1 Extragalactic Dwarf Galaxy Catalog Code Base
 
 
 
@@ -10,8 +10,7 @@
 <details>
 <summary><strong>Extension: MAIN</strong></summary>
 
-<div style="overflow-x:auto;">
-
+<br>
 | Name | Type | Units | Description |
 |------|------|-------|-------------|
 | TARGETID | int64 |  | DESI TARGET ID |
@@ -30,7 +29,8 @@
 | MAG_R | float32 | $\mathrm{mag}$ | r-band magnitude (MW extinction corrected) |
 | MAG_Z | float32 | $\mathrm{mag}$ | z-band magnitude (MW extinction corrected) |
 | SAMPLE | str |  | DESI target class (e.g., BGS_BRIGHT, BGS_FAINT)  |
-</div>
+
+
 </details>
 
 
@@ -138,14 +138,13 @@
 | MW_TRANSMISSION_Z | float32 |  | Galactic transmission in z filter in linear units [0, 1] |
 | SWEEP | str |  | Name of the sweep file from which this source was extracted. |
 
-
-
 </details>
 
 <details>
 <summary><strong>Extension: REPROCESS_PHOTO_CAT</strong></summary>
 
 <br>
+
 
 
 </details>
@@ -156,13 +155,15 @@
 
 <br>
 
+
+
 </details>
 
 
 <details>
 <summary><strong>Extension: FASTSPEC_CAT</strong></summary>
 
-<div style="overflow-x:auto;">
+<br>
 
 | Name | Type | Units | Description |
 |------|------|-------|-------------|
@@ -217,6 +218,5 @@
 | HALPHA_EW_IVAR | float32 | 1 / Angstrom2 | Inverse variance in HALPHA_EW. |
 | HALPHA_SIGMA | float32 | km / s | Gaussian emission-line width of Halpha before convolution with the resolution matrix. |
 | HALPHA_SIGMA_IVAR | float32 | s2 / km2 | Inverse variance in HALPHA_SIGMA. |
-</div>
 </details>
 

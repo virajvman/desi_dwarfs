@@ -10,11 +10,14 @@ import astropy.units as u
 
 logM_sun = u.def_unit('log(solMass)', format={'latex': r'\log(M_\odot)'})
 
+maggy = u.def_unit("maggy", 3631 * u.Jy)
+nmgy = u.def_unit("nmgy", 1e-9 * maggy)
+
+
 main_datamodel = {
     "TARGETID": {
         "unit": None,
         "description": "DESI TARGET ID",
-        "blank_value": np.nan,
         "dtype": "int64"
     },
     "SURVEY": {
@@ -44,7 +47,6 @@ main_datamodel = {
     "ZWARN": {
         "unit": None,
         "description": "Redrock zwarning bit",
-        "blank_value": np.nan,
         "dtype": "int8"
     },
     "RA_TARGET": {
@@ -114,115 +116,96 @@ zcat_datamodel = {
      "TARGETID": {
         "unit": None,
         "description": "DESI TARGET ID",
-        "blank_value": np.nan,
         "dtype": "int64"
     },
     "HEALPIX": {
         "unit": None,
         "description": "healpix containing this location at NSIDE=64 in the NESTED scheme",
-        "blank_value": np.nan,
         "dtype": "int32"
     },
     "CMX_TARGET": {
         "unit": None,
         "description": "Commissioning (CMX) targeting bit",
-        "blank_value": np.nan,
         "dtype": "int64"
     },
     "DESI_TARGET": {
         "unit": None,
         "description": "DESI targeting bit",
-        "blank_value": np.nan,
         "dtype": "int64"
     },
     "BGS_TARGET": {
         "unit": None,
         "description": "BGS targeting bit",
-        "blank_value": np.nan,
         "dtype": "int64"
     },
     "MWS_TARGET": {
         "unit": None,
         "description": "MWS targeting bit",
-        "blank_value": np.nan,
         "dtype": "int64"
     },
     "SCND_TARGET": {
         "unit": None,
         "description": "Secondary target targeting bit",
-        "blank_value": np.nan,
         "dtype": "int64"
     },
     "SV1_DESI_TARGET": {
         "unit": None,
         "description": "SV1 DESI targeting bit",
-        "blank_value": np.nan,
         "dtype": "int64"
     },
     "SV1_BGS_TARGET": {
         "unit": None,
         "description": "SV1 BGS targeting bit",
-        "blank_value": np.nan,
         "dtype": "int64"
     },
     "SV1_MWS_TARGET": {
         "unit": None,
         "description": "SV1 MWS targeting bit",
-        "blank_value": np.nan,
         "dtype": "int64"
     },
     "SV2_DESI_TARGET": {
         "unit": None,
         "description": "SV2 DESI targeting bit",
-        "blank_value": np.nan,
         "dtype": "int64"
     },
     "SV2_BGS_TARGET": {
         "unit": None,
         "description": "SV2 BGS targeting bit",
-        "blank_value": np.nan,
         "dtype": "int64"
     },
     "SV2_MWS_TARGET": {
         "unit": None,
         "description": "SV2 MWS targeting bit",
-        "blank_value": np.nan,
         "dtype": "int64"
     },
     "SV3_DESI_TARGET": {
         "unit": None,
         "description": "SV3 DESI targeting bit",
-        "blank_value": np.nan,
         "dtype": "int64"
     },
     "SV3_BGS_TARGET": {
         "unit": None,
         "description": "SV3 BGS targeting bit",
-        "blank_value": np.nan,
         "dtype": "int64"
     },
     "SV3_MWS_TARGET": {
         "unit": None,
         "description": "SV3 MWS targeting bit",
-        "blank_value": np.nan,
         "dtype": "int64"
     },
     "SV1_SCND_TARGET": {
         "unit": None,
         "description": "SV1 secondary targeting bit",
-        "blank_value": np.nan,
         "dtype": "int64"
     },
     "SV2_SCND_TARGET": {
         "unit": None,
         "description": "SV2 secondary targeting bit",
-        "blank_value": np.nan,
         "dtype": "int64"
     },
     "SV3_SCND_TARGET": {
         "unit": None,
         "description": "SV3 secondary targeting bit",
-        "blank_value": np.nan,
         "dtype": "int64"
     },
     "TSNR2_LRG": {
@@ -359,16 +342,16 @@ tractor_datamodel = {
     },
 
     "EBV": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "Galactic extinction E(B-V) reddening from SFD98, used to compute the mw_transmission_ columns",
         "blank_value": np.nan,
         "dtype": "float32",
     },
 
     "FIBERFLUX_R": {
-        "unit": "nmgy",
+        "unit": nmgy,
         "description": (
-            "Predicted r-band flux within a 1.5″ diameter fiber under 1″ "
+            "Predicted r-band flux within a 1.5'' diameter fiber under 1' "
             "Gaussian seeing (not extinction corrected)."
         ),
         "blank_value": np.nan,
@@ -406,93 +389,93 @@ tractor_datamodel = {
     },
 
     "FLUX_G": {
-        "unit": "nmgy",
+        "unit": nmgy,
         "description": "Total g-band flux corrected for Galactic extinction.",
         "blank_value": np.nan,
         "dtype": "float32",
     },
 
     "FLUX_IVAR_G": {
-        "unit": "1/nmgy^2",
+        "unit": 1/nmgy**2,
         "description": "Inverse variance of FLUX_G (extinction corrected).",
         "blank_value": 0.0,
         "dtype": "float32",
     },
 
     "MAG_G": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "Extinction-corrected g-band magnitude.",
         "blank_value": np.nan,
         "dtype": "float32",
     },
 
     "MAG_G_ERR": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "Uncertainty in g-band magnitude.",
         "blank_value": np.nan,
         "dtype": "float32",
     },
 
     "FLUX_R": {
-        "unit": "nmgy",
+        "unit": nmgy,
         "description": "Total r-band flux corrected for Galactic extinction.",
         "blank_value": np.nan,
         "dtype": "float32",
     },
 
     "FLUX_IVAR_R": {
-        "unit": "1/nmgy^2",
+        "unit": 1/nmgy**2,
         "description": "Inverse variance of FLUX_R (extinction corrected).",
         "blank_value": 0.0,
         "dtype": "float32",
     },
 
     "MAG_R": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "Extinction-corrected r-band magnitude.",
         "blank_value": np.nan,
         "dtype": "float32",
     },
 
     "MAG_R_ERR": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "Uncertainty in r-band magnitude.",
         "blank_value": np.nan,
         "dtype": "float32",
     },
 
     "FLUX_Z": {
-        "unit": "nmgy",
+        "unit": nmgy,
         "description": "Total z-band flux corrected for Galactic extinction.",
         "blank_value": np.nan,
         "dtype": "float32",
     },
 
     "FLUX_IVAR_Z": {
-        "unit": "1/nmgy^2",
+        "unit": 1/nmgy**2,
         "description": "Inverse variance of FLUX_Z (extinction corrected).",
         "blank_value": 0.0,
         "dtype": "float32",
     },
 
     "MAG_Z": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "Extinction-corrected z-band magnitude.",
         "blank_value": np.nan,
         "dtype": "float32",
     },
 
     "MAG_Z_ERR": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "Uncertainty in z-band magnitude.",
         "blank_value": np.nan,
         "dtype": "float32",
     },
 
     "FIBERMAG_R": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": (
-            "Predicted r-band magnitude within 1.5″ fiber (not extinction corrected)."
+            "Predicted r-band magnitude within 1.5'' fiber (not extinction corrected)."
         ),
         "blank_value": np.nan,
         "dtype": "float32",
@@ -713,20 +696,20 @@ photo_datamodel = {
     },
     # --- COG magnitudes ---
     "COG_MAG_G_ISOLATE": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "COG magnitude in g-band (with isolate mask); MW extinction corrected",
         "blank_value": np.nan,
         "dtype": "float32"
     },
     
     "COG_MAG_R_ISOLATE": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "COG magnitude in r-band (with isolate mask); MW extinction corrected",
         "blank_value": np.nan,
         "dtype": "float32"
     },
     "COG_MAG_Z_ISOLATE": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "COG magnitude in z-band (with isolate mask); MW extinction corrected",
         "blank_value": np.nan,
         "dtype": "float32"
@@ -735,21 +718,21 @@ photo_datamodel = {
     ##
 
     "COG_MAG_G_NO_ISOLATE": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "COG magnitude in g-band (without isolate mask); MW extinction corrected",
         "blank_value": np.nan,
         "dtype": "float32"
     },
 
     "COG_MAG_R_NO_ISOLATE": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "COG magnitude in r-band (without isolate mask); MW extinction corrected",
         "blank_value": np.nan,
         "dtype": "float32"
     },
 
     "COG_MAG_Z_NO_ISOLATE": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "COG magnitude in z-band (without isolate mask); MW extinction corrected",
         "blank_value": np.nan,
         "dtype": "float32"
@@ -758,21 +741,21 @@ photo_datamodel = {
 
     # --- Aper R4 ---
     "APER_R4_MAG_G_ISOLATE": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "R4 aperture magnitude in g-band (with isolate mask); MW extinction corrected",
         "blank_value": np.nan,
         "dtype": "float32"
     },
 
     "APER_R4_MAG_R_ISOLATE": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "R4 aperture magnitude in r-band (with isolate mask); MW extinction corrected",
         "blank_value": np.nan,
         "dtype": "float32"
     },
 
     "APER_R4_MAG_Z_ISOLATE": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "R4 aperture magnitude in z-band (with isolate mask); MW extinction corrected",
         "blank_value": np.nan,
         "dtype": "float32"
@@ -781,21 +764,21 @@ photo_datamodel = {
     ##
 
     "APER_R4_MAG_G_NO_ISOLATE": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "R4 aperture magnitude in g-band (without isolate mask); MW extinction corrected",
         "blank_value": np.nan,
         "dtype": "float32"
     },
 
     "APER_R4_MAG_R_NO_ISOLATE": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "R4 aperture magnitude in r-band (without isolate mask); MW extinction corrected",
         "blank_value": np.nan,
         "dtype": "float32"
     },
 
     "APER_R4_MAG_Z_NO_ISOLATE": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "R4 aperture magnitude in z-band (without isolate mask); MW extinction corrected",
         "blank_value": np.nan,
         "dtype": "float32"
@@ -804,21 +787,21 @@ photo_datamodel = {
     
     # --- Tractor ---
     "TRACTOR_PARENT_MAG_G_ISOLATE": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "Tractor based parent magnitude in g-band (with isolate mask); MW extinction corrected",
         "blank_value": np.nan,
         "dtype": "float32"
     },
 
     "TRACTOR_PARENT_MAG_R_ISOLATE": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "Tractor based parent magnitude in r-band (with isolate mask); MW extinction corrected",
         "blank_value": np.nan,
         "dtype": "float32"
     },
 
     "TRACTOR_PARENT_MAG_Z_ISOLATE": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "Tractor based parent magnitude in z-band (with isolate mask); MW extinction corrected",
         "blank_value": np.nan,
         "dtype": "float32"
@@ -827,21 +810,21 @@ photo_datamodel = {
     ##
     
     "TRACTOR_PARENT_MAG_G_NO_ISOLATE": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "Tractor based parent magnitude in g-band (without isolate mask); MW extinction corrected",
         "blank_value": np.nan,
         "dtype": "float32"
     },
 
     "TRACTOR_PARENT_MAG_R_NO_ISOLATE": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "Tractor based parent magnitude in r-band (without isolate mask); MW extinction corrected",
         "blank_value": np.nan,
         "dtype": "float32"
     },
 
     "TRACTOR_PARENT_MAG_Z_NO_ISOLATE": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "Tractor based parent magnitude in z-band (without isolate mask); MW extinction corrected",
         "blank_value": np.nan,
         "dtype": "float32"
@@ -850,21 +833,21 @@ photo_datamodel = {
     # --- Simplest photometry ---
     
     "SIMPLE_PHOTO_MAG_G": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "Simplest photometry method based magnitude in g-band (with isolate mask); MW extinction corrected",
         "blank_value": np.nan,
         "dtype": "float32"
     },
 
     "SIMPLE_PHOTO_MAG_R": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "Simplest photometry method based magnitude in r-band (with isolate mask); MW extinction corrected",
         "blank_value": np.nan,
         "dtype": "float32"
     },
 
     "SIMPLE_PHOTO_MAG_Z": {
-        "unit": "mag",
+        "unit": u.mag,
         "description": "Simplest photometry method based magnitude in z-band (with isolate mask); MW extinction corrected",
         "blank_value": np.nan,
         "dtype": "float32"
@@ -1181,8 +1164,19 @@ fastspec_hdu_datamodel = {
     "TARGETID": {
         "unit": None,
         "description": "DESI TARGET ID",
-        "blank_value": np.nan,
         "dtype": "int64"
+    },
+    "RA_TARGET": {
+        "unit": "deg",
+        "description": "Right Ascension from target catalog",
+        "blank_value": np.nan,
+        "dtype": "float64"
+    },
+    "DEC_TARGET": {
+        "unit": "deg",
+        "description": "Declination from target catalog",
+        "blank_value": np.nan,
+        "dtype": "float64"
     },
     "DN4000": {
         "unit": None,

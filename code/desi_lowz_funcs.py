@@ -42,8 +42,6 @@ def flux_to_mag(flux, zeropoint=22.5):
 
 
 
-
-
 def find_nearest_island(segment_map, fiber_xpix,fiber_ypix):
     '''
     Function that finds the nearest segment and returns its index!!
@@ -1115,23 +1113,21 @@ def process_img(img_data, cutout_size = 96, org_size = 350,return_shift = False)
     
 
 
-def read_vac_line_info(gal_cat,columns,which_vac = "lines",coord_name = ""):
+def read_vac_line_info(gal_cat,columns,which_vac = "SPECPHOT",coord_name = "", stack_with_org=False):
     '''
     In this function, I feed in a catalog, and based on RA,DEC,TARGETID, the VAC info on lines is obtained.
     
     gal_cat is the catalog we want to match
     columns is the list of columns we will be reading, appending and then returning 
-    
-    if which_vac == lines, then we get all the emissio line fastspec fit stuff
-    if which_vac == normal, then we get the normal catalog
-    
+
+    The which_vac points to what extension to read: FASTSPEC, SPECPHOT are the main ones of interest
     '''
     #VAC data upload
-    iron_vac = fits.open("/global/cfs/cdirs/desi/public/dr1/vac/dr1/fastspecfit/iron/v2.1/catalogs/fastspec-iron.fits")
-    vac_data = iron_vac[2].data
-    vac_data_2 = iron_vac[1].data
+    iron_vac = fits.open("/global/cfs/cdirs/desi/public/dr1/vac/dr1/fastspecfit/iron/v3.0/catalogs/fastspec-iron.fits")
     
     
+
+    vac_data = iron_vac[which_vac].data
     
     #we match our catalog to the 
     catalog = SkyCoord(ra= np.array(vac_data["RA"])* u.degree, dec= np.array(vac_data["DEC"])*u.degree )
@@ -1139,22 +1135,63 @@ def read_vac_line_info(gal_cat,columns,which_vac = "lines",coord_name = ""):
     idx, d2d, d3d = c.match_to_catalog_sky(catalog)
     
     print("The maximum distance in arcsec is = ", np.max(d2d.arcsec))
-    
-    if which_vac == "lines":
-        vac_data_2_cat = Table(vac_data_2[idx])
-    if which_vac == "normal":
-        vac_data_2_cat = Table(vac_data[idx])
-    
+
+    vac_data_cat = Table(vac_data[idx])
 
     ##then we read the columns
-    vac_data_2_cat = vac_data_2_cat[columns]
+    vac_data_cat = vac_data_cat[columns]
+
+    if stack_with_org:
+        #then we horizontal stack these with gal_cat
+        gal_cat = hstack([gal_cat, vac_data_cat])
+        return gal_cat
+    else:
+        return vac_data_cat
+
+
+
+def match_fastspec_catalog(gal_cat,coord_name = ""):
+    '''
+    We match our catalog of interest with the total fastspec catalog (subselected to relevant columns) and save that matched subset.
+    '''
     
-    #then we horizontal stack these with gal_cat
-    gal_cat = hstack([gal_cat, vac_data_2_cat])
+    #fastspec catalog
+    vac_data = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_fastspec_catalog/iron_fastspec_v3.fits")
+
     
+    #we match our catalog to the 
+    catalog = SkyCoord(ra= np.array(vac_data["RA"])* u.degree, dec= np.array(vac_data["DEC"])*u.degree )
+    c = SkyCoord(ra=np.array(gal_cat[coord_name + "RA"])*u.degree, dec=np.array(gal_cat[coord_name + "DEC"])*u.degree )
+    idx, d2d, d3d = c.match_to_catalog_sky(catalog)
     
-    
-    return gal_cat
+    print("The maximum distance in arcsec is = ", np.max(d2d.arcsec))
+
+    vac_data_cat = Table(vac_data[idx])
+
+    #check that the targetids match
+    tgid_diff = np.abs( gal_cat["TARGETID"].data - vac_data_cat["TARGETID"] )
+    mismatch_mask = (tgid_diff != 0)
+
+    num_diff = len(tgid_diff[mismatch_mask])
+    print(f"Number of sources with different TARGETID = {num_diff}")
+    if num_diff > 0:
+        print("Example mismatched IDs:", gal_cat["TARGETID"].data[mismatch_mask][:5] )
+        #for such sources we will replace their columns with blank values!! We can later check if these are
+
+        # Replace rows for mismatched entries with blank/None values
+        for col in vac_data_cat.colnames:
+            col_dtype = vac_data_cat[col].dtype
+            
+            if np.issubdtype(col_dtype, np.floating):
+                vac_data_cat[col][mismatch_mask] = np.nan
+            elif np.issubdtype(col_dtype, np.integer):
+                vac_data_cat[col][mismatch_mask] = -999
+            else:
+                vac_data_cat[col][mismatch_mask] = None
+
+            #we will later figure out a way to deal with these -999 if they are indeed there!
+
+    return vac_data_cat
 
 
 def _fill_not_finite(arr, fill_value=99.0):
@@ -1757,7 +1794,7 @@ def measure_elliptical_aperture_area_fraction(image_shape, ell_aper_obj):
 
     return fraction
 
-def get_elliptical_aperture(segment_mask, grz_image = None, sigma = 3, aperture_mask = None, id_num = None, img_type = "binary"):
+def get_elliptical_aperture(binary_segment_mask=None, aper_light_image = None, sigma = 3, aperture_mask = None, id_num = None, img_type = "binary"):
     '''
     Function that takes in a segment mask and fits an aperture to it!
 
@@ -1765,35 +1802,43 @@ def get_elliptical_aperture(segment_mask, grz_image = None, sigma = 3, aperture_
     and to scale the aperture. If we wanted light weighted aperture, we would have to work with the actual image and not the pixel mask.
 
     img_type is the kind of image on which we want to do apeture estimation. If img_type = "binary", then it will use segment_mask.
-    if img_type = "light", then it will be on the g+r+z added image?
+    if img_type = "light", then it will be on the aper_light_image. This can just be the tractor model! If img_type = "light", then it the center and size can be light weighted!
+
+    Ideally, we only estimate the aperture on the tractor model as it is devoid of effects with bright stars and bad pixels!
     '''
 
+    if aper_light_image is not None:
+        aper_light_image = aper_light_image.copy()
+    if binary_segment_mask is not None:
+        binary_segment_mask = binary_segment_mask.copy()
+    
     if id_num is not None:
-        segment_mask_v2 = np.copy(segment_mask)
-        segment_mask_v2[segment_mask != id_num] = 0
-        segment_mask_v2[segment_mask == id_num] = 1
-        segment_mask = segment_mask_v2
+        segment_mask_v2 = np.copy(binary_segment_mask)
+        segment_mask_v2[binary_segment_mask != id_num] = 0
+        segment_mask_v2[binary_segment_mask == id_num] = 1
+        binary_segment_mask = segment_mask_v2
     
     if aperture_mask is not None:
-        segment_mask[aperture_mask] = 0
-        if np.sum( segment_mask) == 0:
+        binary_segment_mask[aperture_mask] = 0
+        if np.sum( binary_segment_mask) == 0:
             #in case source is too close to the star, then we do not code to crash so we unmask it again
-            segment_mask[aperture_mask] = 1
+            binary_segment_mask[aperture_mask] = 1
 
-        if grz_image is not None:
-            grz_image[aperture_mask] = 0
+        if aper_light_image is not None:
+            aper_light_image[aperture_mask] = 0
 
     #for the light type, we do not want to give the entire image, rather the actual image where we have the segment non-zero
     if img_type == "light":
-        grz_image[segment_mask == 0] = 0 
-        
-    #segment_mask is a binary mask.
-    #use this trick to get properties of the main segment 
+        aper_light_image[binary_segment_mask == 0] = 0 
 
+
+    #this is used to ensure that we are focusing on the appropriate isolate or non isolate mask
+    
+    #segment_mask is a binary mask.
     if img_type == "binary":
-        cat = data_properties(segment_mask, mask=None)
+        cat = data_properties(binary_segment_mask, mask=None)
     if img_type == "light":
-        cat = data_properties(grz_image, mask=None)
+        cat = data_properties(aper_light_image, mask=None)
     
     columns = ['label', 'xcentroid', 'ycentroid', 'semimajor_sigma',
                'semiminor_sigma', 'orientation']
@@ -1809,7 +1854,7 @@ def get_elliptical_aperture(segment_mask, grz_image = None, sigma = 3, aperture_
         
     aperture = EllipticalAperture(xypos, a, b, theta=theta)
 
-    area_fraction = measure_elliptical_aperture_area_fraction(segment_mask.shape, aperture)
+    area_fraction = measure_elliptical_aperture_area_fraction(binary_segment_mask.shape, aperture)
 
     return aperture, area_fraction, xypos, [cat.semimajor_sigma.value, b/a, theta]
 
