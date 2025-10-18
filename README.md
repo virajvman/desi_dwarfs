@@ -2,6 +2,9 @@
 
 ## DESI DR1 Extragalactic Dwarf Galaxy Catalog Code Base
 
+IN PROGRESS!
+
+Contact: Viraj Manwadkar (virajvm@stanford.edu)
 
 ### DESI DR1 Extragalactic Dwarf Galaxy Catalog — Data Model
 
@@ -170,7 +173,7 @@
 
 
 <details>
-<summary><strong>Extension: FASTSPECFIT</strong></summary>
+<summary><strong>Extension: FASTSPEC</strong></summary>
 
 <br>
 

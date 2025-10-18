@@ -5,9 +5,8 @@ import numpy as np
 import astropy.io.fits as fits
 import astropy.units as u
 from astropy.table import Table, vstack, join, hstack
-
 from shred_photometry_maskbits import cog_mag_converge, cog_nan_mask, cog_curve_decrease, bad_colors, iffy_tractor_model
-
+from io import BytesIO
 from shred_photometry_maskbits import create_shred_maskbits_from_dict, print_maskbit_statistics
 import os
 import glob
@@ -481,6 +480,9 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
     print(f"Number after dwarf mass cut = {len(catalog)}")
     
     #then we loop over the columns to get the final subset of columns
+    # Keep only columns present in main_datamodel
+    catalog = catalog[[col for col in main_datamodel.keys()]]
+    
     print("Need to think a bit more about the blank value stuff")
     for col in main_datamodel.keys():
         print(f"Column : {col}")
@@ -609,6 +611,10 @@ def get_fastspec_matched_catalog(gal_cat, save_name, match_method = "TARGETID"):
     Get the RA,DEC matched fastspec catalog and save it   
     '''
     fastspec_cat = match_fastspec_catalog(gal_cat,coord_name = "",match_method = match_method)
+
+    #make sure this is not a masked column!
+    fastspec_cat = make_catalog_unmasked(fastspec_cat)
+
     #save this 
     fastspec_cat.write(f"{save_name}",overwrite=True)
 
@@ -718,14 +724,13 @@ def combine_hdus(hdu_list, base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs
     primary_hdu = fits.PrimaryHDU()
     hdul = [primary_hdu]
 
-    # Convert each table to BinTableHDU and set EXTNAME
+    # Convert each Table to BinTableHDU (preserves units, descriptions)
     for tab, hdu_name in zip(hdu_tables, hdu_list):
-        if hdu_list == "main":
-            hdu_name = "MAIN"
-        if hdu_list == "fspec":
-            hdu_name = "FASTSPECFIT"
-            
-        bintable_hdu = fits.BinTableHDU(tab, name=hdu_name.upper())
+        buf = BytesIO()
+        tab.write(buf, format="fits")
+        buf.seek(0)
+        bintable_hdu = fits.open(buf)[1]
+        bintable_hdu.name = hdu_name.upper()
         bintable_hdu.add_checksum()
         hdul.append(bintable_hdu)
 
@@ -741,9 +746,9 @@ def combine_hdus(hdu_list, base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs
 if __name__ == '__main__':
 
     save_path = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats"
-
-    process_shreds = False
-    process_clean = False
+    
+    process_shreds = True
+    process_clean = True
 
     if process_shreds:
         #loading the shredded catalogs!
@@ -785,11 +790,11 @@ if __name__ == '__main__':
     
         ##get the main hdu
         print("Creating the shred main hdu")
-        tot_shred = create_main_data_model(tot_shred, save_path + "/shreds_main_hdu.fits", clean_cat=False)
+        tot_shred = create_main_data_model(tot_shred, save_path + "/shreds_MAIN_hdu.fits", clean_cat=False)
         
         ##get the fastspecfit hdu
         print("Creating the shred fastspecfit hdu")
-        _ = get_fastspec_matched_catalog(tot_shred, save_path + "/shreds_fspec_hdu.fits", match_method="TARGETID")
+        _ = get_fastspec_matched_catalog(tot_shred, save_path + "/shreds_FASTSPEC_hdu.fits", match_method="TARGETID")
         
         ##get the other hdus
 
@@ -799,16 +804,16 @@ if __name__ == '__main__':
         clean_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4.fits")
 
         print("Creating the clean main hdu")
-        clean_cat = create_main_data_model(clean_cat, save_path + "/clean_main_hdu.fits", clean_cat=True)
+        clean_cat = create_main_data_model(clean_cat, save_path + "/clean_MAIN_hdu.fits", clean_cat=True)
         
         ##get the fastspecfit hdu
         print("Creating the clean fastspecfit hdu")
-        _ = get_fastspec_matched_catalog(clean_cat, save_path + "/clean_fspec_hdu.fits", match_method="TARGETID")
+        _ = get_fastspec_matched_catalog(clean_cat, save_path + "/clean_FASTSPEC_hdu.fits", match_method="TARGETID")
 
 
 
     #then we consolidate it all into a multi-ext file!
-    combine_hdus(["main", "fspec"], base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats",
+    combine_hdus(["MAIN", "FASTSPEC"], base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats",
                  output_file="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits")
         
 
