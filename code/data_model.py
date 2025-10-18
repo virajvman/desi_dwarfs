@@ -23,13 +23,11 @@ main_datamodel = {
     "SURVEY": {
         "unit": None,
         "description": "Survey name",
-        "blank_value": "",
         "dtype": "str"
     },
     "PROGRAM": {
         "unit": None,
         "description": "Program name",
-        "blank_value": "",
         "dtype": "str"
     },
     "Z": {
@@ -49,6 +47,18 @@ main_datamodel = {
         "description": "Redrock zwarning bit",
         "dtype": "int8"
     },
+    "RA": {
+        "unit": "deg",
+        "description": "Right Ascension of the galaxy. Same as target catalog, except for galaxies that are reprocessed after identified as likely shredded.",
+        "blank_value": np.nan,
+        "dtype": "float64"
+    },
+    "DEC": {
+        "unit": "deg",
+        "description": "Declination of the galaxy. Same as target catalog, except for galaxies that are reprocessed after identified as likely shredded.",
+        "blank_value": np.nan,
+        "dtype": "float64"
+    },
     "RA_TARGET": {
         "unit": "deg",
         "description": "Right Ascension from target catalog",
@@ -64,50 +74,93 @@ main_datamodel = {
     "DESINAME": {
         "unit": None,
         "description": "DESI object name",
-        "blank_value": "",
         "dtype": "str"
     },
-    "DIST_MPC_FIDU": {
+    "LUMI_DIST_MPC": {
         "unit": "Mpc",
-        "description": "Fiducial luminosity distance in Mpc",
+        "description": "Fiducial luminosity distance in Mpc.",
         "blank_value": np.nan,
         "dtype": "float32"
     },
-    "LOGM_SAGA_FIDU": {
+    "LOG_MSTAR_SAGA": {
         "unit": logM_sun,
-        "description": "Log stellar mass using the fiducial luminosity distance and SAGA gr-based approximation",
+        "description": "Log stellar mass (in Msol) using the LUMI_DIST_MPC luminosity distance and SAGA gr-based approximation",
         "blank_value": np.nan,
         "dtype": "float32"
     },
-    "LOGM_M24_VCMB": {
+    "LOG_MSTAR_M24": {
         "unit": logM_sun,
-        "description": "Log stellar mass using the fiducial luminosity distance and de los Reyes et al. 2024 gr-based approximation",
+        "description": "Log stellar mass (in Msol) using the LUMI_DIST_MPC luminosity distance and de los Reyes et al. 2024 gr-based approximation",
         "blank_value": np.nan,
         "dtype": "float32"
     },
     "MAG_G": {
         "unit": u.mag,
-        "description": "g-band magnitude (MW extinction corrected)",
+        "description": "g-band magnitude (MW extinction corrected). Same as Tractor photometry, except for galaxies that are reprocessed after identifed as likely shredded.",
         "blank_value": np.nan,
         "dtype": "float32"
     },
     "MAG_R": {
         "unit": u.mag,
-        "description": "r-band magnitude (MW extinction corrected)",
+        "description": "Same as MAG_G but for r-band (MW extinction corrected)",
         "blank_value": np.nan,
         "dtype": "float32"
     },
     "MAG_Z": {
         "unit": u.mag,
-        "description": "z-band magnitude (MW extinction corrected)",
+        "description": "Same as MAG_G but for z-band (MW extinction corrected)",
+        "blank_value": np.nan,
+        "dtype": "float32"
+    },
+     "MAG_G_TARGET": {
+        "unit": u.mag,
+        "description": "Tractor g-band magnitude of DESI target source (MW extinction corrected). For shredded sources, this is the uncorrected, shredded photometry.",
+        "blank_value": np.nan,
+        "dtype": "float32"
+    },
+    "MAG_R_TARGET": {
+        "unit": u.mag,
+        "description": "Same as MAG_G_TARGET but for r-band (MW extinction corrected)",
+        "blank_value": np.nan,
+        "dtype": "float32"
+    },
+    "MAG_Z_TARGET": {
+        "unit": u.mag,
+        "description": "Same as MAG_G_TARGET but for z-band (MW extinction corrected)",
         "blank_value": np.nan,
         "dtype": "float32"
     },
     "SAMPLE": {
         "unit": None,
-        "description": "DESI target class (e.g., BGS_BRIGHT, BGS_FAINT) ",
-        "blank_value": "",
+        "description": "DESI target class (BGS_BRIGHT, BGS_FAINT, LOWZ, or ELG)",
         "dtype": "str"
+    },
+    "DWARF_MASKBIT": {
+        "unit": None,
+        "description": "Bitwise mask to apply various cleaning cuts. See for description of bitmasks here.",
+        "dtype": "int32"
+    },
+    "MAG_TYPE": {
+        "unit": None,
+        "description": "String indicating what kind of photometry is used for MAG_GRZ columns",
+        "dtype": "str"
+    }, 
+    "PHOTOMETRY_UPDATED": {
+        "unit": None,
+        "description": "Boolean indicating whether the photometry was updated from its original target Tractor photometry.",
+        "dtype": "bool"
+    },
+    "SHAPE_PARAMS": {
+        "unit": None,
+        "description": "Galaxy shape parameters: semi-major axis in arcsec, b/a ratio, position angle",
+        "shape": (3,),
+        "blank_value": np.nan,
+        "dtype": "float32"
+    },
+    "IN_SGA_2020": {
+        "unit": None,
+        "description": "Boolean indicating whether targeted source had Tractor MASKBITS=12, that is, in SGA-2020 catalog",
+        "dtype": "bool"
     }
 }
 
@@ -358,7 +411,7 @@ tractor_datamodel = {
         "dtype": "float32",
     },
 
-    "MASKBITS": {
+    "TRACTOR_MASKBITS": {
         "unit": None,
         "description": (
             "Tractor Bitwise mask indicating that an object touches a pixel in "

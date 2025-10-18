@@ -3,7 +3,6 @@
 ## DESI DR1 Extragalactic Dwarf Galaxy Catalog Code Base
 
 
-
 ### DESI DR1 Extragalactic Dwarf Galaxy Catalog — Data Model
 
 
@@ -11,6 +10,7 @@
 <summary><strong>Extension: MAIN</strong></summary>
 
 <br>
+
 | Name | Type | Units | Description |
 |------|------|-------|-------------|
 | TARGETID | int64 |  | DESI TARGET ID |
@@ -19,17 +19,26 @@
 | Z | float64 |  | Redrock Redshift |
 | DELTACHI2 | float64 |  | Redrock delta-chi-squared |
 | ZWARN | int8 |  | Redrock zwarning bit |
+| RA | float64 | deg | Right Ascension of galaxy center |
+| DEC | float64 | deg | Declination of galaxy center |
 | RA_TARGET | float64 | deg | Right Ascension from target catalog |
 | DEC_TARGET | float64 | deg | Declination from target catalog |
 | DESINAME | str |  | DESI object name |
-| DIST_MPC_FIDU | float32 | Mpc | Fiducial luminosity distance in Mpc |
-| LOGM_SAGA_FIDU | float32 | $\mathrm{\log(M_\odot)}$ | Log stellar mass using the fiducial luminosity distance and SAGA gr-based approximation |
-| LOGM_M24_VCMB | float32 | $\mathrm{\log(M_\odot)}$ | Log stellar mass using the fiducial luminosity distance and de los Reyes et al. 2024 gr-based approximation |
+| LUMI_DIST_MPC | float32 | Mpc | Luminosity distance in Mpc |
+| LOG_MSTAR_SAGA | float32 | $\mathrm{\log(M_\odot)}$ | Log stellar mass using the fiducial luminosity distance and SAGA gr-based approximation |
+| LOG_MSTAR_M24 | float32 | $\mathrm{\log(M_\odot)}$ | Log stellar mass using the fiducial luminosity distance and de los Reyes et al. 2024 gr-based approximation |
 | MAG_G | float32 | $\mathrm{mag}$ | g-band magnitude (MW extinction corrected) |
 | MAG_R | float32 | $\mathrm{mag}$ | r-band magnitude (MW extinction corrected) |
 | MAG_Z | float32 | $\mathrm{mag}$ | z-band magnitude (MW extinction corrected) |
+| MAG_G_TARGET | float32 | $\mathrm{mag}$ | g-band magnitude (MW extinction corrected). For shredded sources, this is the uncorrected, shredded photometry |
+| MAG_R_TARGET | float32 | $\mathrm{mag}$ | r-band magnitude (MW extinction corrected) |
+| MAG_Z_TARGET | float32 | $\mathrm{mag}$ | z-band magnitude (MW extinction corrected) |
 | SAMPLE | str |  | DESI target class (e.g., BGS_BRIGHT, BGS_FAINT)  |
-
+| DWARF_MASKBIT | int32 |  | Bitwise mask to apply various cleaning cuts. See here for description of bitmasks here.  |
+| MAG_TYPE | str |  | Photometry MASKBIT  |
+| PHOTOMETRY_UPDATED | bool |  | Boolean indicating whether the photometry was updated from its original target Tractor photometry.  |
+| SHAPE_PARAMS | str | | Galaxy shape parameters: semi-major axis in arcsec, b/a ratio, position angle (degrees)  |
+| IN_SGA_2020 | bool |  | Boolean indicating whether targeted source had Tractor MASKBITS=12, that is, in SGA-2020 catalog  |
 
 </details>
 
@@ -161,7 +170,7 @@
 
 
 <details>
-<summary><strong>Extension: FASTSPEC_CAT</strong></summary>
+<summary><strong>Extension: FASTSPECFIT</strong></summary>
 
 <br>
 

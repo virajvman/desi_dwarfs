@@ -229,7 +229,10 @@ def safe_get_col(col, fill_value=""):
 
 def select_dup_stars_g2(source_cat_f, g2_dup_star, radius_arcsec=2.0):
     """
-    Find all PSF sources within `radius_arcsec` of DUP G2 sources.
+    Find all sources within `radius_arcsec` of DUP G2 sources. This used to just be PSF, but there are cases where sersic and 
+    other profiles are also fitted. So now, no restriction on it being PSF. This takes all sources within 2/
+
+    One complication, there are sources like this: 39628211251842951. That looks like a star in the catalog, but is not a star!
 
     Parameters
     ----------
@@ -254,9 +257,14 @@ def select_dup_stars_g2(source_cat_f, g2_dup_star, radius_arcsec=2.0):
     ref_col  = np.array(safe_get_col(source_cat_f["ref_cat"]))
 
     # psf_mask = (source_cat_f["type"] == "PSF") & (source_cat_f["ref_cat"] != "G2")
-    psf_mask = (type_col == "PSF") & (ref_col != "G2")
-
+    # psf_mask = (type_col == "PSF") & (ref_col != "G2")
+    psf_mask = (ref_col != "G2")
+    
     psf_sources = source_cat_f[psf_mask]
+
+    print("SHOULD I CHECK FOR IF THERE IS A G2 STAR THAT IS DUP BUT IT MUST HAVE A MATCHING PSF SOURCE")
+    print("ALSO, EVEN IF STAR F DIST IS ZERO, it must have a mag to be able to masked!! so check that  ")
+    print("also, maybe for the masking just use the other masking thing?? Check which star is the best to use!!")
     
     if len(psf_sources) == 0:
         mask = np.zeros(len(source_cat_f), dtype=bool)
@@ -288,7 +296,6 @@ def select_dup_stars_g2(source_cat_f, g2_dup_star, radius_arcsec=2.0):
         return mask
 
 
-        
 def run_aperture_pipe(input_dict):
     '''
     Main function that runs the initial aperture photometry pipeline. Identifying the main blob, applying the color associated criterion etc.
@@ -350,6 +357,7 @@ def run_aperture_pipe(input_dict):
     #bool variable that decides if the rephoto pipeline should be run
     do_i_run = False
 
+
     ##################
     # get catalog of nearby DR9 sources along with their photo-zs info. Nearby is defined as within 45 arcsecs
     ##################
@@ -382,7 +390,7 @@ def run_aperture_pipe(input_dict):
 
     #so stars are objects that are either in G2 with significant PM or are the duplicated Gaia sources that are coincident with it, but not in G2 so not selected from earlier criterion
     is_star = ((source_cat_f["ref_cat"] == "G2")  &  star_model  & signi_pm ) | other_stars_dup_assoc 
-    
+
     #what is the distance to the closest star from us?
     all_stars = source_cat_f[is_star]
     if len(all_stars) > 0:
@@ -599,6 +607,7 @@ def run_aperture_pipe(input_dict):
             aperture_for_bstar_12 = CircularAperture( (float(bstar_xpix), float(bstar_ypix)) , r =  0.5*bstar_radius_pix)
 
         source_cat_all_stars = source_cat_f[is_star]
+
 
         ##compute the max mag of this star
         source_cat_all_stars["max_mag"] = np.min( (  np.array(source_cat_all_stars["gaia_phot_bp_mean_mag"]), np.array(source_cat_all_stars["gaia_phot_rp_mean_mag"]),np.array(source_cat_all_stars["gaia_phot_g_mean_mag"])    )       ,axis = 0)
@@ -1042,6 +1051,12 @@ def run_aperture_pipe(input_dict):
         fidu_aper_mag_r = flux_to_mag( phot_table_r["aperture_sum"].data[0] - tot_subtract_sources_r )
         fidu_aper_mag_z = flux_to_mag( phot_table_z["aperture_sum"].data[0] - tot_subtract_sources_z )
 
+        fidu_aper_mag_g_no_sub = flux_to_mag(phot_table_g["aperture_sum"].data[0])
+        fidu_aper_mag_r_no_sub = flux_to_mag(phot_table_r["aperture_sum"].data[0])
+        fidu_aper_mag_z_no_sub = flux_to_mag(phot_table_z["aperture_sum"].data[0])
+        
+        #let us save just the aperture photometry as well!! These will be useful for the very few weird low redshift objects that are iffy in SGA or tractor
+
         #these mags are extinction corrected!
         org_mags = [source_mag_g_mwc,source_mag_r_mwc,source_mag_z_mwc] 
         
@@ -1247,8 +1262,6 @@ def run_aperture_pipe(input_dict):
 
         plot_now = source_cat_inseg_signi[(~is_star_inseg_signi) ]
 
-
-        
         gr_new, rz_new = get_updated_gr_rz(plot_now["g-r"].data, plot_now["r-z"].data)
         for p in range(len(plot_now)):
             ax[ax_id].scatter( [ gr_new[p]], [rz_new[p]], color = "k" , marker = plot_now["marker"][p], s= 20,zorder = 2 ) 
@@ -1265,10 +1278,11 @@ def run_aperture_pipe(input_dict):
         ax[ax_id].hlines(y = ref_deblend_rz+col_lenient,xmin = -0.5, xmax= ref_deblend_gr + col_lenient,color = "k",lw = 0.75, ls = "--")
         ax[ax_id].vlines(x = ref_deblend_gr + col_lenient,ymin = -0.5, ymax= ref_deblend_rz + col_lenient,color = "k",lw = 0.75, ls = "--")
 
-        
+        #usually, the above two will be the same, unless the reference color changes due to the np.maximum
 
         ax[ax_id].set_xlim([ -0.5, 2])
         ax[ax_id].set_ylim([  -0.5, 1.5])
+        ax[ax_id].set_title(f"ref (g-r, r-z) = ({ref_deblend_gr:.2f}, {ref_deblend_rz:.2f})",fontsize = 15)
         ax[ax_id].tick_params(axis='both', labelsize=10)
         ax[ax_id].set_xlabel("g-r",fontsize = 17)
         ax[ax_id].set_ylabel("r-z",fontsize = 17)
@@ -1338,16 +1352,16 @@ def run_aperture_pipe(input_dict):
         ax[ax_id].text(0.05,start,"Tractor-mag g = %.2f"%source_mag_g,size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
 
         
-        ax[ax_id].text(0.05,start - spacing*1,f"Aper-mag-R3 g = {fmt_mag(fidu_aper_mag_g)}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*1,f"Aper-mag-R3 g = {fmt_mag(fidu_aper_mag_g), fmt_mag(fidu_aper_mag_g_no_sub)}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
         
         ax[ax_id].text(0.05,start - spacing*2,"fracflux_g = %.2f"%(source_cat_obs["fracflux_g"]),size = 12,transform=ax[ax_id].transAxes, verticalalignment='top')
         
         ax[ax_id].text(0.05,start - spacing*3,"Tractor-mag r = %.2f"%source_mag_r,size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-        ax[ax_id].text(0.05,start - spacing*4,f"Aper-mag-R3 r = {fmt_mag(fidu_aper_mag_r)}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*4,f"Aper-mag-R3 r = {fmt_mag(fidu_aper_mag_r), fmt_mag(fidu_aper_mag_r_no_sub)}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
         ax[ax_id].text(0.05,start - spacing*5,"fracflux_r= %.2f"%(source_cat_obs["fracflux_r"]),size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
 
         ax[ax_id].text(0.05,start - spacing*6,"Tractor-mag z = %.2f"%source_mag_z,size =fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
-        ax[ax_id].text(0.05,start - spacing*7,f"Aper-mag-R3 z = {fmt_mag(fidu_aper_mag_z)}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
+        ax[ax_id].text(0.05,start - spacing*7,f"Aper-mag-R3 z = {fmt_mag(fidu_aper_mag_z), fmt_mag(fidu_aper_mag_z_no_sub)}",size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
         ax[ax_id].text(0.05,start - spacing*8,"fracflux_z = %.2f"%(source_cat_obs["fracflux_z"]),size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
 
         ax[ax_id].text(0.05,start - spacing*9,"Closest Star fdist = %.2f"%(closest_star_norm_dist),size = fsize,transform=ax[ax_id].transAxes, verticalalignment='top')
@@ -1362,7 +1376,13 @@ def run_aperture_pipe(input_dict):
         fidu_aper_mag_r = fidu_aper_mag_r + 2.5 * np.log10(source_cat_obs["mw_transmission_r"])
         fidu_aper_mag_z = fidu_aper_mag_z + 2.5 * np.log10(source_cat_obs["mw_transmission_z"])
 
+        fidu_aper_mag_g_no_sub = fidu_aper_mag_g_no_sub + 2.5 * np.log10(source_cat_obs["mw_transmission_g"])
+        fidu_aper_mag_r_no_sub = fidu_aper_mag_r_no_sub + 2.5 * np.log10(source_cat_obs["mw_transmission_r"])
+        fidu_aper_mag_z_no_sub = fidu_aper_mag_z_no_sub + 2.5 * np.log10(source_cat_obs["mw_transmission_z"])
+
         fidu_aper_mags = [fidu_aper_mag_g, fidu_aper_mag_r, fidu_aper_mag_z]
+        fidu_aper_mags_no_sub = [fidu_aper_mag_g_no_sub, fidu_aper_mag_r_no_sub, fidu_aper_mag_z_no_sub ]
+        
         
         ##save these as a file for future reference
         np.save(save_path + "/aper_r3_mags.npy", fidu_aper_mags)        
@@ -1373,6 +1393,7 @@ def run_aperture_pipe(input_dict):
                 "closest_star_dist": closest_star_dist,
                 "closest_star_mag": closest_star_mag,
                 "aper_r3_mags": fidu_aper_mags,
+                "aper_r3_mags_no_sub": fidu_aper_mags_no_sub,
                 "save_path": save_path,
                 "save_summary_png": save_summary_png,
                 "tractor_dr9_mags": org_mags,

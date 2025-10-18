@@ -46,13 +46,13 @@ if [ "$RUN_APER" = true ]; then
     srun --cpu-bind=cores python3 desi_dwarfs/code/dwarf_photo_pipeline.py $BASE_ARGS -run_aper
 fi
 
-# shifterimg pull docker:legacysurvey/legacypipe:DR10.3.4
+shifterimg pull docker:legacysurvey/legacypipe:DR10.3.4
 
 # srun --cpu-bind=cores shifter --image docker:legacysurvey/legacypipe:DR10.3.4 \
 #     python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -img_source -use_sample sga
 
-# srun --cpu-bind=cores shifter --image docker:legacysurvey/legacypipe:DR10.3.4 \
-#     python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -parent_galaxy -bkg_source -blend_remove_source -use_sample sga
+srun --cpu-bind=cores shifter --image docker:legacysurvey/legacypipe:DR10.3.4 \
+    python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -parent_galaxy -bkg_source -blend_remove_source -use_sample sga
 
 if [ "$RUN_COG" = true ]; then
     srun --cpu-bind=cores python3 desi_dwarfs/code/dwarf_photo_pipeline.py $BASE_ARGS -run_cog

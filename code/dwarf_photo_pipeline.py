@@ -1029,6 +1029,7 @@ if __name__ == '__main__':
                 aper_table_keys = {"closest_star_norm_dist": "NEAREST_STAR_NORM_DIST",
                                    "closest_star_mag": "NEAREST_STAR_MAX_MAG",
                                    "aper_r3_mags": "APER_ORG_R3_MAG",
+                                   "aper_r3_mags_no_sub": "APER_ORG_R3_NO_SUBTRACT_MAG",
                                    "save_path": "SAVE_PATH",
                                    "lie_on_segment_island": "APER_SOURCE_ON_ORG_BLOB" ,
                                    "save_summary_png": "SAVE_SUMMARY_APER_PATH",
@@ -1188,7 +1189,7 @@ if __name__ == '__main__':
 
                 # Convert to an Astropy table
                 all_mags_table = Table(all_mags_output_dict)
-    
+
                 with_isolate_output_dict = {}            
                 #ADDING COG OUTPUTS WHEN USING ISOLATE MASK
                 with_isolate_table_keys = {"cog_mags_err": "COG_MAG_ERR_ISOLATE",
@@ -1199,7 +1200,7 @@ if __name__ == '__main__':
                                         "cog_params_g_err": "COG_PARAMS_G_ERR_ISOLATE" ,
                                         "cog_params_r_err": "COG_PARAMS_R_ERR_ISOLATE",
                                         "cog_params_z_err": "COG_PARAMS_Z_ERR_ISOLATE",
-                                         "aper_r4_frac_in_image": "APER_R4_FRAC_IN_IMG_ISOLATE",
+                                         "aper_r4_frac_in_image": "APERFRAC_R4_IN_IMG_ISOLATE",
                                          "cog_chi2": "COG_CHI2_ISOLATE" ,
                                          "cog_dof": "COG_DOF_ISOLATE",
                                          "cog_decrease_len": "COG_DECREASE_MAX_LEN_ISOLATE",
@@ -1208,8 +1209,12 @@ if __name__ == '__main__':
                                          "aper_radec_cen": 'APER_CEN_RADEC_ISOLATE',
                                          "aper_xy_pix_cen": 'APER_CEN_XY_PIX_ISOLATE',
                                          "mask_frac_r4": 'APER_R4_MASK_FRAC_ISOLATE',
-                                        "aper_cen_masked_bool": 'APER_CEN_MASKED_ISOLATE' 
+                                        "aper_cen_masked_bool": 'APER_CEN_MASKED_ISOLATE',
+                                        "aper_rad_mus": "APER_MU_R_SIZES_ISOLATE"
                                         }
+
+                #note one important thing that, we are are not measuring these sizes in model space,
+                #so they would be inflated as we are not taking into the PSF!
 
                 #looping over the keys!!
                 for keys in with_isolate_table_keys.keys():
@@ -1236,7 +1241,9 @@ if __name__ == '__main__':
                                          "aper_radec_cen_no_isolate": 'APER_CEN_RADEC_NO_ISOLATE',
                                          "aper_xy_pix_cen_no_isolate": 'APER_CEN_XY_PIX_NO_ISOLATE',
                                          "mask_frac_r4_no_isolate": 'APER_R4_MASK_FRAC_NO_ISOLATE',
-                                         "aper_cen_masked_bool_no_isolate": 'APER_CEN_MASKED_NO_ISOLATE' 
+                                         "aper_cen_masked_bool_no_isolate": 'APER_CEN_MASKED_NO_ISOLATE',
+                                        "aper_rad_mus_no_isolate": "APER_MU_R_SIZES_NO_ISOLATE"
+                                         
                                         }
                 
                 #looping over the keys!!
@@ -1263,7 +1270,8 @@ if __name__ == '__main__':
                     "tractor_aper_radec_cen_w_isolate": "TRACTOR_ONLY_APER_CEN_RADEC_ISOLATE", 
                     "tractor_aper_params_w_isolate": "TRACTOR_ONLY_APER_PARAMS_ISOLATE",
                     "tractor_aper_cen_masked_bool_w_isolate": "TRACTOR_APER_CEN_MASKED_ISOLATE",
-                    "tractor_aperfrac_in_image_w_isolate": "TRACTOR_APERFRAC_R4_IN_IMG_ISOLATE"
+                    "tractor_aperfrac_in_image_w_isolate": "TRACTOR_APERFRAC_R4_IN_IMG_ISOLATE",
+                    "tractor_rad_mus_w_isolate": "TRACTOR_MU_R_SIZES_ISOLATE"
                 }
 
                 tractor_output_table_keys_no_isolate = {
@@ -1280,7 +1288,8 @@ if __name__ == '__main__':
                     "tractor_aper_radec_cen_no_isolate": "TRACTOR_ONLY_APER_CEN_RADEC_NO_ISOLATE", 
                     "tractor_aper_params_no_isolate": "TRACTOR_ONLY_APER_PARAMS_NO_ISOLATE",
                     "tractor_aper_cen_masked_bool_no_isolate": "TRACTOR_APER_CEN_MASKED_NO_ISOLATE",
-                    "tractor_aperfrac_in_image_no_isolate": "TRACTOR_APERFRAC_R4_IN_IMG_NO_ISOLATE"
+                    "tractor_aperfrac_in_image_no_isolate": "TRACTOR_APERFRAC_R4_IN_IMG_NO_ISOLATE",
+                    "tractor_rad_mus_no_isolate": "TRACTOR_MU_R_SIZES_NO_ISOLATE"   
                 }
 
                 #combining the above dictionaries into one!

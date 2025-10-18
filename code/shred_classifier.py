@@ -815,7 +815,8 @@ if __name__ == '__main__':
     if True:
         get_all_data = False
 
-        for sample_i in file_dict.keys():
+        # for sample_i in file_dict.keys():
+        for sample_i in ["SGA"]:
             print(f"Reading {sample_i} catalog")
             shred_cat = Table.read(file_dict[sample_i])
 
@@ -853,45 +854,50 @@ if __name__ == '__main__':
                 all_metadata_scaled = np.load(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/all_shred_metadata_scaled_{sample_i}.npy")
     
             print("Images finished generated/reading!")
+
+            if True:
+                ##we normalize the image
+                #crop to relevant number of channels needed for the CNN input!
+                all_shred_images_unnorm_f = all_shred_images_unnorm[ :, :use_channels, :, : ]
+                print(f"Shape of entire input image data = {all_shred_images_unnorm_f.shape}")
                 
-            ##we normalize the image
-            #crop to relevant number of channels needed for the CNN input!
-            all_shred_images_unnorm_f = all_shred_images_unnorm[ :, :use_channels, :, : ]
-            print(f"Shape of entire input image data = {all_shred_images_unnorm_f.shape}")
+                num_samples = len(shred_cat)
+                all_indices = np.arange(len(shred_cat))
             
-            num_samples = len(shred_cat)
-            all_indices = np.arange(len(shred_cat))
         
-            print(num_samples, all_indices)
+                all_image_channel_mean, all_image_channel_std = compute_channel_mean_std(all_shred_images_unnorm_f,use_channels = use_channels)
+                print("Image Channel means:", all_image_channel_mean)
+                print("Image Channel stds:", all_image_channel_std)
+            
+                # ##testing the image normalization!!
+                all_shred_images = normalize_image(all_shred_images_unnorm_f,  all_image_channel_mean, all_image_channel_std)
+            
+                #let us just feed the validation dataset the cropped images!
+                size = 64
+                start = (96 - size) // 2
+                end = start + size
+                all_shred_images = all_shred_images[:,:, start:end, start:end]
+                print(all_shred_images.shape)
+                full_dataset = ShredDataset(all_shred_images, all_metadata_scaled, all_indices, all_indices,transform=None)
+            
+                full_loader = DataLoader(full_dataset, batch_size=64, shuffle=False)
+            
+                full_pcnn = get_preds(model, full_loader, device='cuda')
         
-            all_image_channel_mean, all_image_channel_std = compute_channel_mean_std(all_shred_images_unnorm_f,use_channels = use_channels)
-            print("Image Channel means:", all_image_channel_mean)
-            print("Image Channel stds:", all_image_channel_std)
+                high_cnn_mask = (full_pcnn > 0.5)
         
-            # ##testing the image normalization!!
-            all_shred_images = normalize_image(all_shred_images_unnorm_f,  all_image_channel_mean, all_image_channel_std)
-        
-            #let us just feed the validation dataset the cropped images!
-            size = 64
-            start = (96 - size) // 2
-            end = start + size
-            all_shred_images = all_shred_images[:,:, start:end, start:end]
-            print(all_shred_images.shape)
-            full_dataset = ShredDataset(all_shred_images, all_metadata_scaled, all_indices, all_indices,transform=None)
-        
-            full_loader = DataLoader(full_dataset, batch_size=64, shuffle=False)
-        
-            full_pcnn = get_preds(model, full_loader, device='cuda')
+                print(f"Fraction with PCNN > 0.5 = {np.sum(high_cnn_mask)/len(full_pcnn)}")
+            
+                #we will now save this column in the catalog
+                shred_cat["PCNN_FRAGMENT"] = full_pcnn
     
-            high_cnn_mask = (full_pcnn > 0.5)
+                #make a new table with TARGETID, RA, DEC
+                shred_cat_temp = shred_cat["TARGETID", "RA", "DEC", "PCNN_FRAGMENT"]
     
-            print(f"Fraction with PCNN > 0.5 = {np.sum(high_cnn_mask)/len(full_pcnn)}")
-        
-            #we will now save this column in the catalog
-            shred_cat["PCNN_FRAGMENT"] = full_pcnn
-        
-            shred_cat.write(file_dict[sample_i],overwrite=True)
-        
+                print( file_dict[sample_i].replace(".fits", "_pcnn_vals.fits") )
+            
+                shred_cat_temp.write( file_dict[sample_i].replace(".fits", "_pcnn_vals.fits")  ,overwrite=True )
+            
     
 
     

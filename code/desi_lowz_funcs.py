@@ -24,7 +24,6 @@ from io import BytesIO
 import desispec.io
 from desispec import coaddition  
 from matplotlib.colors import LogNorm
-
 import requests
 import json
 
@@ -428,6 +427,7 @@ def print_radecs(object_list, num=100, ra="TARGET_RA", dec="TARGET_DEC"):
 def find_objects_nearby(object_list, find_ra, find_dec, deg_rad = 1e-3,ra="TARGET_RA", dec="TARGET_DEC"):
     
     mask = (np.abs(object_list[ra] - find_ra) < deg_rad) & (np.abs(object_list[dec] - find_dec) < deg_rad)
+    
     return object_list[mask]
     
 
@@ -558,7 +558,7 @@ def r_kcorr(gr,z):
     
     return kr
 
-def get_stellar_mass_mia( gr_col, gmag, zred):
+def get_stellar_mass_mia( gr_col, gmag, zred, d_in_mpc=None, input_zred=True):
     '''
     we use the 2 color prescriptions here. One from SAGA and the updated one from Mia's paper.
     Note that Mia's formula is only valid for Mstar < 1e10 though which is okay for us!
@@ -566,11 +566,17 @@ def get_stellar_mass_mia( gr_col, gmag, zred):
     #use redshift to convert to absolute magnitude
     from astropy.cosmology import Planck18
 
-    #convert the zred to the luminosity distance 
-    d = Planck18.luminosity_distance(zred)
-    d_in_pc = d.value * 1e6
-    #the k correction
-    kg = g_kcorr(gr_col,zred)
+    if input_zred:
+        #convert the zred to the luminosity distance 
+        d = Planck18.luminosity_distance(zred)
+        d_in_pc = d.value * 1e6
+        #M = m + 5 - 5*log10(d/pc) - Kcor
+        kg = g_kcorr(gr_col,zred)
+    else:
+        #the input is in distance!
+        d_in_pc = d_in_mpc * 1e6
+        kg = g_kcorr(gr_col,zred)
+
     Mg = gmag + 5 - 5*np.log10(d_in_pc) - kg
     
     log_mstar = (1.433 * gr_col) + 0.00153 * (Mg**2) - (0.335 * Mg) + 2.072
@@ -1148,9 +1154,83 @@ def read_vac_line_info(gal_cat,columns,which_vac = "SPECPHOT",coord_name = "", s
     else:
         return vac_data_cat
 
+from astropy.table import vstack, Table
+import numpy as np
+from astropy.coordinates import SkyCoord
+import astropy.units as u
 
 
-def match_fastspec_catalog(gal_cat,coord_name = ""):
+def match_fastspec_catalog_targetid(gal_cat, vac_data):
+    """
+    Vectorized match of gal_cat to vac_data by TARGETID, keeping the row
+    with max SNR_R for duplicates. Missing TARGETIDs are filled with np.nan
+    for all columns except TARGETID, which is kept as is.
+    """
+
+    # Step 1: remove duplicates in vac_data, keep row with max SNR_R
+    sort_idx = np.lexsort((-vac_data["SNR_R"], vac_data["TARGETID"]))
+    vac_sorted = vac_data[sort_idx]
+    _, unique_idx = np.unique(vac_sorted["TARGETID"], return_index=True)
+    vac_unique = vac_sorted[unique_idx]
+
+    # Step 2: convert to structured NumPy array
+    vac_arr = vac_unique.as_array()  # structured array
+    vac_tgids = vac_arr["TARGETID"]
+
+    # Step 3: sort TARGETIDs for fast search
+    sorted_idx = np.argsort(vac_tgids)
+    vac_arr_sorted = vac_arr[sorted_idx]
+    vac_tgids_sorted = vac_arr_sorted["TARGETID"]
+
+    # Step 4: find indices of gal_cat TARGETIDs in vac_data
+    inds = np.searchsorted(vac_tgids_sorted, gal_cat["TARGETID"])
+    found_mask = (inds >= 0) & (inds < len(vac_tgids_sorted))
+    found_mask &= vac_tgids_sorted[inds] == gal_cat["TARGETID"]
+
+    # Step 5: create aligned array
+    aligned_arr = np.empty(len(gal_cat), dtype=vac_arr.dtype)
+
+    for name in vac_arr.dtype.names:
+        if name == "TARGETID":
+            aligned_arr[name] = gal_cat["TARGETID"]  # always preserve
+        else:
+            aligned_arr[name] = np.nan  # fill with NaN initially
+
+    # Step 6: fill matched rows with data from vac_arr_sorted
+    aligned_arr_masked = aligned_arr.copy()
+    aligned_arr_masked[found_mask] = vac_arr_sorted[inds[found_mask]]
+
+    # Step 7: convert back to Astropy Table
+    vac_aligned = Table(aligned_arr_masked)
+
+    # Step 8: compute separation for valid rows
+    valid_mask = ~np.isnan(vac_aligned["RA"])
+    if np.any(valid_mask):
+        # Ensure the units are proper floats in degrees
+        ra_vals = np.array(gal_cat["RA"][valid_mask], dtype=float)
+        dec_vals = np.array(gal_cat["DEC"][valid_mask], dtype=float)
+        ra_vac = np.array(vac_aligned["RA"][valid_mask], dtype=float)
+        dec_vac = np.array(vac_aligned["DEC"][valid_mask], dtype=float)
+        
+        c_gal = SkyCoord(ra=ra_vals * u.deg, dec=dec_vals * u.deg)
+        c_vac = SkyCoord(ra=ra_vac * u.deg, dec=dec_vac * u.deg)
+
+        # c_gal = SkyCoord(ra=gal_cat["RA"][valid_mask].astype(float)*u.deg,
+        #                  dec=gal_cat["DEC"][valid_mask].astype(float)*u.deg)
+        # c_vac = SkyCoord(ra=vac_aligned["RA"][valid_mask].astype(float)*u.deg,
+        #                  dec=vac_aligned["DEC"][valid_mask].astype(float)*u.deg)
+        
+        sep = c_gal.separation(c_vac)
+        print("Maximum separation between input and matched catalog (arcsec):", np.max(sep.arcsec))
+    else:
+        print("No valid matches found; all rows filled with NaN.")
+
+        
+
+    return vac_aligned
+
+
+def match_fastspec_catalog(gal_cat,coord_name = "",match_method = "RADEC"):
     '''
     We match our catalog of interest with the total fastspec catalog (subselected to relevant columns) and save that matched subset.
     '''
@@ -1158,38 +1238,43 @@ def match_fastspec_catalog(gal_cat,coord_name = ""):
     #fastspec catalog
     vac_data = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_fastspec_catalog/iron_fastspec_v3.fits")
 
+    if match_method == "RADEC":
+        
+        #we match our catalog to the 
+        catalog = SkyCoord(ra= np.array(vac_data["RA"].astype(float))* u.degree, dec= np.array(vac_data["DEC"].astype(float))*u.degree )
+        c = SkyCoord(ra=np.array(gal_cat[coord_name + "RA"].astype(float))*u.degree, dec=np.array(gal_cat[coord_name + "DEC"].astype(float))*u.degree )
+        idx, d2d, d3d = c.match_to_catalog_sky(catalog)
+        
+        print("The maximum distance in arcsec is = ", np.max(d2d.arcsec))
     
-    #we match our catalog to the 
-    catalog = SkyCoord(ra= np.array(vac_data["RA"])* u.degree, dec= np.array(vac_data["DEC"])*u.degree )
-    c = SkyCoord(ra=np.array(gal_cat[coord_name + "RA"])*u.degree, dec=np.array(gal_cat[coord_name + "DEC"])*u.degree )
-    idx, d2d, d3d = c.match_to_catalog_sky(catalog)
+        vac_data_cat = Table(vac_data[idx])
+        
+        #check that the targetids match
+        tgid_diff = np.abs( gal_cat["TARGETID"].data - vac_data_cat["TARGETID"] )
+        mismatch_mask = (tgid_diff != 0)
     
-    print("The maximum distance in arcsec is = ", np.max(d2d.arcsec))
+        num_diff = len(tgid_diff[mismatch_mask])
+        print(f"Number of sources with different TARGETID = {num_diff}")
+        if num_diff > 0:
+            print("Example mismatched IDs:", gal_cat["TARGETID"].data[mismatch_mask][:5] )
+            #for such sources we will replace their columns with blank values!! We can later check if these are
+    
+            # Replace rows for mismatched entries with blank/None values
+            for col in vac_data_cat.colnames:
+                col_dtype = vac_data_cat[col].dtype
+                
+                if np.issubdtype(col_dtype, np.floating):
+                    vac_data_cat[col][mismatch_mask] = np.nan
+                elif np.issubdtype(col_dtype, np.integer):
+                    vac_data_cat[col][mismatch_mask] = -999
+                else:
+                    vac_data_cat[col][mismatch_mask] = None
+    
+                #we will later figure out a way to deal with these -999 if they are indeed there!
 
-    vac_data_cat = Table(vac_data[idx])
-
-    #check that the targetids match
-    tgid_diff = np.abs( gal_cat["TARGETID"].data - vac_data_cat["TARGETID"] )
-    mismatch_mask = (tgid_diff != 0)
-
-    num_diff = len(tgid_diff[mismatch_mask])
-    print(f"Number of sources with different TARGETID = {num_diff}")
-    if num_diff > 0:
-        print("Example mismatched IDs:", gal_cat["TARGETID"].data[mismatch_mask][:5] )
-        #for such sources we will replace their columns with blank values!! We can later check if these are
-
-        # Replace rows for mismatched entries with blank/None values
-        for col in vac_data_cat.colnames:
-            col_dtype = vac_data_cat[col].dtype
-            
-            if np.issubdtype(col_dtype, np.floating):
-                vac_data_cat[col][mismatch_mask] = np.nan
-            elif np.issubdtype(col_dtype, np.integer):
-                vac_data_cat[col][mismatch_mask] = -999
-            else:
-                vac_data_cat[col][mismatch_mask] = None
-
-            #we will later figure out a way to deal with these -999 if they are indeed there!
+    
+    if match_method == "TARGETID":
+        vac_data_cat = match_fastspec_catalog_targetid(gal_cat, vac_data)
 
     return vac_data_cat
 
@@ -1367,7 +1452,7 @@ def plot_mwd(RA,Dec,org=0,title='Mollweide projection', projection='mollweide'):
     
 def get_isdesi(ra, dec):
     '''
-    D
+    Function that says if in the DESI footprint or not?
     '''
     hdu = fits.open('/global/cscratch1/sd/raichoor/desits/des_hpmask.fits')
     nside, nest = hdu[1].header['HPXNSIDE'], hdu[1].header['HPXNEST']

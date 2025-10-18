@@ -544,7 +544,7 @@ def get_main_blob_sources(i, ra, dec, tgid, file_path, img_path, width, pixscale
             for k in range(len(tractor_parent)):
                 mod = build_model_image(tractor_parent[k], wcs, ave_psfsize_dict, mean_psf=True)
                 total_model += mod
-                np.save(f"{tractor_save_dir}/tractor_parent_source_model_{parent_source_cat["source_objid_new"].data[k]:d}.npy", mod)
+                np.save(f"{tractor_save_dir}/tractor_parent_source_model_{parent_source_cat['source_objid_new'].data[k]:d}.npy", mod)
 
             #save the total model
             np.save(f"{file_path}/tractor_main_segment_model.npy", total_model)

@@ -3,83 +3,27 @@ Script contains functions to construct the SHRED_MASKBITS for the photometry out
 '''
 
 import numpy as np
+from desi_lowz_funcs import save_table, get_useful_cat_colms, _n_or_more_gt, _n_or_more_lt, get_remove_flag
+from easyquery import Query, QueryMaker
 
-
-def create_shred_maskbits(cat):
-    '''
-    Adds a 'shred_maskbits' column to the table `cat`, where each bit corresponds to a flag.
-    
-    Here are the different MASKBITS/flags we are going to construct
-
-    0: Curve of growth fit failed (One of the COG params are nans)
-    1: Poor fit( large residuals) in any one of the COGs
-    2: Nearest normalized distance to a star < 0.75
-    3: If r35 is brighter than rCOG by 0.25 mags
-    4: Is there a continuous decrease in cog mag for 4 or more with a drop in 0.25 mags
-    5: More than 25% of the R_4.25 aperture lies outisde the image
-    6: More than 25% of the R_4.25 aperture is masked by bad pixels 
-    7: More than 50% of image cutout is masked by bad pixels
-    8: Extreme colors
-    9: source does not lie on any segmentation island
-    '''
-
-    n = len(cat)
-    maskbits = np.zeros(n, dtype=np.int32)
-
-    # Each flag number maps to its bit value (power of 2)
-    bit_value = {
-        0: 1,        # 2^0
-        1: 2,        # 2^1
-        2: 4,        # 2^2
-        3: 8,        # 2^3
-        4: 16,       # 2^4
-        5: 32,       # 2^5
-        6: 64,       # 2^6
-        7: 128,      # 2^7
-        8: 256,      # 2^8
-        9: 512,      # 2^9
-        
-    }
-
-    # Boolean arrays from your flag functions
-    conditions = [
-        cog_nan_mask(cat),
-        cog_mag_converge(cat),
-        bad_cog_resid(cat),
-        cog_curve_decrease(cat),
-        cog_fracin_image(cat),
-        image_mask_frac(cat),
-        bad_colors(cat),
-        source_not_on_segment_mask(cat),
-        very_near_bstar(cat),
-        aper_cen_masked(cat)
-    ]
-
-        # large_frac_cog_aper_out(cat),
-        # large_frac_aper_mask(cat),
-        # large_frac_image_mask(cat),
-        # bad_gr_colors(cat),
-        # source_not_on_segment_mask(cat),
-
-    # Add powers of 2 for each flag that is True
-    for flag_num, cond in enumerate(conditions):
-        maskbits[cond] += bit_value[flag_num]
-
-    cat["PHOTO_MASKBIT"] = maskbits
-    return cat
+#####
+#####
+# THE BITMASK BOOL FUNCTIONS
+#####
+#####
 
 
 
-##here we finalize some of the cog_maskbits
 
-def cog_nan_mask(cat,verbose=False):
+def cog_nan_mask(cat,verbose=True):
     '''
     Function that contructs mask for objects where the fiducial COG mags are nan. MASKBIT = 0
     '''
-    nan_mask = np.isnan(cat["COG_MAG_G_FINAL"].data) | np.isnan(cat["COG_MAG_G_FINAL"].data) | np.isnan(cat["COG_MAG_G_FINAL"].data)
+    nan_mask = np.isnan(cat["COG_MAG_G_FINAL"].data) | np.isnan(cat["COG_MAG_R_FINAL"].data) | np.isnan(cat["COG_MAG_Z_FINAL"].data)
 
     if verbose:
-        print( np.sum(nan_mask.data)/len(nan_mask) )
+        frac = np.sum(nan_mask.data)/len(nan_mask)
+        print(f"MASKBIT=2^0, cog nan mask, {frac:.4f}",  )
     
     return nan_mask
 
@@ -124,12 +68,12 @@ def cog_mag_converge(catalog, mag_cut=0.5, verbose=True):
 
     if verbose:
         frac = bad_mask.sum() / len(bad_mask)
-        print(f"MASKBIT=1 fraction: {frac:4f}")
+        print(f"MASKBIT=2^1, cog not converge, fraction: {frac:4f}")
         
     return bad_mask
 
 
-def bad_cog_resid(cat,chi2_cut = 0.5, verbose=False):
+def bad_cog_resid(cat,chi2_cut = 0.5, verbose=True):
     '''
     Function where the empirical fit to the COG curve is not good. MASKBIT = 2
 
@@ -143,11 +87,12 @@ def bad_cog_resid(cat,chi2_cut = 0.5, verbose=False):
     chi2_mask = max_chi2 > chi2_cut
    
     if verbose:        
-        print(f"MASKBIT=2 fraction : {np.sum(chi2_mask)/len(chi2_mask):.4f}")
+        print(f"MASKBIT=2^2, bad resid, fraction : {np.sum(chi2_mask)/len(chi2_mask):.4f}")
     
     return chi2_mask
 
-def cog_curve_decrease(cat, mag_lim=0.2, len_lim=4, verbose=False):
+
+def cog_curve_decrease(cat, mag_lim=0.2, len_lim=4, verbose=True):
     """
     Identify objects whose curve-of-growth decreases significantly.
     Flags cases where decrease in magnitude exceeds `mag_lim`
@@ -179,26 +124,29 @@ def cog_curve_decrease(cat, mag_lim=0.2, len_lim=4, verbose=False):
     # combine across bands
     tot_bad_mask = np.any(np.column_stack(list(band_bad_masks.values())), axis=1)
 
-    print(f"MASKBIT=3 fraction: {tot_bad_mask.sum() / len(tot_bad_mask):.4f}")
+    if verbose:
+        print(f"MASKBIT=2^3, cog curve decrease, fraction: {tot_bad_mask.sum() / len(tot_bad_mask):.4f}")
 
     return tot_bad_mask
 
 
-
-def cog_fracin_image(catalog,frac_cut = 2/3):
+def cog_fracin_image(catalog,frac_cut = 0.75,verbose=True):
     '''
     This identifies sources where the final parent aperture extends significantly beyond the image cutout! MASKBIT = 4
     '''
-    fracin_image = catalog["APER_R4_FRAC_IN_IMG_FINAL"].data
+    fracin_image = catalog["APERFRAC_R4_IN_IMG_FINAL"].data
     bad_mask = fracin_image < frac_cut
 
     bad_frac = np.sum(bad_mask)/len(bad_mask)
-    print(f"MASKBIT=4 fraction: {bad_frac:4f}")
+
+    if verbose:
+        print(f"MASKBIT=2^4, aperfrac-in image, fraction: {bad_frac:4f}")
 
     return bad_mask
 
 
-def cog_frac_mask_image(catalog,frac_cut = 1/3):
+
+def cog_frac_mask_image(catalog,frac_cut = 1/3,verbose=True):
     '''
     This identifies sources where the final parent aperture has significant fraction of pixels masked! MASKBIT = 5
     '''
@@ -206,12 +154,14 @@ def cog_frac_mask_image(catalog,frac_cut = 1/3):
     bad_mask = fracin_image > frac_cut
 
     bad_frac = np.sum(bad_mask)/len(bad_mask)
-    print(f"MASKBIT=5 fraction: {bad_frac:4f}")
+    
+    if verbose:
+        print(f"MASKBIT=2^5, aperfrac-mask image, fraction: {bad_frac:4f}")
 
     return bad_mask
 
 
-def image_mask_frac(catalog, frac_cut = 1/3):
+def image_mask_frac(catalog, frac_cut = 1/3,verbose=True):
     '''
     Fraction of pixels masked in image cutout. MASKBIT = 6
     '''
@@ -220,53 +170,77 @@ def image_mask_frac(catalog, frac_cut = 1/3):
     bad_mask = (img_frac_mask > frac_cut)
     
     bad_frac = np.sum(bad_mask)/len(bad_mask)
-    print(f"MASKBIT=6 fraction: {bad_frac:4f}")
+    if verbose:
+        print(f"MASKBIT=2^6, image-frac mask, fraction: {bad_frac:4f}")
 
     return bad_mask
 
 
-def bad_colors(catalog, col_cut = 2):
+def bad_colors(catalog, col_cut = 2,verbose=True, what_mag = "_BEST"):
     '''
     With the best photometry (e.g., tractor, simple) we get extreme colors
     '''
-    gr_colors = np.abs(catalog["MAG_G_BEST"].data - catalog["MAG_R_BEST"].data)
-    rz_colors = np.abs(catalog["MAG_R_BEST"].data - catalog["MAG_Z_BEST"].data)
+    gr_colors = np.abs(catalog[f"MAG_G{what_mag}"].data - catalog[f"MAG_R{what_mag}"].data)
+    rz_colors = np.abs(catalog[f"MAG_R{what_mag}"].data - catalog[f"MAG_Z{what_mag}"].data)
     bad_mask = (gr_colors > 2) | (rz_colors > 2)
 
     bad_frac = np.sum(bad_mask)/len(bad_mask)
-    print(f"MASKBIT=7 fraction: {bad_frac:4f}")
+
+    if verbose:
+        print(f"MASKBIT=2^7, bad colors, fraction: {bad_frac:4f}")
     
     return bad_mask
 
 
-def source_not_on_segment_mask(cat, verbose=False):
-    '''
-    Was the DESI source on the original segmented blob? If not, it is still could be a real source, but we flag it as suspicious
-    '''
+def source_not_on_segment_mask(cat, verbose=True):
+    """
+    Check if a DESI source lies on the original segmented blob.
 
-    on_seg = cat["APER_SOURCE_ON_ORG_BLOB"].data
+    Parameters
+    ----------
+    cat : Table or dict-like
+        Catalog containing the column 'APER_SOURCE_ON_ORG_BLOB'.
+    verbose : bool, optional
+        Whether to print diagnostic information (default: True).
+
+    Returns
+    -------
+    not_on_seg : np.ndarray (bool)
+        Boolean mask where True indicates sources *not* on the original blob.
+    """
+    on_seg = np.asarray(cat["APER_SOURCE_ON_ORG_BLOB"].data, dtype=bool)
     not_on_seg = ~on_seg
-    
+
     if verbose:
-        print(f"MASKBIT=8 fraction: {np.sum(not_on_seg.data) / len(not_on_seg):4f}")
-        
+        frac = np.mean(not_on_seg)
+        print(f"MASKBIT=2^8, source not on segment, fraction: {frac:.4f}")
+
     return not_on_seg
 
 
-def very_near_bstar(catalog, radius_cut = 0.5):
+def very_near_bstar(catalog, radius_cut = 1,verbose=True):
     '''
     Sources that are very close to a bright star. Like within 0.5 times the star masking radius
     We use both the kinds of normalizd distance we do
     '''
 
-    bad_mask = (catalog["STARFDIST"].data < radius_cut) | (catalog["NEAREST_STAR_NORM_DIST"].data < radius_cut)
+    near_star = (catalog["STARFDIST"].data < radius_cut) #| (catalog["NEAREST_STAR_NORM_DIST"].data < radius_cut)
 
+    #we do not want to just remove all sources that are close to stars, only sources that are likely shreds and quite close to stars as
+    #their tractor models get iffy. so the below criterion is aimed at finding shredded sources close to stars
+    # likely_not_just_blend = (catalog["NUM_TRACTOR_SOURCES_FINAL"] > 1) | (catalog["PCNN_FRAGMENT"] > 0.5)
+
+    bad_mask = near_star #& likely_not_just_blend
+    
     bad_frac = np.sum(bad_mask)/len(bad_mask)
-    print(f"MASKBIT=9 fraction: {bad_frac:4f}")
+
+    if verbose:
+        print(f"MASKBIT=2^9, within star mask radius and not just a simple blend, fraction: {bad_frac:4f}")
 
     return bad_mask
 
-def aper_cen_masked(cat):
+
+def aper_cen_masked(cat,verbose=True):
     '''
     Sources where the aperture center is on a masked pixel is masked!! 
     What will happen to do this when the we do the light-weighted mask and no geometrical mask?
@@ -275,22 +249,156 @@ def aper_cen_masked(cat):
     bad_mask = cat["APER_CEN_MASKED_FINAL"].data
 
     bad_frac = np.sum(bad_mask)/len(bad_mask)
-    print(f"MASKBIT=10 fraction: {bad_frac:4f}")
+    if verbose:
+        print(f"MASKBIT=2^10, aper-cen masked, fraction: {bad_frac:4f}")
+    
+    return bad_mask
+
+
+def iffy_tractor_model(cat, rchi_cut = 10, verbose=True):
+    '''
+    If the SNR on photometry is < 5 in all bands, or rchisq bad or something ... 
+    '''
+
+    bad_mask = (cat["RCHISQ_G"] > rchi_cut) | (cat["RCHISQ_R"] > rchi_cut) | (cat["RCHISQ_Z"] > rchi_cut)
+
+    if verbose:
+        bad_frac = np.sum(bad_mask)/len(bad_mask) 
+        print(f"MASKBIT=2^11, bad rchisq, fraction: {bad_frac:4f}")
 
     return bad_mask
 
 
-def cog_mag_smaller_tractor(cat, mag_cut = 0.5):
-    '''
-    What happens if the cog mag is much smaller than the tractor based mag? This could happen if significant parts of the galaxy are masked etc.
-    Or aperture is too small. 
-    So if the cog curves are not decreasing in any band, but tractor based mag is still much brigther, we will use the tractor based mag.
+def near_sga_outskirts(cat, norm_dist=2, verbose=True):
+    """
+    Flag sources that are near the outskirts of an SGA galaxy (1 < norm_dist < 2)
+    but are NOT MASKBITS bit 12, that is, known association with SGA
+    """
+    # 1. Identify sources in the outskirts. The lower bound is to remove the small number of sources that are on SGA galaxy, but just for some reason MASKBIT not flagged
+    in_outskirts = (cat["SGA_D26_NORM_DIST"] > 1) & (cat["SGA_D26_NORM_DIST"] < norm_dist)
 
-    There are potential issues here for instance if the tractor model is not accurate or something, but need to VI a bit to see what are these cases ...
-    '''
+    # 2. Exclude sources that have bit 12 set in MASKBITS
+    # bit 12 corresponds to value 2**12 = 4096
+    maskbit_12_flagged = (cat["MASKBITS"] & (1 << 12)) != 0
+
+    # 3. Combine conditions
+    bad_mask = in_outskirts & (~maskbit_12_flagged)
+
+    if verbose:
+        bad_frac = np.sum(bad_mask)/len(bad_mask) 
+        print(f"MASKBIT=2^12, near sga outskirts, fraction: {bad_frac:4f}")
+
+    return bad_mask
+
+def low_SNR(cat, sigma_cut=5, nbands=2, verbose=True):
+    """
+    Flag sources that have low SNR. Require 5 sigma detection in at least two bands! Some of these low snr events tend to be faint emission in outskirts of massive galaxies
+    """
+    sigma_grz = [f"SIGMA_GOOD_{b}" for b in "GRZ"]
+    sigma_queries = [Query(_n_or_more_gt(sigma_grz, nbands, sigma_cut)) ]
+    # note that the this is n_or_more_LT!! so be careful about that!
+    #these are masks for objects that did not satisfy the above condition!
+    bad_snr_mask = get_remove_flag(cat, sigma_queries) == 0
+
+    if verbose:
+        bad_frac = np.sum(bad_snr_mask)/len(bad_snr_mask) 
+        print(f"MASKBIT=2^13, low snr, fraction: {bad_frac:4f}")
+
+    return bad_snr_mask
+
+
+### 
+#GENERAL MASKBIT FUNCTIONS
+###
+
+
+bitmask_dict = {
+    0: {"value": 1 << 0, "description": "cog nan", "func": cog_nan_mask },
+    1: {"value": 1 << 1, "description": "cog not converge", "func": cog_mag_converge },
+    2: {"value": 1 << 2, "description": "cog bad residual", "func":bad_cog_resid },
+    3: {"value": 1 << 3, "description": "cog curve decrease", "func": cog_curve_decrease },
+    4: {"value": 1 << 4, "description": "cog aperfrac in image", "func": cog_fracin_image},
+    5: {"value": 1 << 5, "description": "cog aperfrac mask", "func": cog_frac_mask_image},
+    6: {"value": 1 << 6, "description": "image frac mask", "func": image_mask_frac } ,
+    7: {"value": 1 << 7, "description": "bad gr/rz color", "func": bad_colors },
+    8: {"value": 1 << 8, "description": "source not on segment", "func": source_not_on_segment_mask },
+    9: {"value": 1 << 9, "description": "shredded and near bstar", "func": very_near_bstar },
+    10: {"value": 1 << 10, "description": "cop aper center masked", "func": aper_cen_masked },
+    11: {"value": 1 << 11, "description": "org tractor, bad rchisq", "func": iffy_tractor_model},
+    12: {"value": 1 << 12, "description": "near SGA outskirts", "func": near_sga_outskirts},
+    13: {"value": 1 << 13, "description": "low sigma detection", "func": low_SNR}
+}
+
+def create_shred_maskbits_from_dict(cat, bitmasks_to_apply = [0,1,2,3,4,5,6,7,8,9,10,12], verbose=False, mag_type = "_BEST"):
+    """
+    Create maskbit values using bitmask_dict entries that include 'func'.
+    """
+    import numpy as np
+
+    n = len(cat)
+    maskbits = np.zeros(n, dtype=np.int32)
+
+
+    for bit_num in bitmasks_to_apply:
+        info = bitmask_dict[bit_num]
+        func = info.get("func", None)
+        if func is None:
+            print(f"Skipping bit {bit_num}: no function assigned ({info['description']})")
+            continue
+
+        # Call the function to get a boolean mask
+        if bit_num == 7:
+            cond = func(cat, what_mag = mag_type, verbose=verbose)
+        else:
+            cond = func(cat, verbose=verbose)
+            
+        if not isinstance(cond, (np.ndarray, list)):
+            raise ValueError(f"Function for bit {bit_num} did not return a boolean array!")
+
+        maskbits[cond] |= info["value"]  # bitwise OR to set bits
+
+    return maskbits
+
+
+
+def print_maskbit_statistics(maskbit_col, bitmasks_to_use = [0,1,2,3,4,5,6,7,8,9,10,11,12,13]):
+    """
+    Print statistics on what fraction of sources have each maskbit (0..n_bits-1) set.
+
+    Parameters
+    ----------
+    maskbit_col : array-like (e.g., np.ndarray or astropy column)
+        Integer maskbit values for all sources.
+    n_bits : int, optional
+        Number of bits to check (default = 11 → bits 0 through 10).
+
+    Returns
+    -------
+    None
+        Prints formatted summary of fraction and count for each bit.
+    """
+
+
+    maskbit_col = np.asarray(maskbit_col, dtype=np.int64)
+    n_total = len(maskbit_col)
+
+    print(f"\n--- Maskbit Statistics (n = {n_total}) ---")
+
+    print(f"Fraction with no maskbit on = { np.sum(maskbit_col == 0)/len(maskbit_col) }")
+
+    for bit in bitmasks_to_use:
+        bit_value = 1 << bit
+        bit_on = (maskbit_col & bit_value) != 0
+        n_on = np.count_nonzero(bit_on)
+        frac_on = n_on / n_total if n_total > 0 else 0
+
+        print(f"Bit {bit:2d} (2^{bit:<2d} = {bit_value:4d})  ->  {frac_on:.2%} fraction")
+
+    return
+
 
     
-# #mask sources where the nearest smooth blob final is not on the DESI fiber?: 39627462455334432
+# # #mask sources where the nearest smooth blob final is not on the DESI fiber?: 39627462455334432
 
 
 

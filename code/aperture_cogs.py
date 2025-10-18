@@ -54,7 +54,8 @@ def make_empty_tractor_cog_dict():
         "tractor_aper_radec_cen": [np.nan, np.nan], 
         "tractor_aper_params": [np.nan] * 3,
         "tractor_aper_cen_masked_bool": False,
-        "tractor_aperfrac_in_image": np.nan
+        "tractor_aperfrac_in_image": np.nan,
+        "tractor_rad_mus": [np.nan] * 4
     }
 
 def mean_surface_brightness(mag, ellip_area):
@@ -163,6 +164,82 @@ def cog_function(r,mtot, m0, alpha_1, r_0, alpha_2):
 
     return mtot + m0 * np.log(1 + alpha_1 * ( (r/r_0)**(-alpha_2) ) )
 
+
+## some functions to compute the surface brightness!!
+def surface_brightness_mu(r_scales, aper_rad_pix, cog_params , ba_ratio):
+    
+    mtot, m0, alpha_1, r_0, alpha_2 = cog_params
+
+    #the cog function needs r in the scale factors. Not in absolute pixels or arcseconds yet
+    m_r = cog_function(r_scales, mtot, m0, alpha_1, r_0, alpha_2)
+    
+    r_arcsec = r_scales * aper_rad_pix * 0.262
+
+    #according to the SGA2020 paper, this is computed by just using the semi-major axis
+    area = np.pi * (r_arcsec**2) * ba_ratio  # elliptical area correction    
+    return r_arcsec, m_r + 2.5 * np.log10(area), m_r
+
+
+def half_light_radius_cog(cog_params):
+    mtot, m0, alpha_1, r_0, alpha_2 = cog_params
+    
+    return r_0 * ( (1/alpha_1) * (np.exp( -np.log10(0.5) / (0.4*m0)  ) - 1) )**(-1/alpha_2)
+
+    
+def radius_at_mu(tgid, file_path, mu_target, cog_params, ba_ratio=None, aper_rad_pix=None, plot_name=None):
+    """
+    Compute the radius (in arcsec) where surface brightness μ = mu_target,
+    and return a compact list of those radii plus the half-light radius.
+
+    Returns
+    -------
+    list
+        [r(mu_1), r(mu_2), ..., r(mu_n), r_half] in arcsec
+        NaN where not bracketed.
+    """
+
+    # Compute the half-light radius in arcsec
+    r12_arcsec = half_light_radius_cog(cog_params) * aper_rad_pix * 0.262
+    if not np.isfinite(r12_arcsec) or r12_arcsec <= 0:
+        print(f"[WARN] Nonpositive half-light radius for TGID={tgid}: r12={r12_arcsec}")
+        r12_arcsec = np.nan
+
+    # Ensure inputs are safe
+    mu_target = np.atleast_1d(mu_target).astype(float)
+    if not (0 < ba_ratio <= 1) or aper_rad_pix is None or aper_rad_pix <= 0:
+        print(f"[WARN] Invalid input for TGID={tgid}")
+        return [np.nan] * len(mu_target) + [r12_arcsec]
+
+    # Radial grid (empirically chosen range)
+    r_grid = np.linspace(0.5, 15, 100)
+
+    # Compute μ(r)
+    r_arcsec, mu_grid, m_r = surface_brightness_mu(r_grid, aper_rad_pix, cog_params, ba_ratio)
+
+    # Check bracketing
+    mu_min, mu_max = mu_grid.min(), mu_grid.max()
+    r_mu = np.full_like(mu_target, np.nan, dtype=float)
+    mask_valid = (mu_target >= mu_min) & (mu_target <= mu_max)
+    if np.any(mask_valid):
+        r_mu[mask_valid] = np.interp(mu_target[mask_valid], mu_grid, r_arcsec)
+    else:
+        print(f"[WARN] mu_target range not bracketed for TGID={tgid}, ({mu_min:.2f}, {mu_max:.2f})")
+
+    # Plot for diagnostics
+    plt.figure(figsize=(4, 4))
+    plt.plot(r_arcsec, mu_grid, color="k", lw=2)
+    for mu in mu_target:
+        plt.hlines(y=mu, xmin=r_arcsec.min(), xmax=r_arcsec.max(), color="r", ls="dotted", lw=1)
+    plt.vlines(x=r12_arcsec, ymin=mu_grid.min(), ymax=mu_grid.max(), color="forestgreen", ls="--", lw=1)
+    plt.xlim([r_arcsec.min(), r_arcsec.max()])
+    plt.ylim([20, 28])
+    plt.savefig(f"{file_path}/mu_radii_curve_{plot_name}.png", bbox_inches="tight")
+    plt.close()
+
+    r_mu = np.where((r_mu > 0) & np.isfinite(r_mu), r_mu, np.nan)
+  
+    # Compact output list
+    return list(r_mu) + [r12_arcsec]
 
 
 def fit_cog(r_data, m_data, p0, bounds=None, maxfev=1200, filler=np.nan):
@@ -369,6 +446,7 @@ def get_new_segment_tractor(r_band_trac_model, fiber_xpix, fiber_ypix, r_noise_r
                 
             #get the area of this aperture in arcsec^2 so convert the pixel sizes to arcsec! Area = pi*a*b
             #This aperture has not been scaled yet by the factor of two so we will do that!
+            #the factor of 2 is because we want the MU_R within the R2 aperture
             aper_temp_area = np.pi * (2 * aper_param_temp[0]*0.262) * (2 * aper_param_temp[0]*aper_param_temp[1]*0.262)
 
             aper_area_f = np.minimum(aper_temp_area,  aper_in_image_area_arcsec)
@@ -517,6 +595,7 @@ def base_cog_measure(radii_scale, parent_galaxy_mask, reconstruct_galaxy_dict, a
             cog_mags[bi].append(new_mag_i)
 
 
+
     ##this is also a good location to compute fiber mags! We know the aperture center
     fiber_mags = measure_simple_fiberflux(aper_xpos, aper_ypos, reconstruct_galaxy_dict, aperture_diam_arcsec = 1.5)
 
@@ -580,7 +659,7 @@ def base_cog_fit(cog_mags, radii_scale):
     return final_cog_params, final_cog_params_err, final_cog_chi2, final_cog_dof, decrease_cog_len, decrease_cog_mag, final_cog_mtot, final_cog_mtot_err
             
 
-def basic_cog_fitting_subfunction(reconstruct_tractor_galaxy_dict, parent_mask, wcs, org_basic_mask, img_type=None, aper_light_image=None):
+def basic_cog_fitting_subfunction(reconstruct_tractor_galaxy_dict, parent_mask, wcs, org_basic_mask, img_type=None, aper_light_image=None, tgid=None,save_path=None):
     '''
     The very simplified way to measure the cog parameters. Used for the tractor based image  
 
@@ -607,6 +686,13 @@ def basic_cog_fitting_subfunction(reconstruct_tractor_galaxy_dict, parent_mask, 
         #fit model to cog    
         final_cog_params, final_cog_params_err, final_cog_chi2, _, _, _, final_cog_mtot, final_cog_mtot_err = base_cog_fit(cog_mags, radii_scale)
 
+        
+        if ~np.isnan(final_cog_params["r"][0]):
+            #now compute the semi-major axis of different surface brightnesses
+            radius_mus = radius_at_mu(tgid, save_path,  np.array([24,25,26]), final_cog_params["r"], ba_ratio=aper_params[1], aper_rad_pix = aper_params[0], plot_name = "tractor")
+        else:
+            radius_mus = 4*[np.nan]
+            
         #update the dictionary parameters
         #these are parameters of the tractor based photometry that would be useful to have in case the fiducial photometry refers to this!
         #note that we do not really need the tractor cog mags here. We already have the tractor total photometry, but this is just for reference
@@ -622,6 +708,7 @@ def basic_cog_fitting_subfunction(reconstruct_tractor_galaxy_dict, parent_mask, 
         tractor_cog_dict["tractor_aper_params"] = aper_params
         tractor_cog_dict["tractor_aper_cen_masked_bool"] = aper_cen_mask_bool
         tractor_cog_dict["tractor_aperfrac_in_image"] =  aperfrac_in_image
+        tractor_cog_dict["tractor_rad_mus"] =  radius_mus
         
         return tractor_cog_dict
     
@@ -629,7 +716,6 @@ def basic_cog_fitting_subfunction(reconstruct_tractor_galaxy_dict, parent_mask, 
         return tractor_cog_dict
 
 
-    
 def get_tractor_only_isolate_mag_helper(tgid, parent_mask, parent_source_cat, save_path, flag = "isolate", wcs=None, org_basic_mask=None, img_type=None):
     '''
     Helper function that in general deals with both of the two isolate or no isolate parent masks.
@@ -699,7 +785,7 @@ def get_tractor_only_isolate_mag_helper(tgid, parent_mask, parent_source_cat, sa
 
         tractor_isolate_aper_light_img = total_model[0] + total_model[1] + total_model[2]
         
-        tractor_cog_dict = basic_cog_fitting_subfunction(reconstruct_tractor_galaxy_dict, parent_mask.astype(int), wcs, org_basic_mask, img_type = img_type, aper_light_image=tractor_isolate_aper_light_img)
+        tractor_cog_dict = basic_cog_fitting_subfunction(reconstruct_tractor_galaxy_dict, parent_mask.astype(int), wcs, org_basic_mask, img_type = img_type, aper_light_image=tractor_isolate_aper_light_img, tgid = tgid , save_path = save_path)
 
         return [tot_g_mag, tot_r_mag, tot_z_mag], parent_source_cat_f, total_model, rgb_data, tractor_cog_dict,  tractor_brightest_source_mags, tractor_isolate_aper_light_img
     
@@ -779,7 +865,12 @@ def cog_fitting_subfunction(same_input_dict,reconstruct_galaxy_dict, parent_gala
     #fit model to cog    
     final_cog_params, final_cog_params_err, final_cog_chi2, final_cog_dof, decrease_cog_len, decrease_cog_mag, final_cog_mtot, final_cog_mtot_err = base_cog_fit(cog_mags, radii_scale)
 
-    ##if the optimal fits were not found, 
+
+    if ~np.isnan(final_cog_params["r"][0]):
+        #now compute the semi-major axis of different surface brightnesses
+        radius_mus = radius_at_mu(tgid, save_path, np.array([24,25,26]), final_cog_params["r"], ba_ratio=aper_params[1], aper_rad_pix = aper_params[0], plot_name = "cog")
+    else:
+        radius_mus = [np.nan] * 4
     
     box_size = np.shape(data_arr)[1] 
     
@@ -948,25 +1039,34 @@ def cog_fitting_subfunction(same_input_dict,reconstruct_galaxy_dict, parent_gala
 
     ax[ax_id].imshow(rgb_reconstruct_full, origin='lower',zorder = 0)
 
-    #draw the aperture
-    draw_a_pix = aper_params[0] * 2
-    draw_b_pix = draw_a_pix  * aper_params[1]
-    draw_theta = aper_params[2]
-    draw_ellip_aper = aperture = EllipticalAperture( (aper_xpos, aper_ypos) , draw_a_pix, draw_b_pix, theta=draw_theta)
-
-    draw_ellip_aper.plot(ax = ax[ax_id], color = "red", lw = 1.25, ls = "-",alpha = 1)
-    ax[ax_id].scatter( aper_xpos, aper_ypos, color = "red",marker = "x",zorder = 1,s=10)
-
-    #plotting the xy limits
-    hw = 1.5 * draw_a_pix  # half-width
-    xlo, xhi = aper_xpos - hw, aper_xpos + hw
-    ylo, yhi = aper_ypos - hw, aper_ypos + hw
-    
-    ax[ax_id].set_xlim([xlo, xhi])
-    ax[ax_id].set_ylim([ylo, yhi])
-
     ax[ax_id].set_xticks([])
     ax[ax_id].set_yticks([])
+
+    if np.isfinite(aper_xpos) and np.isfinite(aper_ypos) and np.isfinite(aper_params[0]) and aper_params[0] > 0:
+        #draw the aperture
+        if np.isnan(radius_mus[-1]):
+            draw_a_pix = aper_params[0] * 2.5
+        else:
+            #this is in arcsecs, so we need to convert it back to pixels!
+            draw_a_pix = 2.5 * radius_mus[-1] / 0.262
+            
+        draw_b_pix = draw_a_pix  * aper_params[1]
+        draw_theta = aper_params[2]
+        draw_ellip_aper = aperture = EllipticalAperture( (aper_xpos, aper_ypos) , draw_a_pix, draw_b_pix, theta=draw_theta)
+    
+        draw_ellip_aper.plot(ax = ax[ax_id], color = "red", lw = 1.25, ls = "-",alpha = 1)
+        ax[ax_id].scatter( aper_xpos, aper_ypos, color = "red",marker = "x",zorder = 1,s=10)
+    
+        #plotting the xy limits
+        hw = 1.5 * draw_a_pix  # half-width
+        xlo, xhi = aper_xpos - hw, aper_xpos + hw
+        ylo, yhi = aper_ypos - hw, aper_ypos + hw
+
+        if np.all(np.isfinite([xlo, xhi, ylo, yhi])):
+            ax[ax_id].set_xlim([xlo, xhi])
+            ax[ax_id].set_ylim([ylo, yhi])
+        else:
+            print(f"Skipping axis limits for TGID {tgid}: invalid values")
 
     ##show the final summary figure
     ax_id = 4
@@ -1048,7 +1148,8 @@ def cog_fitting_subfunction(same_input_dict,reconstruct_galaxy_dict, parent_gala
         "aper_xy_pix_cen" :  [aper_xpos, aper_ypos], 
         "aper_params" : aper_params, 
         "mask_frac_r4": mask_frac_r4,
-        "aper_cen_masked_bool": aper_cen_mask_bool}
+        "aper_cen_masked_bool": aper_cen_mask_bool,
+        "aper_rad_mus": radius_mus}
     
     return return_dict
 
@@ -1075,7 +1176,8 @@ EMPTY_COG_DICT = {
         "aper_xy_pix_cen" :  [np.nan, np.nan], 
         "aper_params" : [np.nan] * 3 ,
         "mask_frac_r4": 1,
-        "aper_cen_masked_bool": False}
+        "aper_cen_masked_bool": False,
+        "aper_rad_mus": [np.nan] * 4 }
 
 
 def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_dr9_mags,save_path, subtract_source_pos, pcnn_val, npixels_min, threshold_rms_scale, wcs, source_zred=None, source_radec=None):
@@ -1318,7 +1420,7 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_d
         tractor_no_isolate_model_dict = {"g": grz_band_trac_model[0], "r": grz_band_trac_model[1], "z": grz_band_trac_model[2] }
         tractor_no_isolate_aper_light_img = grz_band_trac_model[0] + grz_band_trac_model[1] + grz_band_trac_model[2]
         
-        tractor_cog_dict_no_isolate = basic_cog_fitting_subfunction(tractor_no_isolate_model_dict, parent_galaxy_no_isolate_mask, wcs, org_basic_mask, aper_light_image = tractor_no_isolate_aper_light_img, img_type= img_type)
+        tractor_cog_dict_no_isolate = basic_cog_fitting_subfunction(tractor_no_isolate_model_dict, parent_galaxy_no_isolate_mask, wcs, org_basic_mask, aper_light_image = tractor_no_isolate_aper_light_img, img_type= img_type, tgid = tgid, save_path = save_path)
         ##^^these are the elliptical aperture parameters and the cog parameters on the tractor only model! 
 
         ##save the tractor only mags!!
@@ -1329,7 +1431,7 @@ def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_d
         if parent_isolate_cat is not None:
             num_trac_sources_isolate = len(parent_isolate_cat)
         else:
-            num_trac_sources_isolate = 0
+            num_trac_sources_isolate = np.nan
 
         if trac_only_w_isolate_rgb is None:
             trac_only_w_isolate_rgb = np.ones_like(rgb_img)

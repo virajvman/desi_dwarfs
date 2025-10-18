@@ -1125,7 +1125,7 @@ if __name__ == '__main__':
             zred_cut = zred_cuts[gal_type]
             save_filename = save_filenames[gal_type]
 
-            TODO: SOMETHING WEIRD HAPPENIG WITH FIBERMAGS IN LOWZ CATALOG, THEY ARE ALL ZERO ... 
+            # TODO: SOMETHING WEIRD HAPPENIG WITH FIBERMAGS IN LOWZ CATALOG, THEY ARE ALL ZERO ... 
             
             if gal_type == "LOWZ":
                 #read in the lowz redshift and tractor phot catalogs
