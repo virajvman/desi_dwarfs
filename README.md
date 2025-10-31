@@ -1,8 +1,12 @@
 
 
-## DESI DR1 Extragalactic Dwarf Galaxy Catalog Code Base
+## DESI DR1 Extragalactic Dwarf Galaxy Catalog
 
 IN PROGRESS!
+
+### 🔗 [Interactive Catalog Viewer](https://virajvman.github.io/desidwarfs_webapp/interactive.html)
+Explore the DESI Dwarf Galaxy catalog interactively in your browser.
+
 
 Contact: Viraj Manwadkar (virajvm@stanford.edu)
 
@@ -237,26 +241,31 @@ Contact: Viraj Manwadkar (virajvm@stanford.edu)
 
 
 
-### DWARF_MASKBIT Descriptions
+<details>
+<summary><strong>DWARF_MASKBIT Descriptions</strong></summary>
+
+<br>
+
 <a name="dwarf_maskbit-descriptions"></a>
 
 Each bit in the `DWARF_MASKBIT` column corresponds to a specific quality or cleaning flag applied to dwarf galaxy candidates.  
 A value of `1 << n` indicates that the bit at position `n` is set.
 
-| Bit | Value | Description | Function |
+| Bit | Value | Description |
 |:--:|:--:|:--|:--|
-| 0 | 1 | `cog nan` – Curve of growth computation failed (NaN values) | `cog_nan_mask` |
-| 1 | 2 | `cog not converge` – Curve of growth fit did not converge | `cog_mag_converge` |
-| 2 | 4 | `cog bad residual` – Poor residuals in curve of growth fit | `bad_cog_resid` |
-| 3 | 8 | `cog curve decrease` – Curve of growth decreases with radius | `cog_curve_decrease` |
-| 4 | 16 | `cog aperfrac in image` – Aperture fraction outside image bounds | `cog_fracin_image` |
-| 5 | 32 | `cog aperfrac mask` – Significant masked pixels within aperture | `cog_frac_mask_image` |
-| 6 | 64 | `image frac mask` – Image has large masked fraction | `image_mask_frac` |
-| 7 | 128 | `bad gr/rz color` – Source has inconsistent colors | `bad_colors` |
-| 8 | 256 | `source not on segment` – Source not contained in segmentation map | `source_not_on_segment_mask` |
-| 9 | 512 | `shredded and near bstar` – Likely shredded, near bright star | `very_near_bstar` |
-| 10 | 1024 | `cop aper center masked` – Aperture center lies in masked region | `aper_cen_masked` |
-| 11 | 2048 | `org tractor, bad rchisq` – Original Tractor model has poor χ² | `iffy_tractor_model` |
-| 12 | 4096 | `near SGA outskirts` – Source lies near outskirts of SGA-2020 region | `near_sga_outskirts` |
-| 13 | 8192 | `low sigma detection` – Low signal-to-noise detection | `low_SNR` |
+| 0 | 1 | Curve of growth computation failed (NaN values) | 
+| 1 | 2 | Curve of growth likely not converged (APER R4 - COG > 0.5 mag) |
+| 2 | 4 | Large residuals in curve of growth fit | 
+| 3 | 8 | Curve of growth decreases with increasing aperture | 
+| 4 | 16 | Large fraction of R4 aperture outside image bounds (>0.25) |
+| 5 | 32 | Large fraction of pixels masked within R4 aperture (>0.33) | 
+| 6 | 64 | Large fraction of pixels in image cutout masked (>0.33)  | 
+| 7 | 128 | Bad $g-r$ or $r-z$ colors (|color| > 2) | 
+| 8 | 256 | Source does not lie on segmented map | 
+| 9 | 512 | Source is likely shredded ($p_{\rm CNN} > 0.25$) and near bright star | 
+| 10 | 1024 | Aperture center lies in masked region | 
+| 11 | 2048 | Large reduced  $\chi^2 > 10$ (at least one band) if using original Tractor photometry | 
+| 12 | 4096 | Source within twice of SGA-2020 galaxy at same redshift, but not flagged as SGA-2020 source in Tractor  | 
+| 13 | 8192 | Low signal-to-noise detection (SNR > 5 in only one band or less) | 
 
+</details>
