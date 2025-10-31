@@ -4,8 +4,7 @@
 
 IN PROGRESS!
 
-### 🔗 [Interactive Catalog Viewer](https://virajvman.github.io/desidwarfs_webapp/interactive.html)
-Explore the DESI Dwarf Galaxy catalog interactively in your browser.
+[![View Interactive Catalog](https://img.shields.io/badge/View_Interactive_Catalog-Click_Here-blue?style=for-the-badge)](https://virajvman.github.io/desidwarfs_webapp/interactive.html)
 
 
 Contact: Viraj Manwadkar (virajvm@stanford.edu)
