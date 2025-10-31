@@ -34,7 +34,6 @@ from PIL import Image
 from pathlib import Path
 import random, string
 from datetime import datetime
-from shred_photometry_maskbits import create_shred_maskbits
 import glob
 from shred_classifier import get_pcnn_data_inputs
 from aperture_cogs import make_empty_tractor_cog_dict

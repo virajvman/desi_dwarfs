@@ -9,7 +9,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=192GB
-#SBATCH --time=05:00:00
+#SBATCH --time=02:00:00
 #SBATCH --job-name=sga_run
 #SBATCH --output=aperture_shred_sga.log
 
@@ -28,7 +28,7 @@ export NUMEXPR_NUM_THREADS=1
 # ------------------------------
 SAMPLE="SGA"
 MAKE_CATS=false      # set true/false
-RUN_APER=true
+RUN_APER=false
 RUN_COG=true
 
 # Command-line args
@@ -51,8 +51,8 @@ shifterimg pull docker:legacysurvey/legacypipe:DR10.3.4
 # srun --cpu-bind=cores shifter --image docker:legacysurvey/legacypipe:DR10.3.4 \
 #     python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -img_source -use_sample sga
 
-srun --cpu-bind=cores shifter --image docker:legacysurvey/legacypipe:DR10.3.4 \
-    python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -parent_galaxy -bkg_source -blend_remove_source -use_sample sga
+# srun --cpu-bind=cores shifter --image docker:legacysurvey/legacypipe:DR10.3.4 \
+#     python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -parent_galaxy -bkg_source -blend_remove_source -use_sample sga
 
 if [ "$RUN_COG" = true ]; then
     srun --cpu-bind=cores python3 desi_dwarfs/code/dwarf_photo_pipeline.py $BASE_ARGS -run_cog

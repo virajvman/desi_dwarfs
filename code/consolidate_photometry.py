@@ -25,8 +25,6 @@ def combine_arrays(no_iso, w_iso, mask):
         expanded_mask = np.expand_dims(mask, axis=tuple(range(1, no_iso.ndim)))
         return np.where(expanded_mask, no_iso, w_iso)
 
-
-
 def make_catalog_unmasked(cat):
     """
     Return a new Table where all MaskedColumns are replaced by regular ndarray columns.
@@ -182,11 +180,11 @@ def consolidate_new_photo(catalog,plot=False,sample=None):
     catalog = make_catalog_unmasked(catalog)
 
     # this was due to a bug I had in my code
-    if "APERFRAC_R4_IN_IMG_ISOLATE" in catalog.colnames:
-        pass
-    else:
-        print("NEED TO REMOVE THIS IN THE NEXT RUN ITERATION!")
-        catalog["APERFRAC_R4_IN_IMG_ISOLATE"] = np.array(catalog["APERFRAC_R4_IN_IMG_NO_ISOLATE"]).copy()
+    # if "APERFRAC_R4_IN_IMG_ISOLATE" in catalog.colnames:
+    #     pass
+    # else:
+    #     print("NEED TO REMOVE THIS IN THE NEXT RUN ITERATION!")
+    #     catalog["APERFRAC_R4_IN_IMG_ISOLATE"] = np.array(catalog["APERFRAC_R4_IN_IMG_NO_ISOLATE"]).copy()
 
     #these are the columns we want to make that consolidate based on whether to use the isolate or no isolate mask
     org_keys_to_combine = ["COG_MAG_G", "COG_MAG_R", "COG_MAG_Z", "TRACTOR_ONLY_MAG_G", "TRACTOR_ONLY_MAG_R", "TRACTOR_ONLY_MAG_Z", 
@@ -331,6 +329,9 @@ def consolidate_positions_and_shapes(catalog):
     ra_trac_cen, dec_trac_cen = catalog["TRACTOR_ONLY_APER_CEN_RADEC_FINAL"].data[:, 0], catalog["TRACTOR_ONLY_APER_CEN_RADEC_FINAL"].data[:, 1]
     ra_org, dec_org = catalog["RA"].data, catalog["DEC"].data
 
+    #NOTE: in the updated photometry, the semi-major axis is based on the g+r+z image.
+    #this might be different from the tractor based shape_r which might be based on r band?
+
     # Get shape parameters
     aper_params = catalog["APER_PARAMS_FINAL"].data                   # shape (N, 3)
     trac_aper_params = catalog["TRACTOR_ONLY_APER_PARAMS_FINAL"].data # shape (N, 3)
@@ -393,6 +394,9 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
     
     #let us duplicate the RA,DEC to RA_TARGET,DEC_TARGET
     #for the shredded sources, the RA,DEC columns will be updated!
+
+    print("TODO: add Z_CMB to main hdu, also add MU_R and sizes.")
+    
     
     catalog["RA_TARGET"] = catalog["RA"].copy()
     catalog["DEC_TARGET"] = catalog["DEC"].copy()
@@ -631,14 +635,19 @@ def get_fastspec_fit_catalog():
     # Path pattern to your FITS files
     files_bright = glob.glob("/global/cfs/cdirs/desi/public/dr1/vac/dr1/fastspecfit/iron/v3.0/catalogs/fastspec-iron*bright*.fits")
     files_dark = glob.glob("/global/cfs/cdirs/desi/public/dr1/vac/dr1/fastspecfit/iron/v3.0/catalogs/fastspec-iron*dark*.fits")
-
-    files = files_bright + files_dark
+    files_backup = glob.glob("/global/cfs/cdirs/desi/public/dr1/vac/dr1/fastspecfit/iron/v3.0/catalogs/fastspec-iron*backup*.fits")
+    files_other = glob.glob("/global/cfs/cdirs/desi/public/dr1/vac/dr1/fastspecfit/iron/v3.0/catalogs/fastspec-iron*other*.fits")
+    
+    files = files_bright + files_dark + files_backup + files_other
 
     print(f"Total number of files to read = {len(files)}")
     
     fastspec_metadata_cols = ["TARGETID","RA","DEC"]
-    fastspec_specphot_cols = ["DN4000", "DN4000_OBS", "DN4000_IVAR", "DN4000_MODEL", "DN4000_MODEL_IVAR"]
+    
+    fastspec_specphot_cols = ["DN4000", "DN4000_OBS", "DN4000_IVAR", "DN4000_MODEL", "DN4000_MODEL_IVAR", "VDISP", "VDISP_IVAR", "FOII_3727_CONT", "FOII_3727_CONT_IVAR", "FHBETA_CONT", "FHBETA_CONT_IVAR", "FOIII_5007_CONT", "FOIII_5007_CONT_IVAR","FHALPHA_CONT", "FHALPHA_CONT_IVAR" ]
+    
     fastspec_cols = ["SNR_B", "SNR_R", "SNR_Z", "APERCORR", "APERCORR_G", "APERCORR_R", "APERCORR_Z"] 
+    
     fastspec_emlines_cols = ["OII_3726_FLUX", "OII_3726_FLUX_IVAR", "OII_3729_FLUX", "OII_3729_FLUX_IVAR", "OIII_4363_FLUX", "OIII_4363_FLUX_IVAR", "HEII_4686_FLUX", "HEII_4686_FLUX_IVAR", "HBETA_FLUX", "HBETA_FLUX_IVAR", "OIII_4959_FLUX", "OIII_4959_FLUX_IVAR", "OIII_5007_FLUX", "OIII_5007_FLUX_IVAR", "HEI_5876_FLUX", "HEI_5876_FLUX_IVAR", "NII_6548_FLUX", "NII_6548_FLUX_IVAR", "HALPHA_FLUX", "HALPHA_FLUX_IVAR", "HALPHA_BROAD_FLUX", "HALPHA_BROAD_FLUX_IVAR", "NII_6584_FLUX", "NII_6584_FLUX_IVAR", "SII_6716_FLUX", "SII_6716_FLUX_IVAR", "SII_6731_FLUX", "SII_6731_FLUX_IVAR", "SIII_9069_FLUX", "SIII_9069_FLUX_IVAR", "SIII_9532_FLUX", "SIII_9532_FLUX_IVAR", "HALPHA_BOXFLUX", "HALPHA_BOXFLUX_IVAR", "HALPHA_EW", "HALPHA_EW_IVAR", "HALPHA_SIGMA", "HALPHA_SIGMA_IVAR"]
     
     fastspec_tot_cols = fastspec_cols +  fastspec_emlines_cols
@@ -651,8 +660,12 @@ def get_fastspec_fit_catalog():
         with fits.open(f) as hdul:
             # usually the table is in HDU 1; adjust if needed
             tab_meta_zred = hdul["METADATA"].data["Z"]
-        
-            zmask = (tab_meta_zred < 0.5)
+            tab_meta_spectype = hdul["METADATA"].data["SPECTYPE"]
+            
+
+            #select for redshift and spectype
+            zmask = (tab_meta_zred < 0.5) & (tab_meta_spectype == "GALAXY")
+            print(f"Selecting {np.sum(zmask)/len(zmask):.3f} fraction of objects")
     
             tab_specphot = Table(hdul["SPECPHOT"].data[zmask])[fastspec_specphot_cols]
             tab_fastspec = Table(hdul["FASTSPEC"].data[zmask])[fastspec_tot_cols]

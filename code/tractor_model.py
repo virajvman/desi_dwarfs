@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 import glob
 from astropy.table import Table, vstack
 import os
+from scipy.ndimage import gaussian_filter
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 import multiprocessing as mp
@@ -238,6 +239,7 @@ def save_rgb_tripanel(mod, data_arr, file_path, tgid=None, width=None, testing=F
         ax[2].imshow(rgb_resis, origin="lower")
 
     plt.savefig(f"{file_path}/tractor_model_image.png")
+    
     if testing or (tgid is not None and int(tgid) < 500):
         plt.savefig(f"/pscratch/sd/v/virajvm/temp_tractor_models/tractor_model_{tgid}.png")
     plt.close()
@@ -256,7 +258,7 @@ def save_rgb_single_panel(data_arr, file_path, image_name=None):
     return
 
 
-def get_img_source(i, ra, dec, tgid, file_path, img_path, width, pixscale=0.262, testing=True):
+def get_img_source(i, ra, dec, tgid, zred, file_path, img_path, width, pixscale=0.262, testing=True):
     '''
     Getting the model of the targeted DESI source
     '''
@@ -284,9 +286,9 @@ def get_img_source(i, ra, dec, tgid, file_path, img_path, width, pixscale=0.262,
             mod = np.zeros_like(img_data)
             
             np.save(f"{file_path}/tractor_source_model.npy",  mod) 
-        
-            save_rgb_tripanel(mod, img_data, file_path, tgid, width, testing,use_center_only=False)
 
+            # save_rgb_tripanel(mod, img_data, file_path, tgid, testing,use_center_only=False)
+            
         else:
         
             # if len(tractor_source) != 1:
@@ -301,13 +303,13 @@ def get_img_source(i, ra, dec, tgid, file_path, img_path, width, pixscale=0.262,
             np.save(f"{file_path}/tractor_source_model.npy", mod)
         
             img_data = fits.open(img_path)[0].data
-            
-            save_rgb_tripanel(mod, img_data, file_path, tgid, width, testing,use_center_only=False)
 
+            # save_rgb_tripanel(mod, img_data, file_path, tgid, testing,use_center_only=False)
+            
     return
 
 
-def get_bkg_sources(i, ra, dec, tgid, file_path, img_path, width, pixscale=0.262, testing=True):
+def get_bkg_sources(i, ra, dec, tgid, zred, file_path, img_path, width, pixscale=0.262, testing=True):
     '''
     Getting the tractor model of the background
     '''
@@ -353,7 +355,6 @@ def get_bkg_sources(i, ra, dec, tgid, file_path, img_path, width, pixscale=0.262
             
             np.save(f"{file_path}/tractor_background_model.npy", mod)
         
-            save_rgb_tripanel(mod, img_data, file_path, tgid, testing,use_center_only=False)
             
             return
 
@@ -361,7 +362,7 @@ def get_bkg_sources(i, ra, dec, tgid, file_path, img_path, width, pixscale=0.262
         return
 
 
-def get_blended_remove_sources(i, ra, dec, tgid, file_path, img_path, width,pixscale=0.262, testing=True):
+def get_blended_remove_sources(i, ra, dec, tgid, zred, file_path, img_path, width,pixscale=0.262, testing=True):
     '''
     Getting the model of the sources that lie on the main segment (blended sources) but that are deemed to be not be part of the parent galaxy
     '''
@@ -417,7 +418,6 @@ def get_blended_remove_sources(i, ra, dec, tgid, file_path, img_path, width,pixs
                 np.save(f"{file_path}/tractor_blend_remove_model.npy", mod)
             
                 img_data = fits.open(img_path)[0].data
-                save_rgb_tripanel(mod, img_data, file_path, tgid, testing,use_center_only=False)
             else:
                 #there were no sources to subtract and so we can save an empty array!
                 np.save(f"{file_path}/tractor_blend_remove_model.npy", np.zeros((3, width, width))  )
@@ -470,18 +470,51 @@ def get_blended_remove_sources(i, ra, dec, tgid, file_path, img_path, width,pixs
 #     return
 
 
-def get_main_blob_sources(i, ra, dec, tgid, file_path, img_path, width, pixscale=0.262,testing=False):
+def get_matched_subset(cat, tractor, tgid):
+    '''
+    Helper function for get_main_blob_sources
+    '''
+
+    ps_ras = cat["ra"].data
+    ps_decs = cat["dec"].data
+    
+    #we need to get all the pixel locations of these sources given the wcs and see which ones lie on the main segment
+    #sources not on the main segment will be on a zero!
+    ra_all = tractor.get("ra")
+    dec_all = tractor.get("dec")
+
+    #find all the sources that match the blend_remove_cat objects!
+    c = SkyCoord(ra= ps_ras* u.degree, dec= ps_decs*u.degree )
+    catalog = SkyCoord(ra=ra_all*u.degree, dec=dec_all*u.degree )
+    idx, d2d, d3d = c.match_to_catalog_sky(catalog)
+
+    #get the indices of objects in the ra_all catalog that match and have zero separation!
+    parent_source_inds = idx[d2d.arcsec == 0]
+
+    if len(parent_source_inds) != len(ps_ras):
+        raise ValueError(f"Inconsistent number of sources in parent galaxy : {len(parent_source_inds)}, {len(ps_ras)} for {tgid}")
+
+    tractor_parent = tractor[parent_source_inds]
+
+    ave_psfsize_dict = { "g": np.mean(tractor_parent.get("psfsize_g")), "r": np.mean(tractor_parent.get("psfsize_r")),  "z": np.mean(tractor_parent.get("psfsize_z"))    }
+    
+    return tractor_parent, ave_psfsize_dict
+    
+
+
+def get_main_blob_sources(i, ra, dec, tgid, zred, file_path, img_path, width, pixscale=0.262,testing=False):
     '''
     Function that gets all the tractor sources for things on the main blob. This will contain sources that we also removed via a color cut. But we will do that step in the cog function. Here for the simple photo purposes as well, we will save all the non-stars sources on the segment! 
     
-
     The models for individual sources are stored separately and in a folder
     '''
 
-    # parent_source_file = file_path + "/parent_galaxy_sources.fits"
-    parent_source_file = file_path + "/source_cat_all_main_segment.fits"
+    #doing the latter is definitely, better, the former is more efficient.
+    parent_source_file = file_path + "/parent_galaxy_sources.fits"
+    source_cat_all_file = file_path + "/source_cat_all_main_segment.fits"
     
-    if os.path.exists(parent_source_file):
+    if os.path.exists(source_cat_all_file):
+        #load the entire tractor catalog
         tractor = load_tractor(file_path)
 
         #we want to also remove sources that do not have finite shape_r
@@ -490,30 +523,11 @@ def get_main_blob_sources(i, ra, dec, tgid, file_path, img_path, width, pixscale
     
         #we will be saving models for all these sources!
         parent_source_cat = Table.read(parent_source_file)
-    
-        ps_ras = parent_source_cat["ra"].data
-        ps_decs = parent_source_cat["dec"].data
-        
-        #we need to get all the pixel locations of these sources given the wcs and see which ones lie on the main segment
-        #sources not on the main segment will be on a zero!
-        ra_all = tractor.get("ra")
-        dec_all = tractor.get("dec")
-    
-        #find all the sources that match the blend_remove_cat objects!
-        c = SkyCoord(ra= ps_ras* u.degree, dec= ps_decs*u.degree )
-        catalog = SkyCoord(ra=ra_all*u.degree, dec=dec_all*u.degree )
-        idx, d2d, d3d = c.match_to_catalog_sky(catalog)
-    
-        #get the indices of objects in the ra_all catalog that match and have zero separation!
-        parent_source_inds = idx[d2d.arcsec == 0]
-    
-        if len(parent_source_inds) != len(ps_ras):
-            raise ValueError(f"Inconsistent number of sources in parent galaxy : {len(parent_source_inds)}, {len(ps_ras)} for {tgid}")
-    
-        tractor_parent = tractor[parent_source_inds]
+        source_all_main_cat = Table.read(source_cat_all_file)
 
-        ave_psfsize_dict = { "g": np.mean(tractor_parent.get("psfsize_g")), "r": np.mean(tractor_parent.get("psfsize_r")),  "z": np.mean(tractor_parent.get("psfsize_z"))    }
-    
+        tractor_parent, ave_psfsize_dict = get_matched_subset(parent_source_cat, tractor, tgid)
+        tractor_all_main_seg, ave_psfsize_dict = get_matched_subset(source_all_main_cat, tractor, tgid)
+        
         tractor_save_dir = file_path + "/tractor_models"
         
         os.makedirs(tractor_save_dir, exist_ok=True)
@@ -527,10 +541,17 @@ def get_main_blob_sources(i, ra, dec, tgid, file_path, img_path, width, pixscale
                 except Exception as e:
                     print(f"Warning: failed to delete {file_path_i}. Reason: {e}")
 
-        wcs = make_custom_wcs(ra, dec, width, pixscale)
 
-        # save_main_tractor_models(tractor_parent, parent_source_cat, wcs, ave_psfsize_dict,
-        #                     tractor_save_dir, file_path, tgid, width)
+        #also remove the .npy total model files
+        file1 = file_path + "/tractor_main_segment_model.npy"
+        file2 = file_path + "/tractor_parent_sources_model.npy"
+        
+        if os.path.exists(file1):
+            os.remove(file1)
+        if os.path.exists(file2):
+            os.remove(file2)
+
+        wcs = make_custom_wcs(ra, dec, width, pixscale)
                
         if len(tractor_parent) != 0:
 
@@ -540,15 +561,43 @@ def get_main_blob_sources(i, ra, dec, tgid, file_path, img_path, width, pixscale
                 
             total_model = np.zeros((3, width, width))
 
-            #loop through each source model image!
-            for k in range(len(tractor_parent)):
-                mod = build_model_image(tractor_parent[k], wcs, ave_psfsize_dict, mean_psf=True)
-                total_model += mod
-                np.save(f"{tractor_save_dir}/tractor_parent_source_model_{parent_source_cat['source_objid_new'].data[k]:d}.npy", mod)
+            tot_count = len(tractor_parent)
+            
+            if tot_count > 100:
+                plot_progress=True
+            else:
+                plot_progress=False
 
-            #save the total model
-            np.save(f"{file_path}/tractor_main_segment_model.npy", total_model)
+            ##WE ONLY SAVE THE INDIVIDUAL SOURCES IF Z > 0.005
+            ##ELSE WE JUST SAVE THE ENTIRE MODEL IMAGE DIRECTLY!
+
+            if zred >= 0.005:
+                #loop through each source in the parent galaxy source catalog
+                #we need the individual source models for the galaxies where we apply the isolate mask and those are only at z>0.005
+                for k in range(len(tractor_parent)):
+                    if plot_progress:
+                        if k % 100 == 0:
+                            print(f"TGID:{tgid}, progress={k/tot_count:.2f}")
+                        
+                    mod = build_model_image(tractor_parent[k], wcs, ave_psfsize_dict, mean_psf=True)
+                    total_model += mod
+                    np.save(f"{tractor_save_dir}/tractor_parent_source_model_{parent_source_cat['source_objid_new'].data[k]:d}.npy", mod)
     
+            else:
+                print(f"TGID:{tgid}, Z < 0.005 and just saving total model image as too many sources!")
+                #we do not need to save each source individually, and we just save the direct image!!
+                total_model = build_model_image(tractor_parent, wcs, ave_psfsize_dict, mean_psf=True)
+
+        
+            #save the total image of the main segment 
+            total_model_main_seg = build_model_image(tractor_all_main_seg, wcs, ave_psfsize_dict, mean_psf=True)
+                
+            #save the total model of parent sources
+            np.save(f"{file_path}/tractor_parent_sources_model.npy", total_model)
+
+            #save the total model of all main segment sources
+            np.save(f"{file_path}/tractor_main_segment_model.npy", total_model_main_seg)
+                
             #save the total combined image for reference!
             save_rgb_single_panel(total_model, file_path, image_name="tractor_main_segment_galaxy_model")
         else:
@@ -571,6 +620,7 @@ def worker(args):
         dwarf_cat["RA"][i],
         dwarf_cat["DEC"][i],
         dwarf_cat["TARGETID"][i],
+        dwarf_cat["Z"][i],
         dwarf_cat["FILE_PATH"][i],
         dwarf_cat["IMAGE_PATH"][i],
         dwarf_cat["IMAGE_SIZE_PIX"][i],

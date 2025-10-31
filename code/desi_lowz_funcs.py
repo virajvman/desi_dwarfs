@@ -1115,6 +1115,46 @@ def process_img(img_data, cutout_size = 96, org_size = 350,return_shift = False)
         return rgb_img
     
 
+def process_img_shift(img_data, cutout_size=96, org_size=350, return_shift=False, x_shift=0, y_shift=0):
+    '''
+    Function that center crops the image (optionally shifted) and returns RGB image.
+
+    Parameters
+    ----------
+    img_data : array-like
+        Input image with shape (bands, H, W).
+    cutout_size : int, optional
+        Size of the cropped image (square). Default is 96.
+    org_size : int, optional
+        Original image size (square). Default is 350.
+    return_shift : bool, optional
+        If True, returns (rgb_img, (x_start, y_start)) instead of just rgb_img.
+    x_shift, y_shift : int, optional
+        Pixel offsets to shift the cropping center in x and y directions.
+        Positive x_shift → shift right; positive y_shift → shift up.
+    '''
+
+    if cutout_size is not None:
+        # compute start/end positions with shift
+        x_start = (org_size - cutout_size) // 2 + x_shift
+        y_start = (org_size - cutout_size) // 2 + y_shift
+        x_end = x_start + cutout_size
+        y_end = y_start + cutout_size
+
+        img_data = img_data[:, y_start:y_end, x_start:x_end]
+
+    # convert to rgb
+    rgb_img = sdss_rgb(
+        [img_data[0], img_data[1], img_data[2]],
+        ["g", "r", "z"],
+        scales=dict(g=(2, 6.0), r=(1, 3.4), z=(0, 2.2)),
+        m=0.03
+    )
+
+    if return_shift:
+        return rgb_img, (x_start, y_start)
+    else:
+        return rgb_img
 
     
 
@@ -1945,13 +1985,14 @@ def get_elliptical_aperture(binary_segment_mask=None, aper_light_image = None, s
 
 
 import scipy.optimize as opt
+from scipy.signal import wiener
 
 def conf_interval(x, pdf, conf_level):
     return np.sum(pdf[pdf > x])-conf_level
 
 def plot_2d_dist(x,y, nxbins, nybins, 
                 cmin=1.e-4, cmax=1.0, smooth=None, clevs=None,ax=None, bounds=None,plot_pcol=False,
-                color = "k",filled=False,label="1"):
+                color = "k",cmap=None,filled=False,label="1",cmap_alpha=0.5):
     """
     construct and plot a binned, 2d distribution in the x-y plane 
     using nxbins and nybins in x- and y- direction, respectively
@@ -1967,7 +2008,6 @@ def plot_2d_dist(x,y, nxbins, nybins,
     X,Y = np.meshgrid(xbins[:-1],ybins[:-1]) 
 
     if smooth != None:
-        from scipy.signal import wiener
         H = wiener(H, mysize=smooth)
         
     H = H/np.sum(H)        
@@ -1986,11 +2026,14 @@ def plot_2d_dist(x,y, nxbins, nybins,
             lvls.append(sig)
 
         if filled:
-            cs = ax.contourf(X, Y, H, linewidths=np.array([1.0,0.75, 0.5, 0.25])[::-1], cmap=color, levels = sorted(lvls), 
-                    norm = LogNorm(), extent = [xbins[0], xbins[-1], ybins[0], ybins[-1]])
+            cs = ax.contourf(X, Y, H, linewidths=np.array([1.0,0.75, 0.5, 0.25])[::-1], cmap=cmap, levels = sorted(lvls), 
+                    norm = LogNorm(), extent = [xbins[0], xbins[-1], ybins[0], ybins[-1]],alpha=cmap_alpha, rasterized=True)
         else:
             cs = ax.contour(X, Y, H, linewidths=3*np.array([1.0,0.75, 0.5, 0.25])[::-1], colors=color, levels = sorted(lvls), 
-                    norm = LogNorm(), extent = [xbins[0], xbins[-1], ybins[0], ybins[-1]])
+                    norm = LogNorm(), extent = [xbins[0], xbins[-1], ybins[0], ybins[-1]], rasterized=True)
+
+            for c in cs.collections:
+                c.set_linestyle('--')
 
         # Save contour paths
         contour_paths = [c for c in cs.collections]
@@ -2000,11 +2043,10 @@ def plot_2d_dist(x,y, nxbins, nybins,
         ax.plot([-5,-10], [-5,-10], color=color, linewidth=2.5, label=label)
     else:
         from matplotlib.patches import Patch
-        ax.plot([-5,-10], [-5,-10], color=color(0.6), linewidth=8, label=label)  # proxy line
+        ax.plot([-5,-10], [-5,-10], color=cmap(0.6), linewidth=8, label=label)  # proxy line
 
     return contour_paths
     
-
 
 def DVcalculator_list(alpha_lst, delta_lst, system='supergalactic', 
                       parameter='distance', values=[20], calculator='NAM'):
@@ -2076,3 +2118,5 @@ def DVcalculator_list(alpha_lst, delta_lst, system='supergalactic',
         output = None
 
     return output
+
+

@@ -549,7 +549,9 @@ def get_pcnn_data_inputs(sample_name, sample_cat_path = None):
     data_file_path = f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/all_shred_data_N_6_96_96_{sample_name}.npy"
     metadata_file_path = f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/all_shred_metadata_scaled_{sample_name}.npy" 
 
-    if os.path.exists(data_file_path) and os.path.exists(metadata_file_path):
+    if not os.path.exists(data_file_path) or not os.path.exists(metadata_file_path):
+        print("Generating the PCNN input files!")
+        
         #now for this data_label, let us get all the input images!
         all_shred_images_unnorm = []
         

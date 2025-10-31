@@ -49,13 +49,9 @@ from scipy.stats import skew, kurtosis
 from desi_lowz_funcs import get_elliptical_aperture, measure_elliptical_aperture_area_fraction_masked
 from desi_lowz_funcs import flux_to_mag
 
-
 rootdir = '/global/u1/v/virajvm/'
 sys.path.append(os.path.join(rootdir, 'DESI2_LOWZ'))
 from desi_lowz_funcs import print_stage, check_path_existence, get_remove_flag, _n_or_more_lt, is_target_in_south, match_c_to_catalog, calc_normalized_dist, get_sweep_filename, get_random_markers, save_table, make_subplots, sdss_rgb
-
-
-
     
 def find_nearest_island(segment_map_v2,fiber_xpix, fiber_ypix):
     '''
@@ -227,73 +223,73 @@ def safe_get_col(col, fill_value=""):
     return arr
     
 
-def select_dup_stars_g2(source_cat_f, g2_dup_star, radius_arcsec=2.0):
+def select_dup_stars_g2(source_cat_f, g2_dup_star, radius_arcsec=2):
     """
-    Find all sources within `radius_arcsec` of DUP G2 sources. This used to just be PSF, but there are cases where sersic and 
-    other profiles are also fitted. So now, no restriction on it being PSF. This takes all sources within 2/
+    Identify sources that are likely stars based on the presence of PSF sources
+    near G2 DUP candidates with significant proper motion.
 
-    One complication, there are sources like this: 39628211251842951. That looks like a star in the catalog, but is not a star!
+    Motivation: some objects in G2 catalog are not stars even though some pMRA/PMDEC motion is seen. They are just very bright, nearby HII regions. We want to avoid accidentally classifying these as stars as it will selectively affect the brightest, nearest objects!
 
     Parameters
     ----------
-    source_cat_f : Table or structured array
-        Full source catalog containing RA, DEC, type, ref_cat, etc.
-    g2_dup_star : boolean array
-        Mask selecting the DUP G2 sources from source_cat_f.
+    source_cat_f : Table or DataFrame
+        Source catalog with 'ra', 'dec', 'type', and 'ref_cat' columns.
+    g2_dup_star : array-like of bool
+        Boolean mask selecting G2 DUP sources with significant proper motion.
     radius_arcsec : float, optional
-        Matching radius in arcseconds (default = 2.0).
+        Angular separation (in arcseconds) for matching DUP–PSF neighbors.
 
     Returns
     -------
-    mask : np.ndarray (bool)
-        Boolean mask of the same length as source_cat_f,
-        True for PSF sources that are within `radius_arcsec` of any DUP G2.
+    star_mask : np.ndarray of bool
+        Boolean mask over all sources marking those confirmed as stars.
+
+    E.G., to confirm: 39628211251842951, 39627896582573918, 39633282123433376
     """
 
-    # Separate DUP and PSF sources
-    g2_dup_sources = source_cat_f[g2_dup_star]
+    # Identify PSF-type sources that are NOT from G2
+    type_col = np.array(source_cat_f["type"])
+    ref_col  = np.array(source_cat_f["ref_cat"])
+    psf_mask = (type_col == "PSF") & (ref_col != "G2")
 
-    type_col = np.array(safe_get_col(source_cat_f["type"]))
-    ref_col  = np.array(safe_get_col(source_cat_f["ref_cat"]))
+    # If no PSF sources exist, nothing can be confirmed
+    if not np.any(psf_mask):
+        return np.zeros(len(source_cat_f), dtype=bool)
 
-    # psf_mask = (source_cat_f["type"] == "PSF") & (source_cat_f["ref_cat"] != "G2")
-    # psf_mask = (type_col == "PSF") & (ref_col != "G2")
-    psf_mask = (ref_col != "G2")
-    
-    psf_sources = source_cat_f[psf_mask]
+    # Build coordinatec lists
+    dup_coords = SkyCoord(source_cat_f["ra"][g2_dup_star],
+                          source_cat_f["dec"][g2_dup_star],
+                          unit="deg")
+    psf_coords = SkyCoord(source_cat_f["ra"][psf_mask],
+                          source_cat_f["dec"][psf_mask],
+                          unit="deg")
 
-    print("SHOULD I CHECK FOR IF THERE IS A G2 STAR THAT IS DUP BUT IT MUST HAVE A MATCHING PSF SOURCE")
-    print("ALSO, EVEN IF STAR F DIST IS ZERO, it must have a mag to be able to masked!! so check that  ")
-    print("also, maybe for the masking just use the other masking thing?? Check which star is the best to use!!")
-    
-    if len(psf_sources) == 0:
-        mask = np.zeros(len(source_cat_f), dtype=bool)
-        return mask
-    else:
+    # Find all DUP–PSF pairs within the radius
+    idx_dup, idx_psf, sep2d, _ = psf_coords.search_around_sky(dup_coords, radius_arcsec * u.arcsec)
 
-        #THIS IS ALL WRONG!! THIS IS NOT SELECTING THE CORRECT SOURCE
-        
-        # Build SkyCoord objects
-        dup_coords = SkyCoord(g2_dup_sources["ra"], g2_dup_sources["dec"], unit="deg")
-        psf_coords = SkyCoord(psf_sources["ra"], psf_sources["dec"], unit="deg")
-    
-        # Find all pairs within radius
-        idx_dup, idx_psf, sep2d, _ = psf_coords.search_around_sky(dup_coords, radius_arcsec * u.arcsec)
-        #https://docs.astropy.org/en/latest/coordinates/matchsep.html#searching-around-coordinates#
-        #the above link is useful to look at to understand the ordering of the coords and idx. 
-    
-        if len(idx_psf) == 0:
-            mask = np.zeros(len(source_cat_f), dtype=bool)
-            return mask
+    # If no nearby PSFs, no DUP sources are confirmed
+    if len(idx_dup) == 0:
+        return np.zeros(len(source_cat_f), dtype=bool)
 
-        # Convert matched PSF indices back to the full catalog
-        psf_idx_in_full = np.nonzero(psf_mask)[0][idx_psf]
-    
-        # Build the mask
-        mask = np.zeros(len(source_cat_f), dtype=bool)
-        mask[psf_idx_in_full] = True
+    # Also all sources (of any type) within radius of the confirmed G2 DUPs, except for those that have ref_cat = L3 and separations < 1e-2 arcsec
+    all_coords = SkyCoord(source_cat_f["ra"], source_cat_f["dec"], unit="deg")
+    confirmed_dup_coords = dup_coords[np.unique(idx_dup)]
 
-        return mask
+    idx_all_within = []
+    for c in confirmed_dup_coords:
+        idx_nearby = (all_coords.separation(c) < (radius_arcsec * u.arcsec)) & (source_cat_f["ref_cat"].data != "L3") & (source_cat_f["separations"].data > 1e-2)
+        #the separations is arcsec separation between target source and tractor source
+        #thus requiring that conditions means that we will always include the observed source in case it happens to be very close to the 
+        idx_all_within.append(np.where(idx_nearby)[0])
+
+    # Flatten and deduplicate indices
+    star_indices = np.unique(np.concatenate(idx_all_within))
+
+    # Build final mask of sources that are close to G2 DUP sources that are likely stars
+    star_mask = np.zeros(len(source_cat_f), dtype=bool)
+    star_mask[star_indices] = True
+
+    return star_mask
 
 
 def run_aperture_pipe(input_dict):
@@ -362,34 +358,36 @@ def run_aperture_pipe(input_dict):
     # get catalog of nearby DR9 sources along with their photo-zs info. Nearby is defined as within 45 arcsecs
     ##################
 
+    #find difference between source and all the other catalog objects
     ref_coord = SkyCoord(ra=source_ra * u.deg, dec=source_dec * u.deg)
-    # sources_coords = SkyCoord(ra=source_cat_f["ra"].data * u.deg, dec=source_cat_f["dec"].data * u.deg)
-    # # Compute separations
-    # source_seps = ref_coord.separation(sources_coords).arcsec
+    catalog_coords = SkyCoord(ra=source_cat_f["ra"].data * u.deg, dec=source_cat_f["dec"].data * u.deg)
+    # Compute separations
+    separations = ref_coord.separation(catalog_coords).arcsec
 
-    ##procedure for selecting a star
-    signi_pm = ( np.abs(source_cat_f["pmra"]) * np.sqrt(source_cat_f["pmra_ivar"]) > 2) | ( np.abs(source_cat_f["pmdec"]) * np.sqrt(source_cat_f["pmdec_ivar"]) > 2)
-    star_model = ((source_cat_f['type'] == "PSF") | (source_cat_f['type'] == "DUP") )
+    #storing the separations of all sources from our main fiber source so we can remove it from consideration later
+    source_cat_f["separations"] = separations
 
-    ##there are some subtleties about gaia stars that are DUP. If a star is DUP, there is likely another PSF source nearby within 1'' that has similar magnitude but no ref_cat=G2.
-    #we will identify such sources as well. According to Dustin, this likely only happens for SGA galaxies
+    ##procedure for selecting a star. this works most times, and is fine. could do better
+    pmra_snr = np.abs(source_cat_f["pmra"].data) * np.sqrt(source_cat_f["pmra_ivar"].data)
+    pmdec_snr = np.abs(source_cat_f["pmdec"].data) * np.sqrt(source_cat_f["pmdec_ivar"].data)
+    signi_pm = (pmra_snr > 2) | (pmdec_snr > 2)
 
-    #get all the DUP sources that are G2 stars
+    #mask for all sources that are psf type
+    star_psf_model = (source_cat_f['type'] == "PSF")
+
+    #get all the DUP sources that are in G2 and have some PM. Note that PSF and DUP are two different source types
     g2_dup_star = (source_cat_f["ref_cat"] == "G2") &  (source_cat_f['type'] == "DUP") & signi_pm 
 
-    #the below is a mask of sources that are PSF and not G2, and are very close to G2 DUP sources and also similar magnitude
-    other_stars_dup_assoc = select_dup_stars_g2(source_cat_f, g2_dup_star)
+    #below is a mask of sources that are associated with the G2 star and should not be considered in the final parent galaxy source catalog
+    if np.any(g2_dup_star):
+        other_stars_dup_assoc = select_dup_stars_g2(source_cat_f, g2_dup_star)
+        if np.sum(other_stars_dup_assoc) > 0:
+            print(f"{np.sum(other_stars_dup_assoc)} duplicated stars associated with G2 found: {save_path}")
+    else:
+        other_stars_dup_assoc = np.zeros(len(source_cat_f)).astype(bool)
 
-    if np.sum(other_stars_dup_assoc) > 0:
-        print(f"{np.sum(other_stars_dup_assoc)} duplicated stars associated with G2 found: {save_path}")
-
-    ##some stuff choices here. There are some birght HII regions that are also in Gaia and tractor often models them as PSF. So to be lax on star definition. I think I will relax the PMRA cuts
-    # is_star = (source_cat_f["ref_cat"] == "G2")  &  ( 
-    #     (source_cat_f['type'] == "PSF")  | signi_pm 
-    # )     
-
-    #so stars are objects that are either in G2 with significant PM or are the duplicated Gaia sources that are coincident with it, but not in G2 so not selected from earlier criterion
-    is_star = ((source_cat_f["ref_cat"] == "G2")  &  star_model  & signi_pm ) | other_stars_dup_assoc 
+    #star is either in G2 catalog+PSF+detected PM OR sources inc. and nearby G2 + DUP sources that have PSF sources
+    is_star = ((source_cat_f["ref_cat"] == "G2")  &  star_psf_model  & signi_pm ) | other_stars_dup_assoc 
 
     #what is the distance to the closest star from us?
     all_stars = source_cat_f[is_star]
@@ -793,14 +791,14 @@ def run_aperture_pipe(input_dict):
         in_main_islands = (source_cat_f["new_deblend_id"] != -99)
         
         #find difference between source and all the other catalog objects
-        ref_coord = SkyCoord(ra=source_ra * u.deg, dec=source_dec * u.deg)
-        catalog_coords = SkyCoord(ra=source_cat_f["ra"].data * u.deg, dec=source_cat_f["dec"].data * u.deg)
-        # Compute separations
-        separations = ref_coord.separation(catalog_coords).arcsec
+        # ref_coord = SkyCoord(ra=source_ra * u.deg, dec=source_dec * u.deg)
+        # catalog_coords = SkyCoord(ra=source_cat_f["ra"].data * u.deg, dec=source_cat_f["dec"].data * u.deg)
+        # # Compute separations
+        # separations = ref_coord.separation(catalog_coords).arcsec
 
-        #storing the separations of all sources from our main fiber source so we can remove it from consideration later
-        source_cat_f["separations"] = separations
-        
+        # #storing the separations of all sources from our main fiber source so we can remove it from consideration later
+        # source_cat_f["separations"] = separations
+        separations = source_cat_f["separations"].data
         source_cat_obs = source_cat_f[np.argmin(separations)]
 
         #Due to some mistake in the LOWZ source catalog, and how the overlapping region was handled, for LOWZ the separations can be 
@@ -1306,7 +1304,7 @@ def run_aperture_pipe(input_dict):
         ax[ax_id].set_ylim([0,63])
         
         ax_id = 2
-        ax[ax_id].text(0.25,0.96,f"pCNN = {pcnn_val:.2f}",size = 12,transform=ax[ax_id].transAxes, verticalalignment='top',color = "white")
+        # ax[ax_id].text(0.25,0.96,f"pCNN = {pcnn_val:.2f}",size = 12,transform=ax[ax_id].transAxes, verticalalignment='top',color = "white")
         ax[ax_id].set_title(r"IMG - S")
         ax[ax_id].imshow(rgb_resis[start:end, start:end,:])
         ax[ax_id].set_xticks([])
@@ -1411,7 +1409,41 @@ def run_aperture_pipe(input_dict):
     
 
         
-        
+'''
+Example for understanding how search_around_sky works
+
+dup_ra = np.array([0, -100, 1, -1, 2, 3, 4])
+dup_dec = np.array([0.5, 0, 1, 3, 4.5, 3, 2.4])
+
+# psf_ra = np.array([0, 2, 1, 5, 100, 100, 100])
+# psf_dec = np.array([0.55, 4.6, 1.1, 0.5, 0, 0, 0])
+
+psf_ra = np.array([10, 12, 11, 15, 100, 100, 100])
+psf_dec = np.array([10.55, 14.6, 11.1, 10.5, 0, 0, 0])
+
+print(len(dup_ra), len(psf_ra))
+
+plt.figure(figsize = (4,4))
+plt.scatter(dup_ra, dup_dec)
+plt.scatter(psf_ra, psf_dec)
+plt.xlim([-5,10])
+plt.ylim([0,5])
+plt.show()
+
+
+# Build coordinatec lists
+dup_coords = SkyCoord(dup_ra,
+                      dup_dec,
+                      unit="deg")
+psf_coords = SkyCoord(psf_ra,
+                      psf_dec,
+                      unit="deg")
+
+# Find all DUP–PSF pairs within the radius
+idx_dup, idx_psf, sep2d, _ = psf_coords.search_around_sky(dup_coords, 0.25 * u.deg)
+
+
+'''
         
         
 

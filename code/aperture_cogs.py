@@ -182,10 +182,9 @@ def surface_brightness_mu(r_scales, aper_rad_pix, cog_params , ba_ratio):
 
 def half_light_radius_cog(cog_params):
     mtot, m0, alpha_1, r_0, alpha_2 = cog_params
-    
     return r_0 * ( (1/alpha_1) * (np.exp( -np.log10(0.5) / (0.4*m0)  ) - 1) )**(-1/alpha_2)
 
-    
+
 def radius_at_mu(tgid, file_path, mu_target, cog_params, ba_ratio=None, aper_rad_pix=None, plot_name=None):
     """
     Compute the radius (in arcsec) where surface brightness μ = mu_target,
@@ -298,23 +297,25 @@ def make_tractor_r_band_model_img(tgid, org_grz_data, save_path, wcs):
 
     else:
         total_model = np.zeros_like(org_grz_data)
-    
-        if len(parent_source_cat) > 100:
-            print(f"FYI: Reading more than 100 sources in the tractor catalog so may take some time: {tgid}")
 
         #get the object with the brightest r-band mag in the source cat
         bright_ind = np.argmin(parent_source_cat["mag_r"].data)
         tractor_brightest_source_mags = np.array([ parent_source_cat["mag_g"].data[bright_ind], parent_source_cat["mag_r"].data[bright_ind], parent_source_cat["mag_z"].data[bright_ind] ])
- 
-        for pi in range(len(parent_source_cat)):
-            objidi = parent_source_cat["source_objid_new"].data[pi]
-            tractor_model_path = save_path + f"/tractor_models/tractor_parent_source_model_{objidi}.npy"
-            #load it!
-            model_i = np.load(tractor_model_path)
-            total_model += model_i
 
+        #load the r band model image made from the parent_galaxy_source catalog
+        total_model = np.load(save_path + "/tractor_parent_sources_model.npy")
         r_total_model = total_model[1]
+        
+        # if len(parent_source_cat) > 100:
+        #     print(f"FYI: Reading more than 100 sources in the tractor catalog so may take some time: {tgid}")
+        # for pi in range(len(parent_source_cat)):
+        #     objidi = parent_source_cat["source_objid_new"].data[pi]
+        #     tractor_model_path = save_path + f"/tractor_models/tractor_parent_source_model_{objidi}.npy"
+        #     #load it!
+        #     model_i = np.load(tractor_model_path)
+        #     total_model += model_i
 
+        # r_total_model = total_model[1]
         g_flux_corr = mags_to_flux(parent_source_cat["mag_g"]) / parent_source_cat["mw_transmission_g"]
         r_flux_corr = mags_to_flux(parent_source_cat["mag_r"]) / parent_source_cat["mw_transmission_r"]
         z_flux_corr = mags_to_flux(parent_source_cat["mag_z"]) / parent_source_cat["mw_transmission_z"]
@@ -482,36 +483,6 @@ def get_new_segment_tractor(r_band_trac_model, fiber_xpix, fiber_ypix, r_noise_r
 
         
         return None, np.nan, np.nan, np.nan, np.nan, False, None, not_galaxy_no_isolate_mask
-
-
-
-def load_tractor_models(tractor_save_dir, parent_source_cat):
-    """
-    Load individual or HDF5-stored tractor source models.
-    Returns the summed total_model and a dict for individual access.
-    """
-    h5_path = f"{tractor_save_dir}/tractor_parent_source_models.h5"
-    total_model = None
-    models = {}
-
-    if os.path.exists(h5_path):
-        with h5py.File(h5_path, "r") as f:
-            for key in f.keys():
-                mod = f[key][:]
-                models[int(key)] = mod
-                if total_model is None:
-                    total_model = np.zeros_like(mod)
-                total_model += mod
-    else:
-        for objid in parent_source_cat["source_objid_new"].data:
-            path = f"{tractor_save_dir}/tractor_parent_source_model_{int(objid)}.npy"
-            mod = np.load(path)
-            models[int(objid)] = mod
-            if total_model is None:
-                total_model = np.zeros_like(mod)
-            total_model += mod
-
-    return total_model, models
 
 
 def longest_run(mask):
