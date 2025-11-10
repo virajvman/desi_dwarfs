@@ -10,8 +10,8 @@ import astropy.units as u
 
 logM_sun = u.def_unit('log(solMass)', format={'latex': r'\log(M_\odot)'})
 
-maggy = u.def_unit("maggy", 3631 * u.Jy)
-nmgy = u.def_unit("nmgy", 1e-9 * maggy)
+# maggy = u.def_unit("maggy", 3631 * u.Jy)
+# None = u.def_unit("None", 1e-9 * maggy)
 
 
 main_datamodel = {
@@ -30,12 +30,18 @@ main_datamodel = {
         "description": "Program name",
         "dtype": "str"
     },
+    "HEALPIX": {
+        "unit": None,
+        "description": "healpix containing this location at NSIDE=64 in the NESTED scheme",
+        "dtype": "int32"
+    },
     "Z": {
         "unit": None,
-        "description": "Redrock Redshift",
+        "description": "Redrock Redshift (heliocentric)",
         "blank_value": np.nan,
         "dtype": "float64"
     },
+    
     "DELTACHI2": {
         "unit": None,
         "description": "Redrock delta-chi-squared",
@@ -46,6 +52,12 @@ main_datamodel = {
         "unit": None,
         "description": "Redrock zwarning bit",
         "dtype": "int8"
+    },
+    "Z_CMB": {
+        "unit": None,
+        "description": "Redrock Redshift (CMB rest frame)",
+        "blank_value": np.nan,
+        "dtype": "float64"
     },
     "RA": {
         "unit": "deg",
@@ -170,11 +182,6 @@ zcat_datamodel = {
         "unit": None,
         "description": "DESI TARGET ID",
         "dtype": "int64"
-    },
-    "HEALPIX": {
-        "unit": None,
-        "description": "healpix containing this location at NSIDE=64 in the NESTED scheme",
-        "dtype": "int32"
     },
     "CMX_TARGET": {
         "unit": None,
@@ -360,14 +367,14 @@ tractor_datamodel = {
     "TARGETID": {
         "unit": None,
         "description": "DESI TARGET ID",
-        "blank_value": np.nan,
         "dtype": "int64"
     },
-    "RELEASE": {
-        "unit": None,
-        "description": "Legacy Surveys data release number.",
-        "blank_value": None,
-        "dtype": "int16",
+
+    "RELEASE": { 
+        "unit": None, 
+        "description": "Integer denoting the camera and filter set used, which will be unique for a given processing run of the data.", 
+        "blank_value": None, 
+        "dtype": "int16"
     },
 
     "BRICKNAME": {
@@ -402,7 +409,7 @@ tractor_datamodel = {
     },
 
     "FIBERFLUX_R": {
-        "unit": nmgy,
+        "unit": None,
         "description": (
             "Predicted r-band flux within a 1.5'' diameter fiber under 1' "
             "Gaussian seeing (not extinction corrected)."
@@ -411,7 +418,7 @@ tractor_datamodel = {
         "dtype": "float32",
     },
 
-    "TRACTOR_MASKBITS": {
+    "MASKBITS": {
         "unit": None,
         "description": (
             "Tractor Bitwise mask indicating that an object touches a pixel in "
@@ -442,14 +449,14 @@ tractor_datamodel = {
     },
 
     "FLUX_G": {
-        "unit": nmgy,
+        "unit": None,
         "description": "Total g-band flux corrected for Galactic extinction.",
         "blank_value": np.nan,
         "dtype": "float32",
     },
 
     "FLUX_IVAR_G": {
-        "unit": 1/nmgy**2,
+        "unit": None,
         "description": "Inverse variance of FLUX_G (extinction corrected).",
         "blank_value": 0.0,
         "dtype": "float32",
@@ -470,14 +477,14 @@ tractor_datamodel = {
     },
 
     "FLUX_R": {
-        "unit": nmgy,
+        "unit": None,
         "description": "Total r-band flux corrected for Galactic extinction.",
         "blank_value": np.nan,
         "dtype": "float32",
     },
 
     "FLUX_IVAR_R": {
-        "unit": 1/nmgy**2,
+        "unit": None,
         "description": "Inverse variance of FLUX_R (extinction corrected).",
         "blank_value": 0.0,
         "dtype": "float32",
@@ -498,14 +505,14 @@ tractor_datamodel = {
     },
 
     "FLUX_Z": {
-        "unit": nmgy,
+        "unit": None,
         "description": "Total z-band flux corrected for Galactic extinction.",
         "blank_value": np.nan,
         "dtype": "float32",
     },
 
     "FLUX_IVAR_Z": {
-        "unit": 1/nmgy**2,
+        "unit": None,
         "description": "Inverse variance of FLUX_Z (extinction corrected).",
         "blank_value": 0.0,
         "dtype": "float32",
@@ -744,7 +751,6 @@ photo_datamodel = {
     "TARGETID": {
         "unit": None,
         "description": "DESI TARGET ID",
-        "blank_value": np.nan,
         "dtype": "int64"
     },
     # --- COG magnitudes ---
@@ -839,21 +845,21 @@ photo_datamodel = {
     
     
     # --- Tractor ---
-    "TRACTOR_PARENT_MAG_G_ISOLATE": {
+    "TRACTOR_BASED_MAG_G_ISOLATE": {
         "unit": u.mag,
         "description": "Tractor based parent magnitude in g-band (with isolate mask); MW extinction corrected",
         "blank_value": np.nan,
         "dtype": "float32"
     },
 
-    "TRACTOR_PARENT_MAG_R_ISOLATE": {
+    "TRACTOR_BASED_MAG_R_ISOLATE": {
         "unit": u.mag,
         "description": "Tractor based parent magnitude in r-band (with isolate mask); MW extinction corrected",
         "blank_value": np.nan,
         "dtype": "float32"
     },
 
-    "TRACTOR_PARENT_MAG_Z_ISOLATE": {
+    "TRACTOR_BASED_MAG_Z_ISOLATE": {
         "unit": u.mag,
         "description": "Tractor based parent magnitude in z-band (with isolate mask); MW extinction corrected",
         "blank_value": np.nan,
@@ -862,21 +868,21 @@ photo_datamodel = {
 
     ##
     
-    "TRACTOR_PARENT_MAG_G_NO_ISOLATE": {
+    "TRACTOR_BASED_MAG_G_NO_ISOLATE": {
         "unit": u.mag,
         "description": "Tractor based parent magnitude in g-band (without isolate mask); MW extinction corrected",
         "blank_value": np.nan,
         "dtype": "float32"
     },
 
-    "TRACTOR_PARENT_MAG_R_NO_ISOLATE": {
+    "TRACTOR_BASED_MAG_R_NO_ISOLATE": {
         "unit": u.mag,
         "description": "Tractor based parent magnitude in r-band (without isolate mask); MW extinction corrected",
         "blank_value": np.nan,
         "dtype": "float32"
     },
 
-    "TRACTOR_PARENT_MAG_Z_NO_ISOLATE": {
+    "TRACTOR_BASED_MAG_Z_NO_ISOLATE": {
         "unit": u.mag,
         "description": "Tractor based parent magnitude in z-band (without isolate mask); MW extinction corrected",
         "blank_value": np.nan,
@@ -908,13 +914,13 @@ photo_datamodel = {
 
 
     # --- Aperture properties ---
-    "APER_R4_FRAC_IN_IMG_ISOLATE": {
+    "APERFRAC_R4_IN_IMG_ISOLATE": {
         "unit": None,
         "description": "Fraction of R4 aperture inside image (with isolate mask)",
         "blank_value": np.nan,
         "dtype": "float32"
     },
-    "APER_R4_FRAC_IN_IMG_NO_ISOLATE": {
+    "APERFRAC_R4_IN_IMG_NO_ISOLATE": {
         "unit": None,
         "description": "Fraction of R4 aperture inside image (without isolate mask)",
         "blank_value": np.nan,
@@ -1069,7 +1075,7 @@ photo_datamodel = {
         
     },
 
-    "COG_COG_DECREASE_MAX_LEN_ISOLATE": {
+    "COG_DECREASE_MAX_LEN_ISOLATE": {
         "unit": None,
         "description": "Maximum consecutive decrease in COG for each band (with isolate mask)",
         "shape": (3,),  # replace with actual number of params
@@ -1078,7 +1084,7 @@ photo_datamodel = {
         
     },
 
-    "COG_COG_DECREASE_MAX_MAG_ISOLATE": {
+    "COG_DECREASE_MAX_MAG_ISOLATE": {
         "unit": None,
         "description": "Magnitude decrease in the maximum consecutive decrease part in COG for each band (with isolate mask)",
         "shape": (3,),  # replace with actual number of params
@@ -1096,7 +1102,7 @@ photo_datamodel = {
         
     },
 
-    "COG_COG_DECREASE_MAX_LEN_NO_ISOLATE": {
+    "COG_DECREASE_MAX_LEN_NO_ISOLATE": {
         "unit": None,
         "description": "Maximum consecutive decrease in COG for each band (without isolate mask)",
         "shape": (3,),  # replace with actual number of params
@@ -1105,7 +1111,7 @@ photo_datamodel = {
         
     },
 
-    "COG_COG_DECREASE_MAX_MAG_NO_ISOLATE": {
+    "COG_DECREASE_MAX_MAG_NO_ISOLATE": {
         "unit": None,
         "description": "Magnitude decrease in the maximum consecutive decrease part in COG for each band (without isolate mask)",
         "shape": (3,),  # replace with actual number of params
@@ -1113,7 +1119,6 @@ photo_datamodel = {
         "dtype": "float32"
         
     },
-
 
     # --- Aperture parameters ---
 
@@ -1183,25 +1188,32 @@ photo_datamodel = {
     "NUM_TRACTOR_SOURCES_NO_ISOLATE": {
         "unit": None,
         "description": "Number of Tractor sources part of parent galaxy (without isolate mask)",
-        "blank_value": np.nan,
+        "blank_value": 0,
         "dtype": "int32"
     },
 
     "NUM_TRACTOR_SOURCES_ISOLATE": {
         "unit": None,
         "description": "Number of Tractor sources part of parent galaxy (with isolate mask)",
-        "blank_value": np.nan,
+        "blank_value": 0,
         "dtype": "int32"
     },
 
-    "APER_R2_MU_R_TRACTOR": {
+    "APER_R2_MU_R_ELLIPSE_TRACTOR": {
         "unit": None,
-        "description": "Surface brightness of ",
+        "description": "Surface brightness in r band within R2 ellipse",
         "blank_value": np.nan,
         "dtype": "float32"
     },
 
-    "APER_R4_DATA_FRAC_IN_IMAGE_NO_ISOLATE": {
+    "APER_R2_MU_R_BLOB_TRACTOR": {
+        "unit": None,
+        "description": "Surface brightness in r band within segmented blob ",
+        "blank_value": np.nan,
+        "dtype": "float32"
+    },
+
+    "APERFRAC_R4_IN_IMG_DATA_NO_ISOLATE": {
         "unit": None,
         "description": "Fraction of R4 aperture on initial parent galaxy reconstruction (g+r+z) inside image",
         "blank_value": np.nan,

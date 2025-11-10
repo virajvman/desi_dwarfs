@@ -1247,8 +1247,8 @@ def match_fastspec_catalog_targetid(gal_cat, vac_data):
     valid_mask = ~np.isnan(vac_aligned["RA"])
     if np.any(valid_mask):
         # Ensure the units are proper floats in degrees
-        ra_vals = np.array(gal_cat["RA"][valid_mask], dtype=float)
-        dec_vals = np.array(gal_cat["DEC"][valid_mask], dtype=float)
+        ra_vals = np.array(gal_cat["RA_TARGET"][valid_mask], dtype=float)
+        dec_vals = np.array(gal_cat["DEC_TARGET"][valid_mask], dtype=float)
         ra_vac = np.array(vac_aligned["RA"][valid_mask], dtype=float)
         dec_vac = np.array(vac_aligned["DEC"][valid_mask], dtype=float)
         
@@ -2119,4 +2119,63 @@ def DVcalculator_list(alpha_lst, delta_lst, system='supergalactic',
 
     return output
 
+
+from tqdm.notebook import tqdm
+    
+def clear_files():
+    '''
+    Function used to clean up files that are not needed to free up space!
+    '''
+
+    bgsb_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_BGS_BRIGHT_shreds_catalog_w_aper_mags.fits")
+    bgsf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_BGS_FAINT_shreds_catalog_w_aper_mags.fits")
+    lowz_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_LOWZ_shreds_catalog_w_aper_mags.fits")
+    elg_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_ELG_shreds_catalog_w_aper_mags.fits")
+    
+    bgsb_0 = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_BGS_BRIGHT_clean_catalog_w_aper_mags.fits")
+    bgsf_0 = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_BGS_FAINT_clean_catalog_w_aper_mags.fits")
+    lowz_0 = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_LOWZ_clean_catalog_w_aper_mags.fits")
+    elg_0 = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_ELG_clean_catalog_w_aper_mags.fits")
+    
+    sga = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_SGA_sga_catalog_w_aper_mags.fits")
+    
+    all_files = vstack([ sga["FILE_PATH"], bgsb_cat["FILE_PATH"], bgsf_cat["FILE_PATH"], lowz_cat["FILE_PATH"], elg_cat["FILE_PATH"], bgsb_0["FILE_PATH"], bgsf_0["FILE_PATH"], lowz_0["FILE_PATH"], elg_0["FILE_PATH"] ] )
+    
+
+    # List of files to remove
+    files_to_remove = [
+        "final_mask_cog.npy",
+        "parent_galaxy_segment_mask.npy",
+        "parent_galaxy_sources_FINAL.fits",
+        "parent_galaxy_tractor_only_reconstruction.png",
+        "parent_galaxy_tractor_only_w_isolate_mask.npy",
+        "aper_r35_mags.npy",
+        "simplest_photo_rgb_mask_image.npy",
+        "interpolated_r_band_data.png",
+        "reconstruct_image_512.png",
+        "final_reconstruct_galaxy.npy",
+        "reconstruct_image_256.png",
+        "segment_map_final_cog.npy",
+        "tractor_source_model.npy",
+        "new_aperture_mags.npy",
+        "tractor_background_model_image.png",
+        "largest_blob_no_smooth.png",
+        "tractor_parent_galaxy_model_presmooth_mask.png",
+        "source_cat_f.fits",
+        "source_cat_f_more.fits",
+    ]
+    
+    for fp in tqdm(all_files):
+        # Remove each file if it exists
+        for fname in files_to_remove:
+            if os.path.exists(fp + "/" +  fname):
+                try:
+                    os.remove(fp + "/" +  fname)
+                except Exception as e:
+                    pass
+            else:
+                pass
+    
+    
+    return
 

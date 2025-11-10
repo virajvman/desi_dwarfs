@@ -4,9 +4,12 @@
 
 IN PROGRESS!
 
+Contact: Viraj Manwadkar (virajvm@stanford.edu)
+
+
 ### [Interactive Catalog Viewer](https://virajvman.github.io/desidwarfs_webapp/interactive.html)
 Explore the DESI Dwarf Galaxy catalog interactively in your browser.
-Contact: Viraj Manwadkar (virajvm@stanford.edu)
+
 
 ### DESI DR1 Extragalactic Dwarf Galaxy Catalog — Data Model
 
@@ -40,7 +43,7 @@ Contact: Viraj Manwadkar (virajvm@stanford.edu)
 | MAG_Z_TARGET | float32 | $\mathrm{mag}$ | z-band magnitude (MW extinction corrected) |
 | SAMPLE | str |  | DESI target class (e.g., BGS_BRIGHT, BGS_FAINT)  |
 | DWARF_MASKBIT | int32 |  | Bitwise mask to apply various cleaning cuts. See [bitmask descriptions](#dwarf_maskbit-descriptions). |
-| MAG_TYPE | str |  | Photometry MASKBIT  |
+| MAG_TYPE | str |  | Method use for MAG_G/R/Z (e.g., TRACTOR_ORIGINAL, COG, SIMPLE, TRACTOR_BASED ). See [this](#mag-type-descriptions) for more info.  |
 | PHOTOMETRY_UPDATED | bool |  | Boolean indicating whether the photometry was updated from its original target Tractor photometry.  |
 | SHAPE_PARAMS | str | | Galaxy shape parameters: semi-major axis in arcsec, b/a ratio, position angle (degrees)  |
 | IN_SGA_2020 | bool |  | Boolean indicating whether targeted source had Tractor MASKBITS=12, that is, in SGA-2020 catalog  |
@@ -103,7 +106,7 @@ Contact: Viraj Manwadkar (virajvm@stanford.edu)
 | Name | Type | Units | Description |
 |------|------|-------|-------------|
 | TARGETID | int64 |  | DESI TARGET ID |
-| RELEASE | int16 |  | Legacy Surveys data release number. |
+|RELEASE| int16 |  | Integer denoting the camera and filter set used, which will be unique for a given processing run of the data |
 | BRICKNAME | str |  | Name of the sky brick, encoding RA and Dec (e.g., '1126p222' for RA=112.6, Dec=+22.2). |
 | BRICKID | int32 |  | Integer ID of the brick [1–662174]. |
 | BRICK_OBJID | int32 |  | Catalog object number within this brick. Unique identifier when combined with RELEASE and BRICKID. |
@@ -162,7 +165,65 @@ Contact: Viraj Manwadkar (virajvm@stanford.edu)
 
 <br>
 
-
+| Name | Type | Units | Description |
+|------|------|-------|-------------|
+| TARGETID                              | int64               |                    | DESI TARGET ID                                                                                      |
+| COG_MAG_G_ISOLATE                     | float32             | mag                | COG magnitude in g-band (with isolate mask); MW extinction corrected                                |
+| COG_MAG_R_ISOLATE                     | float32             | mag                | COG magnitude in r-band (with isolate mask); MW extinction corrected                                |
+| COG_MAG_Z_ISOLATE                     | float32             | mag                | COG magnitude in z-band (with isolate mask); MW extinction corrected                                |
+| COG_MAG_G_NO_ISOLATE                  | float32             | mag                | COG magnitude in g-band (without isolate mask); MW extinction corrected                             |
+| COG_MAG_R_NO_ISOLATE                  | float32             | mag                | COG magnitude in r-band (without isolate mask); MW extinction corrected                             |
+| COG_MAG_Z_NO_ISOLATE                  | float32             | mag                | COG magnitude in z-band (without isolate mask); MW extinction corrected                             |
+| APER_R4_MAG_G_ISOLATE                 | float32             | mag                | R4 aperture magnitude in g-band (with isolate mask); MW extinction corrected                        |
+| APER_R4_MAG_R_ISOLATE                 | float32             | mag                | R4 aperture magnitude in r-band (with isolate mask); MW extinction corrected                        |
+| APER_R4_MAG_Z_ISOLATE                 | float32             | mag                | R4 aperture magnitude in z-band (with isolate mask); MW extinction corrected                        |
+| APER_R4_MAG_G_NO_ISOLATE              | float32             | mag                | R4 aperture magnitude in g-band (without isolate mask); MW extinction corrected                     |
+| APER_R4_MAG_R_NO_ISOLATE              | float32             | mag                | R4 aperture magnitude in r-band (without isolate mask); MW extinction corrected                     |
+| APER_R4_MAG_Z_NO_ISOLATE              | float32             | mag                | R4 aperture magnitude in z-band (without isolate mask); MW extinction corrected                     |
+| TRACTOR_PARENT_MAG_G_ISOLATE          | float32             | mag                | Tractor-based parent magnitude in g-band (with isolate mask); MW extinction corrected               |
+| TRACTOR_PARENT_MAG_R_ISOLATE          | float32             | mag                | Tractor-based parent magnitude in r-band (with isolate mask); MW extinction corrected               |
+| TRACTOR_PARENT_MAG_Z_ISOLATE          | float32             | mag                | Tractor-based parent magnitude in z-band (with isolate mask); MW extinction corrected               |
+| TRACTOR_PARENT_MAG_G_NO_ISOLATE       | float32             | mag                | Tractor-based parent magnitude in g-band (without isolate mask); MW extinction corrected            |
+| TRACTOR_PARENT_MAG_R_NO_ISOLATE       | float32             | mag                | Tractor-based parent magnitude in r-band (without isolate mask); MW extinction corrected            |
+| TRACTOR_PARENT_MAG_Z_NO_ISOLATE       | float32             | mag                | Tractor-based parent magnitude in z-band (without isolate mask); MW extinction corrected            |
+| SIMPLE_PHOTO_MAG_G                    | float32             | mag                | Simplest photometry magnitude in g-band (with isolate mask); MW extinction corrected                |
+| SIMPLE_PHOTO_MAG_R                    | float32             | mag                | Simplest photometry magnitude in r-band (with isolate mask); MW extinction corrected                |
+| SIMPLE_PHOTO_MAG_Z                    | float32             | mag                | Simplest photometry magnitude in z-band (with isolate mask); MW extinction corrected                |
+| APERFRAC_R4_IN_IMG_ISOLATE           | float32             |                    | Fraction of R4 aperture inside image (with isolate mask)                                            |
+| APERFRAC_R4_IN_IMG_NO_ISOLATE        | float32             |                    | Fraction of R4 aperture inside image (without isolate mask)                                         |
+| COG_PARAMS_G_ISOLATE                  | float32, shape (5,) |                    | COG fit parameters for g-band (with isolate mask)                                                   |
+| COG_PARAMS_R_ISOLATE                  | float32, shape (5,) |                    | COG fit parameters for r-band (with isolate mask)                                                   |
+| COG_PARAMS_Z_ISOLATE                  | float32, shape (5,) |                    | COG fit parameters for z-band (with isolate mask)                                                   |
+| COG_PARAMS_G_NO_ISOLATE               | float32, shape (5,) |                    | COG fit parameters for g-band (without isolate mask)                                                |
+| COG_PARAMS_R_NO_ISOLATE               | float32, shape (5,) |                    | COG fit parameters for r-band (without isolate mask)                                                |
+| COG_PARAMS_Z_NO_ISOLATE               | float32, shape (5,) |                    | COG fit parameters for z-band (without isolate mask)                                                |
+| COG_PARAMS_G_ERR_ISOLATE              | float32, shape (5,) |                    | Errors on COG fit parameters for g-band (with isolate mask)                                         |
+| COG_PARAMS_R_ERR_ISOLATE              | float32, shape (5,) |                    | Errors on COG fit parameters for r-band (with isolate mask)                                         |
+| COG_PARAMS_Z_ERR_ISOLATE              | float32, shape (5,) |                    | Errors on COG fit parameters for z-band (with isolate mask)                                         |
+| COG_PARAMS_G_ERR_NO_ISOLATE           | float32, shape (5,) |                    | Errors on COG fit parameters for g-band (without isolate mask)                                      |
+| COG_PARAMS_R_ERR_NO_ISOLATE           | float32, shape (5,) |                    | Errors on COG fit parameters for r-band (without isolate mask)                                      |
+| COG_PARAMS_Z_ERR_NO_ISOLATE           | float32, shape (5,) |                    | Errors on COG fit parameters for z-band (without isolate mask)                                      |
+| COG_MAG_ERR_ISOLATE                   | float32, shape (3,) |                    | COG magnitude errors (with isolate mask)                                                            |
+| COG_MAG_ERR_NO_ISOLATE                | float32, shape (3,) |                    | COG magnitude errors (without isolate mask)                                                         |
+| COG_SEG_ON_BLOB                       | bool                |                    | Boolean flag indicating whether object lies on the smoothed main blob used in COG analysis          |
+| COG_FIT_RESID_ISOLATE                 | float32, shape (3,) |                    | COG fit residuals for each band (with isolate mask)                                                 |
+| COG_DECREASE_MAX_LEN_ISOLATE          | float32, shape (3,) |                    | Maximum consecutive decrease length in COG for each band (with isolate mask)                        |
+| COG_DECREASE_MAX_MAG_ISOLATE          | float32, shape (3,) |                    | Magnitude decrease during the maximum consecutive decrease region in COG (with isolate mask)        |
+| COG_FIT_RESID_NO_ISOLATE              | float32, shape (3,) |                    | COG fit residuals for each band (without isolate mask)                                              |
+| COG_DECREASE_MAX_LEN_NO_ISOLATE       | float32, shape (3,) |                    | Maximum consecutive decrease length in COG for each band (without isolate mask)                     |
+| COG_DECREASE_MAX_MAG_NO_ISOLATE       | float32, shape (3,) |                    | Magnitude decrease during the maximum consecutive decrease region in COG (without isolate mask)     |
+| APER_CEN_RADEC_ISOLATE                | float32, shape (2,) | deg                | Aperture centroid (RA, Dec) (with isolate mask)                                                     |
+| APER_CEN_RADEC_NO_ISOLATE             | float32, shape (2,) | deg                | Aperture centroid (RA, Dec) (without isolate mask)                                                  |
+| APER_PARAMS_ISOLATE                   | float32, shape (3,) | pixels, ratio, deg | Aperture parameters: semi-major axis (pixels), b/a ratio, and position angle (with isolate mask)    |
+| APER_PARAMS_NO_ISOLATE                | float32, shape (3,) | pixels, ratio, deg | Aperture parameters: semi-major axis (pixels), b/a ratio, and position angle (without isolate mask) |
+| APER_SOURCE_ON_ORG_BLOB               | bool                |                    | Boolean flag indicating whether DESI source lies on the unsmoothed detection blob                   |
+| NEAREST_STAR_NORM_DIST                | float32             |                    | Distance to nearest star in units of the star masking radius                                        |
+| NEAREST_STAR_MAX_MAG                  | float32             | mag                | Brightest magnitude (across BP, RP, or G) of the nearest star                                       |
+| NUM_TRACTOR_SOURCES_NO_ISOLATE        | int32               |                    | Number of Tractor sources associated with parent galaxy (without isolate mask)                      |
+| NUM_TRACTOR_SOURCES_ISOLATE           | int32               |                    | Number of Tractor sources associated with parent galaxy (with isolate mask)                         |
+| APER_R2_MU_R_ELLIPSE_TRACTOR                  | float32             |                    | r-band surface brightness of parent galaxy within R2 aperture (Tractor model)                           |
+| APER_R2_MU_R_BLOB_TRACTOR                  | float32             |                    | r-band surface brightness of parent galaxy within segmented blob (Tractor model)                              |
+| APERFRAC_R4_IN_IMG_DATA_NO_ISOLATE | float32             |                    | Fraction of R4 aperture on parent galaxy reconstruction (g+r+z) inside image                        |
 
 </details>
 
@@ -172,9 +233,15 @@ Contact: Viraj Manwadkar (virajvm@stanford.edu)
 
 <br>
 
-
+| Name | Type | Units | Description |
+|------|------|-------|-------------|
+| TARGETID | int64 |  | DESI TARGET ID |
+| COEFFS | float32, shape (30,)  |  | 20 NNMF + 10 PCA spectral template coefficients  |
+| UMAP_D2 | float32, shape (2,) |  | 2D UMAP coordinates |
+| UMAP_D3 | float32, shape (3,) |  | 3D UMAP coordinates |
 
 </details>
+
 
 
 <details>
@@ -239,6 +306,8 @@ Contact: Viraj Manwadkar (virajvm@stanford.edu)
 
 
 
+### Additional Notes
+
 <details>
 <summary><strong>DWARF_MASKBIT Descriptions</strong></summary>
 
@@ -265,5 +334,22 @@ A value of `1 << n` indicates that the bit at position `n` is set.
 | 11 | 2048 | Large reduced  $\chi^2 > 10$ (at least one band) if using original Tractor photometry | 
 | 12 | 4096 | Source within twice of SGA-2020 galaxy at same redshift, but not flagged as SGA-2020 source in Tractor  | 
 | 13 | 8192 | Low signal-to-noise detection (SNR > 5 in only one band or less) | 
+| 14 | 16384 | If `MAG_TYPE = TRACTOR_ORIGINAL` and `TRACTOR_MASKBITS` has at least one of {2,3,4,8,9} [Tractor bits](https://www.legacysurvey.org/dr9/bitmasks/) flagged  | 
 
 </details>
+
+
+<details>
+<summary><strong>MAG_TYPE Descriptions</strong></summary>
+
+<br>
+
+<a name="mag-type-description"></a>
+
+TRACTOR_ORIGINAL = 
+COG = 
+SIMPLE = 
+TRACTOR_BASED = 
+
+</details>
+

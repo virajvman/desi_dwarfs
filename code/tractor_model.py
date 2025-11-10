@@ -604,11 +604,18 @@ def get_main_blob_sources(i, ra, dec, tgid, zred, file_path, img_path, width, pi
             print(f"The parent source catalog existed for {tgid}, but no sources remain after parent mask.")
             
             #there were no sources to subtract and so we can save an empty array!
-            # np.save(f"{file_path}/tractor_parent_galaxy_model.npy", np.zeros((3, width, width))  )
+            np.save(f"{file_path}/tractor_parent_galaxy_model.npy", np.zeros((3, width, width))  )
+            
+            np.save(f"{file_path}/tractor_main_segment_model.npy", np.zeros((3, width, width))  )
+            
             pass
 
     else:
         print(f"The parent source catalog file did not exist for {tgid}! Skipping tractor model generation")
+
+        np.save(f"{file_path}/tractor_parent_galaxy_model.npy", np.zeros((3, width, width))  )
+            
+        np.save(f"{file_path}/tractor_main_segment_model.npy", np.zeros((3, width, width))  )
     
     return
 

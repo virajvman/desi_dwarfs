@@ -255,6 +255,20 @@ def aper_cen_masked(cat,verbose=True):
     return bad_mask
 
 
+def no_seg_found(cat, verbose=True):
+    '''
+    This is if a source is likely shred, and no smooth segment is found. It could be suspcisious ... it could also be fain
+    '''
+
+    bad_mask = (cat["COG_NUM_SEG_SMOOTH"]==0) & (cat["COG_NUM_SEG"]==0)
+
+    bad_frac = np.sum(bad_mask)/len(bad_mask)
+    if verbose:
+        print(f"MASKBIT=2^11, no seg found, fraction: {bad_frac:4f}")
+    
+    return bad_mask
+
+    
 def iffy_tractor_model(cat, rchi_cut = 10, verbose=True):
     '''
     If the SNR on photometry is < 5 in all bands, or rchisq bad or something ... 
@@ -264,7 +278,7 @@ def iffy_tractor_model(cat, rchi_cut = 10, verbose=True):
 
     if verbose:
         bad_frac = np.sum(bad_mask)/len(bad_mask) 
-        print(f"MASKBIT=2^11, bad rchisq, fraction: {bad_frac:4f}")
+        print(f"MASKBIT=2^12, bad rchisq, fraction: {bad_frac:4f}")
 
     return bad_mask
 
@@ -272,7 +286,7 @@ def iffy_tractor_model(cat, rchi_cut = 10, verbose=True):
 def near_sga_outskirts(cat, norm_dist=2, verbose=True):
     """
     Flag sources that are near the outskirts of an SGA galaxy (1 < norm_dist < 2)
-    but are NOT MASKBITS bit 12, that is, known association with SGA
+    but are NOT MASKBITS bit 13, that is, known association with SGA
     """
     # 1. Identify sources in the outskirts. The lower bound is to remove the small number of sources that are on SGA galaxy, but just for some reason MASKBIT not flagged
     in_outskirts = (cat["SGA_D26_NORM_DIST"] > 1) & (cat["SGA_D26_NORM_DIST"] < norm_dist)
@@ -286,7 +300,7 @@ def near_sga_outskirts(cat, norm_dist=2, verbose=True):
 
     if verbose:
         bad_frac = np.sum(bad_mask)/len(bad_mask) 
-        print(f"MASKBIT=2^12, near sga outskirts, fraction: {bad_frac:4f}")
+        print(f"MASKBIT=2^13, near sga outskirts, fraction: {bad_frac:4f}")
 
     return bad_mask
 
@@ -302,11 +316,33 @@ def low_SNR(cat, sigma_cut=5, nbands=2, verbose=True):
 
     if verbose:
         bad_frac = np.sum(bad_snr_mask)/len(bad_snr_mask) 
-        print(f"MASKBIT=2^13, low snr, fraction: {bad_frac:4f}")
+        print(f"MASKBIT=2^14, low snr, fraction: {bad_frac:4f}")
 
     return bad_snr_mask
 
 
+def other_tractor_maskbits(cat,verbose=True):
+    '''
+    Note that we already remove sources with 1,5,6,7,13 from the original catalog. So, here, we will flag additional sources where tractor says 2,3,4,8,9
+    '''
+    
+    maskbits_to_flag = [2, 3, 4, 8, 9]  # bits to check
+    maskbits_values = [2**b for b in maskbits_to_flag]
+
+    tractor_maskbits = cat["MASKBITS"].data
+
+    # Create boolean mask where any of those bits are set
+    tractor_flag_mask = np.zeros(len(tractor_maskbits), dtype=bool)
+    for val in maskbits_values:
+        tractor_flag_mask |= (tractor_maskbits & val) != 0
+
+    if verbose:
+        bad_frac = np.mean(tractor_flag_mask)
+        print(f"MASKBIT=2^15, Tractor maskbit flagged: {bad_frac:.4f}")
+
+    return tractor_flag_mask
+
+    
 ### 
 #GENERAL MASKBIT FUNCTIONS
 ###
@@ -324,9 +360,11 @@ bitmask_dict = {
     8: {"value": 1 << 8, "description": "source not on segment", "func": source_not_on_segment_mask },
     9: {"value": 1 << 9, "description": "shredded and near bstar", "func": very_near_bstar },
     10: {"value": 1 << 10, "description": "cop aper center masked", "func": aper_cen_masked },
-    11: {"value": 1 << 11, "description": "org tractor, bad rchisq", "func": iffy_tractor_model},
-    12: {"value": 1 << 12, "description": "near SGA outskirts", "func": near_sga_outskirts},
-    13: {"value": 1 << 13, "description": "low sigma detection", "func": low_SNR}
+    11: {"value": 1 << 11, "description": "no seg found", "func": no_seg_found },
+    12: {"value": 1 << 12, "description": "org tractor, bad rchisq", "func": iffy_tractor_model},
+    13: {"value": 1 << 13, "description": "near SGA outskirts", "func": near_sga_outskirts},
+    14: {"value": 1 << 14, "description": "low sigma detection", "func": low_SNR},
+    15: {"value": 1 << 15, "description": "tractor maskbits", "func": other_tractor_maskbits}   
 }
 
 def create_shred_maskbits_from_dict(cat, bitmasks_to_apply = [0,1,2,3,4,5,6,7,8,9,10,12], verbose=False, mag_type = "_BEST"):

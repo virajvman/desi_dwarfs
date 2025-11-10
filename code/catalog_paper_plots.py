@@ -124,66 +124,6 @@ def make_shred_panel(bgsb_shreds, bgsf_shreds, elg_shreds):
 
 
 
-def make_pcnn_completeness():
-    '''
-    This function makes the completeness and purity of pCNN threshold plot
-    '''
-
-    #this is the entire shredded catalog that also includes PCNN_FRAGMENT COLUMN
-    data_main = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v4.fits")
-    
-    frag_comp = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/fragment_completeness.npy")
-    good_impure = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/shred_classifier_output/good_impurity.npy")
-    #this grid is defined in the shred_classifier.py file
-    thresh_grid = np.linspace(0., 0.999, 40)
-        
-    # Create the figure and gridspec
-    fig = plt.figure(figsize=(4, 4*4/3))
-    gs = fig.add_gridspec(2, 1, height_ratios=[1, 3], hspace=0.0)
-    
-    # Top: histogram
-    ax_hist = fig.add_subplot(gs[0])
-    
-    # Bottom: line plot
-    ax_plot = fig.add_subplot(gs[1], sharex=ax_hist)
-    
-    # Plot histogram
-    ax_hist.hist(data_main["PCNN_FRAGMENT"], density=True,bins=np.linspace(0,1,20), color='gray', alpha=0.7)
-    # ax_hist.set_ylabel('')
-    ax_hist.tick_params(labelbottom=False)  # Hide x labels on hist
-    ax_hist.set_yticks([])
-    # ax_hist.axvline(0.4, color = "k", ls = "--", lw = 1, alpha = 0.5)
-    ax_hist.set_ylabel(r"$N(p_{\rm CNN})$",fontsize = 13)
-    
-    color_frag = "mediumblue"
-    color_good = "firebrick"
-    
-    # Plot line
-    ax_plot.plot(thresh_grid, frag_comp,lw = 3,color = color_frag)
-    ax_plot.plot(thresh_grid, good_impure,lw = 3,color = color_good)
-    
-    # ax_plot.set_xlabel('X')
-    # ax_plot.set_ylabel('Y')
-    ax_plot.set_xlim([0,1])
-    ax_plot.set_ylim([0,1])
-    ax_plot.set_xlabel(r"Threshold $p_{\rm CNN}$",fontsize = 15)
-
-    ax_plot.axvline(0.5, color = "k", ls = "--", lw = 1,alpha = 0.4)
-    
-    ax_plot.text(0.35,0.22,r"$\frac{N( > p_{\rm CNN}, \text{Not Fragment}  ) }{N( > p_{\rm CNN}  )}$",fontsize = 15,
-                 color = color_good)
-    
-    ax_plot.text(0.075,0.86,r"$\frac{N( > p_{\rm CNN}, \text{ Fragment}  ) }{N( \text{Fragment}  )}$",fontsize = 15,
-                 color = color_frag)
-    
-    plt.savefig("/global/homes/v/virajvm/DESI2_LOWZ/quenched_fracs_nbs/paper_plots/pcnn_threshold.pdf",bbox_inches="tight")
-    
-    plt.close()
-
-    return
-
-
-
 
 
 def make_shred_frac_plot():

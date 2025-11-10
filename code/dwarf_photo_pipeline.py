@@ -27,7 +27,7 @@ from desiutil import brick
 import fitsio
 from easyquery import Query, QueryMaker
 import shutil
-from process_tractors import get_nearby_source_catalog, are_more_bricks_needed, return_sources_wneigh_bricks, read_source_pzs, read_source_cat
+from process_tractors import get_nearby_source_catalog, are_more_bricks_needed, return_sources_wneigh_bricks, read_source_pzs, read_source_cat, remove_source_cat_duplicates
 from functools import partial
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from PIL import Image
@@ -38,11 +38,12 @@ import glob
 from shred_classifier import get_pcnn_data_inputs
 from aperture_cogs import make_empty_tractor_cog_dict
 
-
-def stack_results(results, key):
+def stack_results(results, key,verbose=False):
     '''
     Stack outputs from different sources into a common array to be fed to astropy table
     '''
+    if verbose:
+        print(key)
     arrs = [np.atleast_1d(r[key]) for r in results]
     out = np.vstack(arrs)
     if out.shape[1] == 1:  # scalar case
@@ -242,18 +243,19 @@ def get_relevant_files_aper(input_dict):
     if os.path.exists(top_path_k + "/source_cat_f.fits"):
         pass
     else:
-        print(f"Source catalog did not exist! Making one: {top_path_k}")
-        get_nearby_source_catalog(ra_k, dec_k, objid_k, brickid_k, box_size, wcat, brick_i, top_path_k, source_cat, source_pzs_i)
-        
-        ## check if the source is at the edge of the brick, if so we will need to combine stuff
-        more_bricks, more_wcats, more_sweeps = are_more_bricks_needed(ra_k,dec_k,radius_arcsec = int(box_size*0.262/2)  )
+        # print(f"Source catalog did not exist! Making one: {top_path_k}")
+        get_nearby_source_catalog(ra_k, dec_k, objid_k, brickid_k, box_size, wcat, brick_i, top_path_k, source_cat, sweep_name = sweep_folder, source_pzs=source_pzs_i)
     
-        if len(more_bricks) == 0:
-            #there are no neighboring bricks needed
-            pass
-        else:
-            return_sources_wneigh_bricks(top_path_k, ra_k, dec_k, objid_k, brickid_k, box_size, more_bricks, more_wcats, more_sweeps,use_pz = False)
-            
+    ## check if the source is at the edge of the brick, if so we will need to combine stuff
+    more_bricks, more_wcats, more_sweeps = are_more_bricks_needed(ra_k,dec_k,radius_arcsec = int(box_size*0.262/2)  )
+
+    if len(more_bricks) == 0:
+        #there are no neighboring bricks needed
+        pass
+    else:
+        return_sources_wneigh_bricks(top_path_k, ra_k, dec_k, objid_k, brickid_k, box_size, more_bricks, more_wcats, more_sweeps,use_pz = False)
+
+
     if os.path.exists(image_path):
         pass
     else:
@@ -690,14 +692,14 @@ if __name__ == '__main__':
     if use_sample == "clean":
         top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_good"
 
-
     ##load the relevant catalogs!
     if use_sample == "shred":
         file_to_read = shreds_file
     if use_sample == "sga":
         file_to_read = sga_file
     if use_sample == "clean":
-        file_to_read = clean_file
+        #I THINK THE CORRECT FILE IS BEIGN USED HERE
+        file_to_read = clean_file_2
 
     shreds_all = Table.read(file_to_read)
 
@@ -760,36 +762,38 @@ if __name__ == '__main__':
     
         print(f"Number of objects in south: {len(shreds_focus[shreds_focus['is_south'] == 1])}" )
         print(f"Number of objects in north: {len(shreds_focus[shreds_focus['is_south'] == 0])}" )
-        
+
         for wcat_ind, wcat in enumerate(["north","south"]):
+        
             check_path_existence(all_paths=[top_folder + "/%s"%wcat])
             
             ##we can invert this if we want to make sure all cats are being made without long code times
             unique_sweeps = np.unique( shreds_focus[shreds_focus["is_south"] == wcat_ind]["SWEEP"])
             print(len(unique_sweeps), f"unique sweeps found in {wcat}")
-
+    
             shreds_focus_w = shreds_focus[(shreds_focus["is_south"] == wcat_ind)]
     
             unique_bricks_w = np.unique(shreds_focus_w["BRICKNAME"])
-
+    
+    
             print(f"{len(unique_bricks_w)} unique bricks found in {wcat}")
             print(f"{len(shreds_focus_w)} number of galaxies found in {wcat}")
-
+    
             ##this is the number of bricks we will process at one time!
             brick_chunk = 256
             
             print(f"Bricks will be processed in chunks of {brick_chunk}")
-
+    
             #the number of brick jobs we have to process
             num_bricks = len(unique_bricks_w)
-
+    
              # Fix everything except brick_i
             create_brick_jobs_fixed = partial(create_brick_jobs, shreds_focus_w=shreds_focus_w, wcat=wcat, top_folder=top_folder)
-
+    
             for min_brick_id in trange(0, num_bricks, brick_chunk):
                 #get the relevant brick names in this chunk
                 unique_bricks_chunki = unique_bricks_w[ min_brick_id : min_brick_id + brick_chunk]
-
+    
                 # with ThreadPoolExecutor(max_workers=64) as executor:
                     # all_brick_jobs = list(tqdm( executor.map(create_brick_jobs_fixed, unique_bricks_chunki),
                     #                            total=len(unique_bricks_chunki),
@@ -798,17 +802,17 @@ if __name__ == '__main__':
                 #we do not care about the order in the brick jobs!!
                 #doing the prep work before running the actual job!!
                 all_brick_jobs = []
-                with ThreadPoolExecutor(max_workers=64) as executor:
+                with ThreadPoolExecutor(max_workers=62) as executor:
                     futures = [executor.submit(create_brick_jobs_fixed, brick_i) for brick_i in unique_bricks_chunki]
                 
                     for future in tqdm(as_completed(futures), total=len(futures), desc="Creating brick jobs!"):
                         all_brick_jobs.append(future.result())
-
+    
                                           
                 ##all_brick_jobs is the list we will be sending to different cores. One item is this list corresponds to list of all galaxies in a single brick!
             
                 ##each brick will be processed on a core, and within each brick, the galaxies will be multi-threading!
-                with mp.Pool(processes=ncores) as pool:
+                with mp.Pool(processes=ncores) as pool: 
                     results = list(tqdm(pool.imap(process_bricks_parallel, all_brick_jobs), total=len(all_brick_jobs), desc="Bricks"))
 
 
@@ -914,16 +918,17 @@ if __name__ == '__main__':
 
             source_cat_f = Table.read(source_file)
 
-            ##remove the potential duplicates!
-            coords = np.array(list(zip(source_cat_f["ra"].data, source_cat_f["dec"].data )))
-    
-            # Find unique rows based on RA and DEC
-            _, unique_indices = np.unique(coords, axis=0, return_index=True)
+            # ##remove the potential duplicates!
+            # coords = np.array(list(zip(source_cat_f["ra"].data, source_cat_f["dec"].data )))
+            # # Find unique rows based on RA and DEC
+            # _, unique_indices = np.unique(coords, axis=0, return_index=True)
+            # # Keep only the unique rows
+            # source_cat_f = source_cat_f[unique_indices]
+
+            #removing any potentially duplicated sources due to overlapping bricks!
+            source_cat_f = remove_source_cat_duplicates(source_cat_f)
             
-            # Keep only the unique rows
-            source_cat_f = source_cat_f[unique_indices]
-            
-            ##read the relevant image files!!
+            ##read the relevant image files!! 
             if os.path.exists(img_path_k):
                 img_data = fits.open(img_path_k)
                 data_arr = img_data[0].data

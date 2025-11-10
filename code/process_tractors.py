@@ -13,9 +13,9 @@ url_prefix = 'https://www.legacysurvey.org/viewer/'
 from desiutil import brick
 import fitsio
 from desi_lowz_funcs import print_stage, check_path_existence, is_target_in_south, match_c_to_catalog, get_sweep_filename
+from scipy.spatial import cKDTree
 
-
-def get_nearby_source_catalog(ra_k, dec_k, objid_k, brickid_k, box_size, wcat, brick_i, save_path_k, source_cat, source_pzs=None,save=True,primary=True):
+def get_nearby_source_catalog(ra_k, dec_k, objid_k, brickid_k, box_size, wcat, brick_i, save_path_k, source_cat, sweep_name=None, source_pzs=None,save=True,primary=True):
     '''
     Function that gets source catalog within 45 arcsec radius of object
     primary = True if ra_k,dec_k are the main source. If False, then this function is just being used to get the relevant files!
@@ -45,12 +45,23 @@ def get_nearby_source_catalog(ra_k, dec_k, objid_k, brickid_k, box_size, wcat, b
     source_cat_f.rename_column("brickid","BRICKID" )
     source_cat_f.rename_column("objid","OBJID" )
 
-    if source_pzs is None:
-        pass
-    else:
-        ## unique identifier hash is RELEASE,BRICKID,OBJID.
-        # Perform the join operation on 'brickid' and 'objid'
-        source_cat_f = join(source_cat_f, source_pzs, keys=['BRICKID', 'OBJID'], join_type='inner')
+    # if source_pzs is None:
+    #     pass
+    # else:
+    #     ## unique identifier hash is RELEASE,BRICKID,OBJID.
+    #     # Perform the join operation on 'brickid' and 'objid'
+    #     source_cat_f = join(source_cat_f, source_pzs, keys=['BRICKID', 'OBJID'], join_type='inner')
+
+    #GET THE DR9 PHOTO-Z OF THE TARGETED SOURCE!
+    if primary == True:
+        sweep_pz_name = sweep_name + "-pz.fits"
+        pz_cat = read_source_pzs(wcat,sweep_pz_name, include_cols = ["BRICKID", "OBJID", "Z_PHOT_MEAN", "Z_PHOT_STD"])
+        #then we select by the target sources's objid and brickid
+        pz_tgt = pz_cat[ (pz_cat["OBJID"] == objid_k) & (pz_cat["BRICKID"] == brickid_k)  ]
+
+        #save this!
+        pz_tgt.write(save_path_k + "/target_pz_cat.fits",overwrite=True)
+        
 
     for BAND in ("g", "r", "z"):
             source_cat_f[f"sigma_{BAND}"] = source_cat_f[f"flux_{BAND}"] * np.sqrt(source_cat_f[f"flux_ivar_{BAND}"])
@@ -247,7 +258,7 @@ def read_source_cat(wcat, brick_i):
         brick_folder = brick_i[:brick_i.find("m")-1]
 
 
-    imp_cols = ["ra","dec","ref_cat","type","pmra","pmdec","pmra_ivar","pmdec_ivar", "brickid", "objid", "gaia_phot_bp_mean_mag", "gaia_phot_rp_mean_mag", "gaia_phot_g_mean_mag"]
+    imp_cols = ["ra","dec", "brick_primary" ,"ref_cat", "type","pmra","pmdec","pmra_ivar","pmdec_ivar", "brickid", "objid", "gaia_phot_bp_mean_mag", "gaia_phot_rp_mean_mag", "gaia_phot_g_mean_mag"]
 
 
     #these other cols are for the source model reconstruction
@@ -264,18 +275,33 @@ def read_source_cat(wcat, brick_i):
         include_cols.append( "flux_ivar_%s"%bi )
         include_cols.append( "mw_transmission_%s"%bi )
         include_cols.append( "fracflux_%s"%bi )
+
         
     ## only read the columns I need
+
     source_cat = Table(fitsio.read("/global/cfs/cdirs/cosmo/data/legacysurvey/dr9/%s/tractor/%s/tractor-%s.fits"%(wcat, brick_folder,brick_i), columns = include_cols  ))
 
+    #we only keep brick_primary=True sources
+    source_cat = source_cat[ source_cat["brick_primary"] == True ]
+    
     return source_cat
 
 
-def read_source_pzs(wcat, sweep_i):
+def read_source_pzs(wcat, sweep_i, include_cols = ["Z_PHOT_L95", "Z_PHOT_U95","Z_PHOT_L68", "Z_PHOT_U68", "Z_PHOT_STD", "Z_PHOT_MEAN", "BRICKID", "OBJID"]):
     '''
     Function that reads the source photo-zs sweeps. sweep_i is taken from the "SWEEP" columns in the catalog
     '''
-    include_cols = ["Z_PHOT_L95", "Z_PHOT_U95","Z_PHOT_L68", "Z_PHOT_U68", "Z_PHOT_STD", "Z_PHOT_MEAN", "BRICKID", "OBJID"]
+
     source_pzs_i = Table(fitsio.read( "/global/cfs/cdirs/cosmo/data/legacysurvey/dr9/%s/sweep/9.1-photo-z/"%wcat + sweep_i, columns = include_cols))
 
     return source_pzs_i
+
+
+
+def remove_source_cat_duplicates(parent_cat):
+    """
+    Remove duplicate sources by insisting brick_primary=True, This is already done in the initial source cat construction phase, but just to make sure
+    """
+
+    return parent_cat[parent_cat["brick_primary"] == True]
+

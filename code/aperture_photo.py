@@ -442,6 +442,7 @@ def run_aperture_pipe(input_dict):
                     "closest_star_dist": closest_star_dist,
                     "closest_star_mag": closest_star_mag,
                     "aper_r3_mags": 3*[np.nan],
+                    "aper_r3_mags_no_sub": 3*[np.nan],
                     "save_path": save_path,
                     "save_summary_png": None,
                     "closest_star_norm_dist": closest_star_norm_dist,
@@ -580,6 +581,7 @@ def run_aperture_pipe(input_dict):
                         "closest_star_dist": closest_star_dist,
                         "closest_star_mag": closest_star_mag,
                         "aper_r3_mags": 3*[np.nan],
+                        "aper_r3_mags_no_sub": 3*[np.nan],
                         "tractor_dr9_mags": 3*[np.nan],
                         "save_path": save_path,
                         "save_summary_png": None,
@@ -591,7 +593,6 @@ def run_aperture_pipe(input_dict):
                     }
  
                 return output_dict
-            
 
 
         #define the aperture that will be used for plotting the bright star
@@ -917,6 +918,8 @@ def run_aperture_pipe(input_dict):
         source_cat_nostars_inseg_inds = []
 
         source_cat_nostars_inseg = source_cat_inseg_signi[~is_star_inseg_signi]
+
+        #TODO think: do we need to remove the non star DUP sources here??
 
         ##we save this catalog!! this will be used for the simple alternative photometry
         source_cat_nostars_inseg["source_objid_new"] = np.arange(len(source_cat_nostars_inseg))

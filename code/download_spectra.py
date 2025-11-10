@@ -25,9 +25,8 @@ def argument_parser():
     # result.add_argument('-catalog', dest='catalog', type=str, default = "") 
     result.add_argument('-min', dest='min', type=int,default = 0)
     result.add_argument('-max', dest='max', type=int,default = 500000) 
-    result.add_argument('-ncores', dest='ncores', type=int,default = 64) 
+    result.add_argument('-ncores', dest='ncores', type=int,default = 60) 
     result.add_argument('-tgids',dest="tgids_list", type=parse_tgids) 
-    result.add_argument('-run_parr', dest='run_parr',  action='store_true') 
     result.add_argument('-random', dest='random',  action='store_true') 
     result.add_argument('-nchunks',dest='nchunks', type=int,default = 1)
     result.add_argument('-save_name',dest='save_name', type = str, default = "spectra")
@@ -47,7 +46,6 @@ if __name__ == '__main__':
     max_ind = args.max
     ncores = args.ncores
     tgids_list = args.tgids_list
-    run_parr = args.run_parr
     random = args.random
     nchunks = args.nchunks
     save_name = args.save_name
@@ -58,36 +56,28 @@ if __name__ == '__main__':
 
     print_stage("Loading the DESI catalogs")
 
-    cat_path = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_combine_catalog.fits"
+    filename = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits"
 
-    data_cat = Table.read(cat_path)
+    # load the MAIN extension directly as an Astropy Table
+    data_cat = Table.read(filename, hdu="MAIN")
 
     print(f"Number of galaxies for which spectra is being downloaded = {len(data_cat)}")
 
-    # ##add what ever filter you want to apply
-    # data_cat = data_cat[ data_cat["LOGM_SAGA"] < 9.25 ]
-
-    ##if there exists a column named TARGETID_1 in the file we rename it!
-    cat_cols = data_cat.colnames
-    if "TARGETID_1" in cat_cols:
-        data_cat.rename_column("TARGETID_1", "TARGETID")
-    
     if tgids_list is not None:
         print("List of targetids to process:",tgids_list)
         data_cat = data_cat[np.isin(data_cat['TARGETID'], np.array(tgids_list) )]
         print("Number of targetids to process =", len(data_cat))
 
-
-    ##do we randomly shuffle spectra?
-    if random:
-        print("Randomly shuffling the array now!")
-        arr_inds = np.arange( len(data_cat) )
-        np.random.shuffle(arr_inds)
-        data_cat = data_cat[arr_inds]
+    # ##do we randomly shuffle spectra?
+    # if random:
+    #     print("Randomly shuffling the array now!")
+    #     arr_inds = np.arange( len(data_cat) )
+    #     np.random.shuffle(arr_inds)
+    #     data_cat = data_cat[arr_inds]
     
     #apply the max_ind cut if relevant
-    # max_ind = np.minimum( max_ind, len(data_cat) )
-    # data_cat = data_cat[min_ind:max_ind]
+    max_ind = np.minimum( max_ind, len(data_cat) )
+    data_cat = data_cat[min_ind:max_ind]
 
     print("Total number of spectra to download = %d"%len(data_cat))
 
@@ -102,7 +92,7 @@ if __name__ == '__main__':
     
     all_ks_chunks = np.array_split(all_ks, nchunks)
 
-    file_template = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/" + save_name
+    file_template = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/data/" + save_name
 
     for chunk_i in trange(nchunks):
         print_stage("Started chunk %d/%d"%(chunk_i, nchunks) )
@@ -137,7 +127,6 @@ if __name__ == '__main__':
             f.create_dataset("WAVE", data=all_waves["brz"], dtype='f4')  # shared
             f.create_dataset("FLUX", data=all_fluxs["brz"], dtype='f4')
             f.create_dataset("FLUX_IVAR", data=all_ivars["brz"], dtype='f4')
-
 
     #once we save all the chunks do we try to consolidate all the chunks?
     if nchunks == 1:
