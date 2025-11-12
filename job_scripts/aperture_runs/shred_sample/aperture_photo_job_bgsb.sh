@@ -30,7 +30,7 @@ SAMPLE="BGS_BRIGHT"
 MAKE_CATS=false      # set true/false
 RUN_APER=true
 RUN_COG=true
-RUN_SHIFTER=false
+RUN_SHIFTER=true
 
 # Command-line args
 BASE_ARGS="-sample $SAMPLE -min 0 -max 100000 -run_parr -ncores 64 -overwrite -nchunks 75 -no_cnn_cut -use_sample shred -get_cnn_inputs"

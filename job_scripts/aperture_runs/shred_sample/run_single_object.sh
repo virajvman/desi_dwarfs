@@ -16,8 +16,8 @@ fi
 MAKE_CATS=false      # set true/false
 RUN_APER=true
 RUN_COG=true
-RUN_SHIFTER=false
-TGID=39633005911739676
+RUN_SHIFTER=true
+TGID=39628516139993581
 
 # Command-line args
 BASE_ARGS="-sample $SAMPLE -min 0 -max 100000 -run_parr -ncores 1 -overwrite -nchunks 1 -no_cnn_cut -use_sample $SAMPLE_TYPE -tgids $TGID"

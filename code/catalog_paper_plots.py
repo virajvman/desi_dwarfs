@@ -836,7 +836,9 @@ def make_bar_pie(ax, tot_cat, col, bins =  np.arange(6, 9.75,0.125)):
 
 def make_cmap(base_color):
     # Create a colormap from blue to white
+    
     cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", ["white", base_color])
+    cmap.set_under(alpha=0)
     return cmap
 
 

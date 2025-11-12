@@ -40,6 +40,7 @@ rootdir = '/global/u1/v/virajvm/'
 sys.path.append(os.path.join(rootdir, 'DESI2_LOWZ/desi_dwarfs/code'))
 
 from consolidate_photometry import consolidate_new_photo
+from desi_lowz_funcs import make_alternating_plot
 
 
 
@@ -103,6 +104,10 @@ def correct_extinct(mags, extinct):
 
     return mags_new
 
+def make_fav_cmap():
+    cmr_i = cmr.gothic_r.copy()
+    cmr_i.set_under(alpha=0.)
+    return cmr_i
 
 
 def make_compare_plot_panel(ax_top, ax_bot, sga_cat, ext_mag, desi_mag, band_name,
@@ -113,11 +118,23 @@ def make_compare_plot_panel(ax_top, ax_bot, sga_cat, ext_mag, desi_mag, band_nam
     delta_mag = ext_mag - desi_mag
 
     label_font_size = 15
+    vmax=50
+
+    cmap = make_fav_cmap()
     
     # top: Δmag vs mag
+    # im = ax_top.hist2d(desi_mag, delta_mag, range=((mag_min, mag_max), (-1.5, 1.5)), bins=(bins, int(bins/3)),
+    #                    norm=LogNorm(vmin=1, vmax=200), cmap=cmr.dusk_r,rasterized=True)
     im = ax_top.hist2d(desi_mag, delta_mag, range=((mag_min, mag_max), (-1.5, 1.5)), bins=(bins, int(bins/3)),
-                       norm=LogNorm(vmin=1, vmax=200), cmap=cmr.dusk_r,rasterized=True)
-    ax_top.axhline(0, color="grey", ls="--", lw=1)
+                       vmin=0,vmax=vmax, cmap=cmap,rasterized=True)
+
+
+    xgrid = np.linspace(12,21,100)
+    
+    make_alternating_plot(ax_top,xgrid,0*xgrid,dash_len=1,color_1="yellowgreen",color_2="k",lw=1)
+    make_alternating_plot(ax_top,xgrid,0*xgrid+0.75,dash_len=1,color_1="yellowgreen",color_2="k",lw=1,alpha=0.25)
+    make_alternating_plot(ax_top,xgrid,0*xgrid-0.75,dash_len=1,color_1="yellowgreen",color_2="k",lw=1,alpha=0.25)
+
     ax_top.set_ylim(-1.5, 1.5)
 
     ax_bot.set_yticks(tickmarks)
@@ -129,11 +146,25 @@ def make_compare_plot_panel(ax_top, ax_bot, sga_cat, ext_mag, desi_mag, band_nam
         ax_top.set_yticklabels([])
     
     # bottom: mag vs mag
+    # im = ax_bot.hist2d(desi_mag, ext_mag, range=((mag_min, mag_max), (mag_min, mag_max)), bins=bins,
+                       # norm=LogNorm(vmin=1, vmax=200), cmap=cmr.dusk_r,rasterized=True,zorder=0)
+
     im = ax_bot.hist2d(desi_mag, ext_mag, range=((mag_min, mag_max), (mag_min, mag_max)), bins=bins,
-                       norm=LogNorm(vmin=1, vmax=200), cmap=cmr.dusk_r,rasterized=True,zorder=0)
-    ax_bot.plot([mag_min, mag_max], [mag_min, mag_max], lw=1, color="grey")
-    ax_bot.plot([mag_min, mag_max], [mag_min + 0.75, mag_max + 0.75], ls="--", color="grey", lw=0.75)
-    ax_bot.plot([mag_min, mag_max], [mag_min - 0.75, mag_max - 0.75], ls="--", color="grey", lw=0.75)
+                       vmin=0, vmax=vmax, cmap=cmap,rasterized=True,zorder=0)
+
+
+    # ax_bot.plot([mag_min, mag_max], [mag_min, mag_max], lw=1, color="grey")
+    # ax_bot.plot([mag_min, mag_max], [mag_min + 0.75, mag_max + 0.75], ls="--", color="grey", lw=0.75)
+    # ax_bot.plot([mag_min, mag_max], [mag_min - 0.75, mag_max - 0.75], ls="--", color="grey", lw=0.75)
+
+    xgrid = np.linspace(12,21,100)
+    
+    make_alternating_plot(ax_bot,xgrid,xgrid,dash_len=1,color_1="yellowgreen",color_2="k",lw=1)
+    
+    make_alternating_plot(ax_bot,xgrid,xgrid+0.75,dash_len=1,color_1="yellowgreen",color_2="k",lw=1,alpha=0.25)
+    make_alternating_plot(ax_bot,xgrid,xgrid-0.75,dash_len=1,color_1="yellowgreen",color_2="k",lw=1,alpha=0.25)
+
+
     ax_bot.set_xlim([mag_min, mag_max])
     ax_bot.set_ylim([mag_min, mag_max])
 
@@ -179,6 +210,8 @@ def make_compare_plot_panel(ax_top, ax_bot, sga_cat, ext_mag, desi_mag, band_nam
     return im
 
 
+
+
 def make_compare_plot_3bands(ext_mags, aper_mags, sga_cat, band_names=("g", "r", "z"),
                              save_path=None, show_plot=False, ylabel_top = r"mag$_{\rm NSA}$- mag$_{\rm aper}$", 
                              ylabel_bot = r"mag$_{\rm NSA}$", xlabel_bot = r"mag$_{aper}$ (this work)", mag_min=11, mag_max=21,
@@ -188,8 +221,8 @@ def make_compare_plot_3bands(ext_mags, aper_mags, sga_cat, band_names=("g", "r",
     band_names          : list of 3 band labels
     """
 
-    fig, axes = plt.subplots(2, 3, figsize=(15, 7), sharex=True, sharey=False,
-                             gridspec_kw={"height_ratios": [1, 3], "hspace": 0.1, "wspace": 0.15})
+    fig, axes = plt.subplots(2, 3, figsize=(15, 6.15), sharex=True, sharey=False,
+                             gridspec_kw={"height_ratios": [1, 3], "hspace": 0.0, "wspace": 0.15})
 
 
     if len(aper_mags[1]) != len(sga_cat):
@@ -313,11 +346,11 @@ def plot_ellipse(ax, aper_xcen, aper_ycen, scale_f, r50_pix, ba_ratio, phi_deg, 
     ax[0].add_patch(ell)
     return
 
-def draw_label_line(ax, line_start, line_y, color, ls, alpha):
+def draw_label_line(ax, line_start, line_y, color, ls, alpha, lw = 2):
     # line_start = 0.25 - offset
     # line_y = yloc - 0.09
     ax[0].plot([line_start -0.1, line_start+0.1], [line_y,line_y],
-               color = color,ls=ls, alpha=alpha, lw = 2,
+               color = color,ls=ls, alpha=alpha, lw = lw,
               transform=ax[0].transAxes)
     return
 
@@ -451,19 +484,19 @@ def plot_one_panel_model_comp(ax,targetid, new_cat, siena_cat,
         
     #draw a line right underneath this to show
     if draw_color_label_line:
-        draw_label_line(ax, 0.25 - offset, yloc - 0.09, trac_color, trac_ls, alpha)
-        draw_label_line(ax, 0.5 , yloc - 0.09, new_color, new_ls, alpha)
-        draw_label_line(ax, 0.75 + offset, yloc - 0.09, sga_color, sga_ls, alpha)
+        draw_label_line(ax, 0.25 - offset, yloc - 0.09, trac_color, trac_ls, alpha,lw = linewidth + 0.5)
+        draw_label_line(ax, 0.5 , yloc - 0.09, new_color, new_ls, alpha, lw = linewidth)
+        draw_label_line(ax, 0.75 + offset, yloc - 0.09, sga_color, sga_ls, alpha, lw = linewidth - 0.5)
         
 
     ##plot the SGA aperture
-    plot_ellipse(ax, x_sga, y_sga, scale_f, sga_sma, sga_ba, sga_pa, sga_color, linewidth, sga_ls, alpha)
+    plot_ellipse(ax, x_sga, y_sga, scale_f, sga_sma, sga_ba, sga_pa, sga_color, linewidth-0.5, sga_ls, alpha)
 
     ##plot the new aperture
-    plot_ellipse(ax, aper_xcen, aper_ycen, scale_f, r50_new, aper_params[0], aper_params[1], new_color, linewidth, new_ls, alpha)
+    plot_ellipse(ax, aper_xcen, aper_ycen, scale_f, r50_new, aper_params[0], aper_params[1], new_color, linewidth, new_ls, alpha=1)
 
     #plot the tractor aperture
-    plot_ellipse(ax, trac_xcen, trac_ycen, scale_f, r50_trac, trac_ba, trac_phi, trac_color, linewidth, trac_ls, alpha)
+    plot_ellipse(ax, trac_xcen, trac_ycen, scale_f, r50_trac, trac_ba, trac_phi, trac_color, linewidth+0.5, trac_ls, alpha)
 
     for axi in ax:
         axi.set_xticks([])

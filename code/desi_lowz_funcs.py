@@ -1266,7 +1266,6 @@ def match_fastspec_catalog_targetid(gal_cat, vac_data):
         print("No valid matches found; all rows filled with NaN.")
 
         
-
     return vac_aligned
 
 
@@ -1276,7 +1275,9 @@ def match_fastspec_catalog(gal_cat,coord_name = "",match_method = "RADEC"):
     '''
     
     #fastspec catalog
-    vac_data = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_fastspec_catalog/iron_fastspec_v3.fits")
+    # vac_data = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_fastspec_catalog/iron_fastspec_v3.fits")
+    vac_data = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_fastspec_catalog/iron_fastspec_v21.fits")
+    
 
     if match_method == "RADEC":
         
@@ -2179,3 +2180,34 @@ def clear_files():
     
     return
 
+
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.collections import LineCollection
+
+
+def make_alternating_plot(ax,x,y,dash_len=5,color_1="yellowgreen",color_2="k",lw=1,alpha=1):
+    '''
+    dash_len is in number of points
+    '''
+
+    # Create segments of the line
+    points = np.array([x, y]).T.reshape(-1, 1, 2)
+    segments = np.concatenate([points[:-1], points[1:]], axis=1)
+
+    # Alternate colors for each segment
+    colors = []
+    for i in range(len(segments)):
+        # Alternate every `dash_len` segments
+        if (i // dash_len) % 2 == 0:
+            colors.append(color_1)
+        else:
+            colors.append(color_2)
+    
+    # Create the line collection
+    lc = LineCollection(segments, colors=colors, linewidth=lw,alpha=alpha)
+    
+    ax.add_collection(lc)
+
+    return 
+    

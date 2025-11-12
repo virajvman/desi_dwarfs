@@ -495,8 +495,8 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
     #let us duplicate the RA,DEC to RA_TARGET,DEC_TARGET
     #for the shredded sources, the RA,DEC columns will be updated!
     
-    # catalog["RA_TARGET"] = catalog["RA"].copy()
-    # catalog["DEC_TARGET"] = catalog["DEC"].copy()
+    catalog["RA_TARGET"] = catalog["RA"].copy()
+    catalog["DEC_TARGET"] = catalog["DEC"].copy()
     catalog.rename_column("DIST_MPC_FIDU", "LUMI_DIST_MPC")
 
     catalog["MAG_G_TARGET"]  = catalog["MAG_G"].copy()
@@ -545,13 +545,15 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
         catalog["LOG_MSTAR_M24"] = log_mstars_M24
 
         print("Adding DWARF MASKBIT columns to clean catalog")
-        clean_maskbits = create_shred_maskbits_from_dict(catalog, bitmasks_to_apply = [7,11,12,13,14], verbose=True, mag_type = "")
+        clean_maskbits = create_shred_maskbits_from_dict(catalog, bitmasks_to_apply = [7,12,13,14,15], verbose=True, mag_type = "")
 
         catalog["DWARF_MASKBIT"] = clean_maskbits
 
         #add the SHAPE_PARAMS column
-        org_aper_params = np.vstack([catalog["SHAPE_R"].data,catalog["BA"].data,catalog["PHI"].data]).T.astype(np.float32)
+        org_aper_params = np.vstack([catalog["BA"].data,catalog["PHI"].data]).T.astype(np.float32)
         catalog["SHAPE_PARAMS"] = org_aper_params
+
+        catalog["R50_R"] = catalog["SHAPE_R"].data
 
     else:
         print("Processing shred catalog!")
@@ -785,7 +787,7 @@ def get_fastspec_matched_catalog(gal_cat, save_name, match_method = "TARGETID"):
     Get the RA,DEC matched fastspec catalog and save it   
     '''
 
-    print("TODO: UPDATE THIS WITH THE FASTSPEC V2 CATALOG!")
+    #make sure the catalog being matched to us v2
     fastspec_cat = match_fastspec_catalog(gal_cat,coord_name = "",match_method = match_method)
 
     #make sure this is not a masked column!

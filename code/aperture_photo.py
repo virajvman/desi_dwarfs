@@ -223,6 +223,13 @@ def safe_get_col(col, fill_value=""):
     return arr
     
 
+def decode_str_column(table, column):
+
+    str_col = np.char.decode(table[column], "utf-8").astype(str)
+
+    return str_col
+
+
 def select_dup_stars_g2(source_cat_f, g2_dup_star, radius_arcsec=2):
     """
     Identify sources that are likely stars based on the presence of PSF sources
@@ -248,8 +255,8 @@ def select_dup_stars_g2(source_cat_f, g2_dup_star, radius_arcsec=2):
     """
 
     # Identify PSF-type sources that are NOT from G2
-    type_col = np.array(source_cat_f["type"])
-    ref_col  = np.array(source_cat_f["ref_cat"])
+    type_col = decode_str_column(source_cat_f, "type") 
+    ref_col  = decode_str_column(source_cat_f, "ref_cat")
     psf_mask = (type_col == "PSF") & (ref_col != "G2")
 
     # If no PSF sources exist, nothing can be confirmed
@@ -266,7 +273,7 @@ def select_dup_stars_g2(source_cat_f, g2_dup_star, radius_arcsec=2):
 
     # Find all DUP–PSF pairs within the radius
     idx_dup, idx_psf, sep2d, _ = psf_coords.search_around_sky(dup_coords, radius_arcsec * u.arcsec)
-
+        
     # If no nearby PSFs, no DUP sources are confirmed
     if len(idx_dup) == 0:
         return np.zeros(len(source_cat_f), dtype=bool)
@@ -275,9 +282,12 @@ def select_dup_stars_g2(source_cat_f, g2_dup_star, radius_arcsec=2):
     all_coords = SkyCoord(source_cat_f["ra"], source_cat_f["dec"], unit="deg")
     confirmed_dup_coords = dup_coords[np.unique(idx_dup)]
 
+    ref_col = decode_str_column(source_cat_f, "ref_cat")
+
     idx_all_within = []
     for c in confirmed_dup_coords:
-        idx_nearby = (all_coords.separation(c) < (radius_arcsec * u.arcsec)) & (source_cat_f["ref_cat"].data != "L3") & (source_cat_f["separations"].data > 1e-2)
+        idx_nearby = (all_coords.separation(c) < (radius_arcsec * u.arcsec)) & (ref_col != "L3") & (source_cat_f["separations"].data > 1e-2)
+        
         #the separations is arcsec separation between target source and tractor source
         #thus requiring that conditions means that we will always include the observed source in case it happens to be very close to the 
         idx_all_within.append(np.where(idx_nearby)[0])
@@ -373,6 +383,7 @@ def run_aperture_pipe(input_dict):
     signi_pm = (pmra_snr > 2) | (pmdec_snr > 2)
 
     #mask for all sources that are psf type
+    
     star_psf_model = (source_cat_f['type'] == "PSF")
 
     #get all the DUP sources that are in G2 and have some PM. Note that PSF and DUP are two different source types

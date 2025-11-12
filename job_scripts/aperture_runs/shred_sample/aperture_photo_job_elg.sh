@@ -9,7 +9,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=192GB
-#SBATCH --time=07:00:00
+#SBATCH --time=08:00:00
 #SBATCH --job-name=elg_shred
 #SBATCH --output=aperture_shred_job_elg.log
 
@@ -28,9 +28,9 @@ export NUMEXPR_NUM_THREADS=1
 # ------------------------------
 SAMPLE="ELG"
 MAKE_CATS=false      # set true/false
-RUN_APER=false
+RUN_APER=true
 RUN_COG=true
-RUN_SHIFTER=false
+RUN_SHIFTER=true
 
 # Command-line args
 BASE_ARGS="-sample $SAMPLE -min 0 -max 100000 -run_parr -ncores 64 -overwrite -nchunks 100 -no_cnn_cut -use_sample shred -get_cnn_inputs"

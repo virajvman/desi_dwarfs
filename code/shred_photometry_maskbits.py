@@ -19,7 +19,12 @@ def cog_nan_mask(cat,verbose=True):
     '''
     Function that contructs mask for objects where the fiducial COG mags are nan. MASKBIT = 0
     '''
-    nan_mask = np.isnan(cat["COG_MAG_G_FINAL"].data) | np.isnan(cat["COG_MAG_R_FINAL"].data) | np.isnan(cat["COG_MAG_Z_FINAL"].data)
+    # nan_mask = np.isnan(cat["COG_MAG_G_FINAL"].data) | np.isnan(cat["COG_MAG_R_FINAL"].data) | np.isnan(cat["COG_MAG_Z_FINAL"].data)
+    
+    nan_mask_1 = np.isnan(cat["COG_MAG_G_ISOLATE"].data) | np.isnan(cat["COG_MAG_R_ISOLATE"].data) | np.isnan(cat["COG_MAG_Z_ISOLATE"].data)
+    nan_mask_2 = np.isnan(cat["COG_MAG_G_NO_ISOLATE"].data) | np.isnan(cat["COG_MAG_R_NO_ISOLATE"].data) | np.isnan(cat["COG_MAG_Z_NO_ISOLATE"].data)
+
+    nan_mask = nan_mask_1 | nan_mask_2
 
     if verbose:
         frac = np.sum(nan_mask.data)/len(nan_mask)
@@ -107,22 +112,34 @@ def cog_curve_decrease(cat, mag_lim=0.2, len_lim=4, verbose=True):
     band_bad_masks : dict
         Per-band bad masks (e.g., {"g": mask_g, "r": mask_r, "z": mask_z}).
     """
-    all_decrease_mag = cat["COG_DECREASE_MAX_MAG_FINAL"].data   # shape (N, 3)
-    all_decrease_len = cat["COG_DECREASE_MAX_LEN_FINAL"].data   # shape (N, 3)
+
+    # all_decrease_mag = cat["COG_DECREASE_MAX_MAG_FINAL"].data   # shape (N, 3)
+    # all_decrease_len = cat["COG_DECREASE_MAX_LEN_FINAL"].data   # shape (N, 3)
+
     
-    bands = ["g", "r", "z"]
-    band_bad_masks = {}
+    all_bad_mask = []
+    for flag in ["_ISOLATE", "_NO_ISOLATE"]:
+        
+        all_decrease_mag = cat[f"COG_DECREASE_MAX_MAG{flag}"].data   # shape (N, 3)
+        all_decrease_len = cat[f"COG_DECREASE_MAX_LEN{flag}"].data   # shape (N, 3)
 
-    for i, band in enumerate(bands):
-        mag = all_decrease_mag[:, i]
-        length = all_decrease_len[:, i]
-        mask = (mag > mag_lim) & (length >= len_lim)
-        band_bad_masks[band] = mask
-        # if verbose:
-        # print(f"{band}-band suspicious objects: {mask.sum()} / {len(mask)}")
+        bands = ["g", "r", "z"]
+        band_bad_masks = {}
+    
+        for i, band in enumerate(bands):
+            mag = all_decrease_mag[:, i]
+            length = all_decrease_len[:, i]
+            mask = (mag > mag_lim) & (length >= len_lim)
+            band_bad_masks[band] = mask
+            # if verbose:
+            # print(f"{band}-band suspicious objects: {mask.sum()} / {len(mask)}")
 
-    # combine across bands
-    tot_bad_mask = np.any(np.column_stack(list(band_bad_masks.values())), axis=1)
+        # combine across bands
+        tot_bad_mask_i = np.any(np.column_stack(list(band_bad_masks.values())), axis=1)
+
+        all_bad_mask.append(tot_bad_mask_i)
+
+    tot_bad_mask = all_bad_mask[0] | all_bad_mask[1]
 
     if verbose:
         print(f"MASKBIT=2^3, cog curve decrease, fraction: {tot_bad_mask.sum() / len(tot_bad_mask):.4f}")

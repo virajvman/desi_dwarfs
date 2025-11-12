@@ -162,10 +162,16 @@ main_datamodel = {
         "description": "Boolean indicating whether the photometry was updated from its original target Tractor photometry.",
         "dtype": "bool"
     },
+     "R50_R": {
+        "unit": None,
+        "description": "Half-light radius in arc-seconds",
+        "blank_value": np.nan,
+        "dtype": "float32"
+    },
     "SHAPE_PARAMS": {
         "unit": None,
-        "description": "Galaxy shape parameters: semi-major axis in arcsec, b/a ratio, position angle",
-        "shape": (3,),
+        "description": "Galaxy shape parameters: b/a ratio, position angle",
+        "shape": (2,),
         "blank_value": np.nan,
         "dtype": "float32"
     },
@@ -1263,11 +1269,6 @@ fastspec_hdu_datamodel = {
         "description": "Narrow 4000-Å break index measured from the best-fitting continuum model.",
         "dtype": "float32"
     },
-    "DN4000_MODEL_IVAR": {
-        "unit": None,
-        "description": "Inverse variance of DN4000_MODEL.",
-        "dtype": "float32"
-    },
     "SNR_B": {
         "unit": None,
         "description": "Median signal-to-noise ratio per pixel in the b camera.",
@@ -1303,57 +1304,64 @@ fastspec_hdu_datamodel = {
         "description": "Aperture correction factor measured in the z band.",
         "dtype": "float32"
     },
-    "VDISP": {
-        "unit": "km / s",
-        "description": "Stellar velocity dispersion.",
-        "dtype": "float32"
-    },
-    "VDISP_IVAR": {
-        "unit": "s2 / km2",
-        "description": "Inverse variance of VDISP.",
-        "dtype": "float32"
-    },
-    "FOII_3727_CONT": {
-        "unit": "1e-17 erg / (Angstrom cm2 s)",
-        "description": "Continuum flux at 3728.483 Å in the rest-frame.",
-        "dtype": "float32"
-    },
-    "FOII_3727_CONT_IVAR": {
-        "unit": "1e+34 cm4 Angstrom2 s2 / erg2",
-        "description": "Inverse variance in FOII_3727_CONT.",
-        "dtype": "float32"
-    },
-    "FHBETA_CONT": {
-        "unit": "1e-17 erg / (Angstrom cm2 s)",
-        "description": "Continuum flux at 4862.683 in the rest-frame.",
-        "dtype": "float32"
-    },
-    "FHBETA_CONT_IVAR": {
-        "unit": "1e+34 cm4 Angstrom2 s2 / erg2",
-        "description": "Inverse variance in FHBETA_CONT.",
-        "dtype": "float32"
-    },
-    "FOIII_5007_CONT": {
-        "unit": "1e-17 erg / (Angstrom cm2 s)",
-        "description": "Continuum flux at 5008.239 Å in the rest-frame.",
-        "dtype": "float32"
-    },
-    "FOIII_5007_CONT_IVAR": {
-        "unit": "1e+34 cm4 Angstrom2 s2 / erg2",
-        "description": "Inverse variance in FOIII_5007_CONT.",
-        "dtype": "float32"
-    },
-    "FHALPHA_CONT": {
-        "unit": "1e-17 erg / (Angstrom cm2 s)",
-        "description": "Continuum flux at 6564.613 Å in the rest-frame.",
-        "dtype": "float32"
-    },
-    "FHALPHA_CONT_IVAR": {
-        "unit": "1e+34 cm4 Angstrom2 s2 / erg2",
-        "description": "Inverse variance in FHALPHA_CONT.",
-        "dtype": "float32"
-    }
+
 }
+    # "DN4000_MODEL_IVAR": {
+    #     "unit": None,
+    #     "description": "Inverse variance of DN4000_MODEL.",
+    #     "dtype": "float32"
+    # },
+    # "VDISP": {
+#         "unit": "km / s",
+#         "description": "Stellar velocity dispersion.",
+#         "dtype": "float32"
+#     },
+#     "VDISP_IVAR": {
+#         "unit": "s2 / km2",
+#         "description": "Inverse variance of VDISP.",
+#         "dtype": "float32"
+#     },
+#     "FOII_3727_CONT": {
+#         "unit": "1e-17 erg / (Angstrom cm2 s)",
+#         "description": "Continuum flux at 3728.483 Å in the rest-frame.",
+#         "dtype": "float32"
+#     },
+#     "FOII_3727_CONT_IVAR": {
+#         "unit": "1e+34 cm4 Angstrom2 s2 / erg2",
+#         "description": "Inverse variance in FOII_3727_CONT.",
+#         "dtype": "float32"
+#     },
+#     "FHBETA_CONT": {
+#         "unit": "1e-17 erg / (Angstrom cm2 s)",
+#         "description": "Continuum flux at 4862.683 in the rest-frame.",
+#         "dtype": "float32"
+#     },
+#     "FHBETA_CONT_IVAR": {
+#         "unit": "1e+34 cm4 Angstrom2 s2 / erg2",
+#         "description": "Inverse variance in FHBETA_CONT.",
+#         "dtype": "float32"
+#     },
+#     "FOIII_5007_CONT": {
+#         "unit": "1e-17 erg / (Angstrom cm2 s)",
+#         "description": "Continuum flux at 5008.239 Å in the rest-frame.",
+#         "dtype": "float32"
+#     },
+#     "FOIII_5007_CONT_IVAR": {
+#         "unit": "1e+34 cm4 Angstrom2 s2 / erg2",
+#         "description": "Inverse variance in FOIII_5007_CONT.",
+#         "dtype": "float32"
+#     },
+#     "FHALPHA_CONT": {
+#         "unit": "1e-17 erg / (Angstrom cm2 s)",
+#         "description": "Continuum flux at 6564.613 Å in the rest-frame.",
+#         "dtype": "float32"
+#     },
+#     "FHALPHA_CONT_IVAR": {
+#         "unit": "1e+34 cm4 Angstrom2 s2 / erg2",
+#         "description": "Inverse variance in FHALPHA_CONT.",
+#         "dtype": "float32"
+#     }
+# }
 
 # Emission-line definitions
 _emission_lines = [
@@ -1398,16 +1406,17 @@ fastspec_hdu_datamodel["HALPHA_EW_IVAR"] = {
     "description": "Inverse variance in HALPHA_EW.",
     "dtype": "float32"
 }
-fastspec_hdu_datamodel["HALPHA_SIGMA"] = {
-    "unit": "km / s",
-    "description": "Gaussian emission-line width of Halpha before convolution with the resolution matrix.",
-    "dtype": "float32"
-}
-fastspec_hdu_datamodel["HALPHA_SIGMA_IVAR"] = {
-    "unit": "s2 / km2",
-    "description": "Inverse variance in HALPHA_SIGMA.",
-    "dtype": "float32"
-}
+
+# fastspec_hdu_datamodel["HALPHA_SIGMA"] = {
+#     "unit": "km / s",
+#     "description": "Gaussian emission-line width of Halpha before convolution with the resolution matrix.",
+#     "dtype": "float32"
+# }
+# fastspec_hdu_datamodel["HALPHA_SIGMA_IVAR"] = {
+#     "unit": "s2 / km2",
+#     "description": "Inverse variance in HALPHA_SIGMA.",
+#     "dtype": "float32"
+# }
 
 
 
