@@ -113,7 +113,7 @@ def make_fav_cmap():
 def make_compare_plot_panel(ax_top, ax_bot, sga_cat, ext_mag, desi_mag, band_name,
                             ylabel_top=None, ylabel_bot=None, xlabel_bot = None, add_cbar=False, 
                             show_cbar_label=False, mag_min = 11, mag_max = 21,bins=75, tickmarks = [12,14,16,18,20],
-                           bad_tgids = None):
+                           outlier_num=0):
 
     delta_mag = ext_mag - desi_mag
 
@@ -168,12 +168,12 @@ def make_compare_plot_panel(ax_top, ax_bot, sga_cat, ext_mag, desi_mag, band_nam
     ax_bot.set_xlim([mag_min, mag_max])
     ax_bot.set_ylim([mag_min, mag_max])
 
-    if bad_tgids is not None:
-        #then we plot the VI'ed outliers as crosses!
-        #the sga_cat is matching the desi_mag etc. lists in indexing
-        idxs = np.isin(sga_cat["TARGETID"].data,  bad_tgids)
+    # if bad_tgids is not None:
+    #     #then we plot the VI'ed outliers as crosses!
+    #     #the sga_cat is matching the desi_mag etc. lists in indexing
+    #     idxs = np.isin(sga_cat["TARGETID"].data,  bad_tgids)
 
-        ax_bot.scatter(desi_mag[idxs], ext_mag[idxs], color = "k",marker="x", s=20,zorder=1,alpha=0.75)
+    #     ax_bot.scatter(desi_mag[idxs], ext_mag[idxs], color = "k",marker="x", s=20,zorder=1,alpha=0.75)
     
     if ylabel_bot:
         ax_bot.set_ylabel(ylabel_bot, fontsize=label_font_size)
@@ -188,14 +188,12 @@ def make_compare_plot_panel(ax_top, ax_bot, sga_cat, ext_mag, desi_mag, band_nam
     delta_nmad = median_abs_deviation(delta_mag, scale="normal")
     outlier_frac = np.sum(np.abs(delta_mag) > 0.75) / len(delta_mag)
 
-    if bad_tgids is not None:
-        outlier_frac_VI = len(bad_tgids)/len(delta_mag)
+    vi_outlier_frac = outlier_num / len(ext_mag)
     
     spacing = 0.075
     fs =  12.5
-    if bad_tgids is not None:
-        ax_bot.text(0.03, 0.935 - 3*spacing, rf"f$(|\Delta| > 0.75, \rm VI) = {outlier_frac_VI * 100:.1f}\%$", fontsize=fs,  transform=ax_bot.transAxes)
-        
+
+    ax_bot.text(0.03, 0.935 - 3*spacing, rf"f$(|\Delta| > 0.75,\rm VI) = {vi_outlier_frac * 100:.1f}\%$", fontsize=fs,  transform=ax_bot.transAxes)
     ax_bot.text(0.03, 0.935 - 2*spacing, rf"f$(|\Delta| > 0.75) = {outlier_frac * 100:.1f}\%$", fontsize=fs,  transform=ax_bot.transAxes)
     ax_bot.text(0.03, 0.935 - spacing, rf"$\sigma_{{\rm NMAD}} = {delta_nmad:.2f}$", fontsize=fs,  transform=ax_bot.transAxes)
     ax_bot.text(0.03, 0.935, rf"$N = {len(ext_mag)}$", fontsize=fs,  transform=ax_bot.transAxes)
@@ -251,6 +249,57 @@ def make_compare_plot_3bands(ext_mags, aper_mags, sga_cat, band_names=("g", "r",
 
 
 
+
+
+def make_compare_plot_1bands_sga_nsa(ext_mags_sga, aper_mags_sga, ext_mags_nsa, aper_mags_nsa, sga_cat, nsa_cat,
+                             save_path=None, show_plot=False, 
+                            ylabel_top_nsa = r"$\Delta\,$(NSA-best)", ylabel_bot_nsa = r"mag$_{\rm NSA}$ (NSA)", 
+                            ylabel_top_sga = r"$\Delta\,$(SGA-best)", ylabel_bot_sga = r"mag$_{\rm SGA}$ (SGA-2020)", 
+                            xlabel_bot = r"mag$_{\rm best}$ (this work)", mag_min=11, mag_max=21,
+                            tickmarks = [12,14,16,18,20], outlier_nums = [0,0]):
+    """
+    ext_mags, desi_mags : 2 list  (one per band for SGA and NSA)
+    band_names          : 2 list
+    """
+
+    fig, axes = plt.subplots(2, 2, figsize=(10, 6.15), sharex=True, sharey=False,
+                             gridspec_kw={"height_ratios": [1, 3], "hspace": 0.0, "wspace": 0.3})
+
+    if len(aper_mags_sga) != len(sga_cat):
+        raise ValueError("the input sga_cat shape does not match aper_mags list shape")
+    
+    add_cbar = True
+    show_cbar_label = True
+
+    #plot for SGA
+    make_compare_plot_panel(axes[0, 0], axes[1, 0], sga_cat,
+                            ext_mags_sga, aper_mags_sga, "r",
+                            ylabel_top=ylabel_top_sga,
+                            ylabel_bot=ylabel_bot_sga,
+                            xlabel_bot = xlabel_bot,
+                            add_cbar=add_cbar, show_cbar_label=show_cbar_label,mag_min=mag_min, mag_max=mag_max, tickmarks = tickmarks, 
+                           outlier_num=outlier_nums[0])
+
+
+    #plot for NSA
+    make_compare_plot_panel(axes[0, 1], axes[1, 1], nsa_cat,
+                            ext_mags_nsa, aper_mags_nsa, "r",
+                            ylabel_top=ylabel_top_nsa,
+                            ylabel_bot=ylabel_bot_nsa,
+                            xlabel_bot = xlabel_bot,
+                            add_cbar=False, show_cbar_label=False,mag_min=mag_min, mag_max=mag_max, tickmarks = tickmarks, 
+                           outlier_num=outlier_nums[0])
+
+    axes[1, 0].set_box_aspect(1)
+    axes[1, 1].set_box_aspect(1)
+    
+    if save_path is not None:
+        plt.savefig(save_path, bbox_inches="tight", dpi=150)
+    
+    if show_plot:
+        plt.show()
+    else:
+        plt.close(fig)
 
 
 
@@ -606,6 +655,13 @@ def get_nsa_matching(nsa_cat, desi_cat):
     
 
 def get_all_ff_deltas(sample_name):
+
+    temp = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4.fits")
+    
+    tot_clean_count = len(temp[temp["SAMPLE"]==sample_name])
+
+    print(f"SAMPLE clean count = {tot_clean_count}")
+
     cat_shred = Table.read(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_{sample_name}_shreds_catalog_w_aper_mags.fits")
     cat_clean = Table.read(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_{sample_name}_clean_catalog_w_aper_mags.fits")
 
@@ -634,13 +690,18 @@ def get_all_ff_deltas(sample_name):
         ff_clean = cat_clean[f"FRACFLUX_{bi}"]
 
         all_ffs.append(ff_shred)
-        all_ffs.append(ff_clean)
+        all_ffs.append(list(ff_clean) * int(tot_clean_count/len(cat_clean)) )
 
         all_mag_new.append(mag_new_shred)
-        all_mag_new.append(mag_new_clean)
+        all_mag_new.append(list(mag_new_clean) * int(tot_clean_count/len(cat_clean)))
 
+        #we want to the duplicate the number of clean sources to mimic a realistic fraction of it relative to the shredded sources
+        
         all_mag_trac.append(mag_trac_shred)
-        all_mag_trac.append(mag_trac_clean)
+        all_mag_trac.append(list(mag_trac_clean) * int(tot_clean_count/len(cat_clean)) )
+
+    ## we want to mimic this for the entire sample!! So we can assume same statistical properties of the rest of the 
+    ##sample and just mulitply it to mimic a realistic proportion!
                 
     return np.concatenate(all_ffs), np.concatenate(all_mag_new), np.concatenate(all_mag_trac)
     

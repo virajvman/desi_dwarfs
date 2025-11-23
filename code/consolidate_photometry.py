@@ -162,7 +162,7 @@ def add_best_mags(catalog, bands=("G", "R", "Z"), use_pcnn=True):
     source = np.full(len(catalog), "COG", dtype=object)  # default COG
     source[prefer_simple_mag] = "SIMPLE"
     source[prefer_tractor_based_mag] = "TRACTOR_BASED"
-    source[prefer_org_tractor_mag] = "TRACTOR_ORIGINAL"
+    source[prefer_org_tractor_mag] = "TRACTOR_OG"
 
     print("Need to include the VI column that only does the aperture no subtract photo")
     
@@ -251,7 +251,7 @@ def consolidate_cog_photo(catalog,sample=None, add_pcnn=True):
 def consolidate_new_photo(catalog,plot=False,sample=None, add_pcnn=True, use_pcnn=False, flag_cog_nan_always=True):
     '''
 
-    Note that the PHOTO_MASKBIT reflects only on the final type of photometry used. For instance, if MAG_BEST is using MAG_TYPE = tractor_original and the COG has unconverged curve, then it is 
+    Note that the PHOTO_MASKBIT reflects only on the final type of photometry used. 
     '''
 
     catalog = consolidate_cog_photo(catalog,sample=sample, add_pcnn=add_pcnn)
@@ -263,7 +263,7 @@ def consolidate_new_photo(catalog,plot=False,sample=None, add_pcnn=True, use_pcn
         #not to apply maskbit=12 as these are objects already in SGA!
        bitmasks_list = [0,1,2,3,4,5,6,7,8,9,10,11]
     else:
-       bitmasks_list = [0,1,2,3,4,5,6,7,8,9,10,11,13]
+       bitmasks_list = [0,1,2,3,4,5,6,7,8,9,10,11,12]
     
     print("Adding the photo maskbits")
     photo_maskbits =  create_shred_maskbits_from_dict(catalog, bitmasks_to_apply = bitmasks_list, verbose=True)
@@ -285,7 +285,7 @@ def consolidate_new_photo(catalog,plot=False,sample=None, add_pcnn=True, use_pcn
     
     if sample == "SGA":
         #not to apply maskbit=13 as these are objects already in SGA!
-       bitmasks_list = extra_bit + [7,11,12,14,15]
+       bitmasks_list = extra_bit + [7,11,13,14,15]
     else:
        bitmasks_list = extra_bit + [7,11,12,13,14,15]
         
@@ -448,7 +448,7 @@ def consolidate_positions_and_shapes(catalog):
     mask_cog_simple = np.isin(mag_type, ["COG", "SIMPLE"])
     mask_only_simple = (mag_type == "SIMPLE") #this will be used for setting the sizes to be zero
     mask_trac_based = (mag_type == "TRACTOR_BASED")
-    mask_trac_org   = (mag_type == "TRACTOR_ORIGINAL")
+    mask_trac_org   = (mag_type == "TRACTOR_OG")
 
     # Assign values
     ra_final[mask_cog_simple]  = ra_aper_cen[mask_cog_simple]
@@ -531,7 +531,7 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
     if clean_cat:
         print("Processing clean catalog!")
 
-        catalog["MAG_TYPE"] = np.full(len(catalog), "TRACTOR_ORIGINAL", dtype=object)
+        catalog["MAG_TYPE"] = np.full(len(catalog), "TRACTOR_OG", dtype=object)
 
         catalog.rename_column("LOGM_SAGA_FIDU", "LOG_MSTAR_SAGA")
         #note that even for the clean catalog, there will be some maskbits activated, within twice of D26 of SGA at same redshift, bad gr color, low SNR, close to star? Need to think about whether the TRACTOR MASKBITS should be ignored or not here.

@@ -19,12 +19,12 @@ def cog_nan_mask(cat,verbose=True):
     '''
     Function that contructs mask for objects where the fiducial COG mags are nan. MASKBIT = 0
     '''
-    # nan_mask = np.isnan(cat["COG_MAG_G_FINAL"].data) | np.isnan(cat["COG_MAG_R_FINAL"].data) | np.isnan(cat["COG_MAG_Z_FINAL"].data)
+    nan_mask = np.isnan(cat["COG_MAG_G_FINAL"].data) | np.isnan(cat["COG_MAG_R_FINAL"].data) | np.isnan(cat["COG_MAG_Z_FINAL"].data)
     
-    nan_mask_1 = np.isnan(cat["COG_MAG_G_ISOLATE"].data) | np.isnan(cat["COG_MAG_R_ISOLATE"].data) | np.isnan(cat["COG_MAG_Z_ISOLATE"].data)
-    nan_mask_2 = np.isnan(cat["COG_MAG_G_NO_ISOLATE"].data) | np.isnan(cat["COG_MAG_R_NO_ISOLATE"].data) | np.isnan(cat["COG_MAG_Z_NO_ISOLATE"].data)
+    # nan_mask_1 = np.isnan(cat["COG_MAG_G_ISOLATE"].data) | np.isnan(cat["COG_MAG_R_ISOLATE"].data) | np.isnan(cat["COG_MAG_Z_ISOLATE"].data)
+    # nan_mask_2 = np.isnan(cat["COG_MAG_G_NO_ISOLATE"].data) | np.isnan(cat["COG_MAG_R_NO_ISOLATE"].data) | np.isnan(cat["COG_MAG_Z_NO_ISOLATE"].data)
 
-    nan_mask = nan_mask_1 | nan_mask_2
+    # nan_mask = nan_mask_1 | nan_mask_2
 
     if verbose:
         frac = np.sum(nan_mask.data)/len(nan_mask)
@@ -113,33 +113,39 @@ def cog_curve_decrease(cat, mag_lim=0.2, len_lim=4, verbose=True):
         Per-band bad masks (e.g., {"g": mask_g, "r": mask_r, "z": mask_z}).
     """
 
-    # all_decrease_mag = cat["COG_DECREASE_MAX_MAG_FINAL"].data   # shape (N, 3)
-    # all_decrease_len = cat["COG_DECREASE_MAX_LEN_FINAL"].data   # shape (N, 3)
+    all_decrease_mag = cat["COG_DECREASE_MAX_MAG_FINAL"].data   # shape (N, 3)
+    all_decrease_len = cat["COG_DECREASE_MAX_LEN_FINAL"].data   # shape (N, 3)
 
-    
-    all_bad_mask = []
-    for flag in ["_ISOLATE", "_NO_ISOLATE"]:
-        
-        all_decrease_mag = cat[f"COG_DECREASE_MAX_MAG{flag}"].data   # shape (N, 3)
-        all_decrease_len = cat[f"COG_DECREASE_MAX_LEN{flag}"].data   # shape (N, 3)
+    bands = ["g", "r", "z"]
+    band_bad_masks = {}
 
-        bands = ["g", "r", "z"]
-        band_bad_masks = {}
-    
-        for i, band in enumerate(bands):
-            mag = all_decrease_mag[:, i]
-            length = all_decrease_len[:, i]
-            mask = (mag > mag_lim) & (length >= len_lim)
-            band_bad_masks[band] = mask
-            # if verbose:
-            # print(f"{band}-band suspicious objects: {mask.sum()} / {len(mask)}")
+    for i, band in enumerate(bands):
+        mag = all_decrease_mag[:, i]
+        length = all_decrease_len[:, i]
+        mask = (mag > mag_lim) & (length >= len_lim)
+        band_bad_masks[band] = mask
+        # if verbose:
+        # print(f"{band}-band suspicious objects: {mask.sum()} / {len(mask)}")
 
-        # combine across bands
-        tot_bad_mask_i = np.any(np.column_stack(list(band_bad_masks.values())), axis=1)
+    tot_bad_mask = np.any(np.column_stack(list(band_bad_masks.values())), axis=1)
 
-        all_bad_mask.append(tot_bad_mask_i)
-
-    tot_bad_mask = all_bad_mask[0] | all_bad_mask[1]
+    # all_bad_mask = []
+    # for flag in ["_ISOLATE", "_NO_ISOLATE"]:
+    #     all_decrease_mag = cat[f"COG_DECREASE_MAX_MAG{flag}"].data   # shape (N, 3)
+    #     all_decrease_len = cat[f"COG_DECREASE_MAX_LEN{flag}"].data   # shape (N, 3)
+    #     bands = ["g", "r", "z"]
+    #     band_bad_masks = {}
+    #     for i, band in enumerate(bands):
+    #         mag = all_decrease_mag[:, i]
+    #         length = all_decrease_len[:, i]
+    #         mask = (mag > mag_lim) & (length >= len_lim)
+    #         band_bad_masks[band] = mask
+    #         # if verbose:
+    #         # print(f"{band}-band suspicious objects: {mask.sum()} / {len(mask)}")
+    #     # combine across bands
+    #     tot_bad_mask_i = np.any(np.column_stack(list(band_bad_masks.values())), axis=1)
+    #     all_bad_mask.append(tot_bad_mask_i)
+    # tot_bad_mask = all_bad_mask[0] | all_bad_mask[1]
 
     if verbose:
         print(f"MASKBIT=2^3, cog curve decrease, fraction: {tot_bad_mask.sum() / len(tot_bad_mask):.4f}")
@@ -285,20 +291,6 @@ def no_seg_found(cat, verbose=True):
     
     return bad_mask
 
-    
-def iffy_tractor_model(cat, rchi_cut = 10, verbose=True):
-    '''
-    If the SNR on photometry is < 5 in all bands, or rchisq bad or something ... 
-    '''
-
-    bad_mask = (cat["RCHISQ_G"] > rchi_cut) | (cat["RCHISQ_R"] > rchi_cut) | (cat["RCHISQ_Z"] > rchi_cut)
-
-    if verbose:
-        bad_frac = np.sum(bad_mask)/len(bad_mask) 
-        print(f"MASKBIT=2^12, bad rchisq, fraction: {bad_frac:4f}")
-
-    return bad_mask
-
 
 def near_sga_outskirts(cat, norm_dist=2, verbose=True):
     """
@@ -317,9 +309,24 @@ def near_sga_outskirts(cat, norm_dist=2, verbose=True):
 
     if verbose:
         bad_frac = np.sum(bad_mask)/len(bad_mask) 
-        print(f"MASKBIT=2^13, near sga outskirts, fraction: {bad_frac:4f}")
+        print(f"MASKBIT=2^12, near sga outskirts, fraction: {bad_frac:4f}")
 
     return bad_mask
+    
+def iffy_tractor_model(cat, rchi_cut = 10, verbose=True):
+    '''
+    If the SNR on photometry is < 5 in all bands, or rchisq bad or something ... 
+    '''
+
+    bad_mask = (cat["RCHISQ_G"] > rchi_cut) | (cat["RCHISQ_R"] > rchi_cut) | (cat["RCHISQ_Z"] > rchi_cut)
+
+    if verbose:
+        bad_frac = np.sum(bad_mask)/len(bad_mask) 
+        print(f"MASKBIT=2^13, bad rchisq, fraction: {bad_frac:4f}")
+
+    return bad_mask
+
+
 
 def low_SNR(cat, sigma_cut=5, nbands=2, verbose=True):
     """
@@ -378,11 +385,13 @@ bitmask_dict = {
     9: {"value": 1 << 9, "description": "shredded and near bstar", "func": very_near_bstar },
     10: {"value": 1 << 10, "description": "cop aper center masked", "func": aper_cen_masked },
     11: {"value": 1 << 11, "description": "no seg found", "func": no_seg_found },
-    12: {"value": 1 << 12, "description": "org tractor, bad rchisq", "func": iffy_tractor_model},
-    13: {"value": 1 << 13, "description": "near SGA outskirts", "func": near_sga_outskirts},
+    12: {"value": 1 << 12, "description": "near SGA outskirts", "func": near_sga_outskirts},
+    13: {"value": 1 << 13, "description": "org tractor, bad rchisq", "func": iffy_tractor_model},
     14: {"value": 1 << 14, "description": "low sigma detection", "func": low_SNR},
     15: {"value": 1 << 15, "description": "tractor maskbits", "func": other_tractor_maskbits}   
 }
+
+#note that 13,14,15 maskbits are only if source has mag_type = tractor_og
 
 def create_shred_maskbits_from_dict(cat, bitmasks_to_apply = [0,1,2,3,4,5,6,7,8,9,10,12], verbose=False, mag_type = "_BEST"):
     """

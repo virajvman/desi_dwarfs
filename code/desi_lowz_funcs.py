@@ -441,7 +441,7 @@ def apply_lowz_mask(table):
     return table[lowz_mask]
 
 
-def get_contours(quant_x, quant_y,bins,sigs=False):
+def get_contours(quant_x, quant_y,bins,sigs=False,min_count=0):
     '''
     Want to get contours for the x vs. y relation. This will return a dict with the corresponding contours
     '''
@@ -455,12 +455,22 @@ def get_contours(quant_x, quant_y,bins,sigs=False):
     for i in range(len(bins)-1):
         temp_y = quant_y[ (quant_x > bins[i]) & (quant_x < bins[i+1]) ]
 
-        med.append(np.nanmedian(temp_y) )
-        if sigs:
-            c1sL.append(np.nanpercentile(temp_y,16) )  
-            c1sH.append(np.nanpercentile(temp_y,84) )  
-            c2sL.append(np.nanpercentile(temp_y,2.5) )  
-            c2sH.append(np.nanpercentile(temp_y,97.5) ) 
+        if min_count >= len(temp_y):
+            #we return nans
+            med.append(np.nan)
+            if sigs:
+                c1sL.append(np.nan )  
+                c1sH.append(np.nan )  
+                c2sL.append(np.nan )  
+                c2sH.append(np.nan ) 
+
+        else:
+            med.append(np.nanmedian(temp_y) )
+            if sigs:
+                c1sL.append(np.nanpercentile(temp_y,16) )  
+                c1sH.append(np.nanpercentile(temp_y,84) )  
+                c2sL.append(np.nanpercentile(temp_y,2.5) )  
+                c2sH.append(np.nanpercentile(temp_y,97.5) ) 
         
     #write this into dictionary
     
