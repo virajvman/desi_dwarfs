@@ -663,20 +663,32 @@ def get_all_ff_deltas(sample_name):
     print(f"SAMPLE clean count = {tot_clean_count}")
 
     cat_shred = Table.read(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_{sample_name}_shreds_catalog_w_aper_mags.fits")
+
+    sga_shred = Table.read(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_SGA_sga_catalog_w_aper_mags.fits")
+    
     cat_clean = Table.read(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_{sample_name}_clean_catalog_w_aper_mags.fits")
+
+    #add the shredded sga as well!
 
     #consolidate it
     cat_shred = consolidate_new_photo(cat_shred, sample=sample_name, add_pcnn=False,flag_cog_nan_always=False)
+    sga_shred = consolidate_new_photo(sga_shred, sample="SGA", add_pcnn=False,flag_cog_nan_always=False)
     cat_clean = consolidate_new_photo(cat_clean, sample=sample_name, add_pcnn=False,flag_cog_nan_always=False)
     
     cat_shred = cat_shred[cat_shred["PHOTO_MASKBIT"] == 0]
+    sga_shred = sga_shred[sga_shred["PHOTO_MASKBIT"] == 0]
     cat_clean = cat_clean[cat_clean["PHOTO_MASKBIT"] == 0]
 
+    #adding the sga objects in this sample
+    sga_shred = sga_shred[sga_shred["SAMPLE_DESI"] == sample_name ]
+    print(f"cat_shred pre-SGA, len={len(cat_shred)}")
+    cat_shred = vstack([cat_shred, sga_shred])
+    print(f"cat_shred post-SGA, len={len(cat_shred)}")
+    
     all_ffs = []
     all_mag_new = []    
     all_mag_trac = []    
     
-
     for bi in "GRZ":
         
         mag_new_shred = cat_shred[f"MAG_{bi}_BEST"].data

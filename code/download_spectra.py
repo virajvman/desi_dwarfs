@@ -162,9 +162,9 @@ if __name__ == '__main__':
         all_fluxs = np.concatenate(all_fluxs)
         all_ivars = np.concatenate(all_ivars)
 
-        print(np.shape(all_fluxs))
-        print(np.shape(shared_wave))
-        print(np.shape(all_targetids))
+        print("FLUX SHAPE=",np.shape(all_fluxs))
+        print("WAVE SHAPE=",np.shape(shared_wave))
+        print("TARGETID SHAPE=",np.shape(all_targetids))
 
         print_stage("Total number of spectra in consolidated spectra file = %d"%len(all_targetids))
                 
@@ -177,7 +177,9 @@ if __name__ == '__main__':
             f.create_dataset("FLUX_IVAR", data=all_ivars, dtype='f4')
 
         print_stage("Consolidated spectra chunk saved at %s"%(file_template + ".h5") )
-        
+
+
+    
       
     #to read the data, one can do
     # with h5py.File("spectra.h5", "r") as f:

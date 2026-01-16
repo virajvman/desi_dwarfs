@@ -11,7 +11,7 @@ from shred_photometry_maskbits import create_shred_maskbits_from_dict, print_mas
 import os
 import glob
 from tqdm import trange
-
+import h5py
 from desi_lowz_funcs import get_stellar_mass, match_c_to_catalog, match_fastspec_catalog, get_stellar_mass_mia
 
 def combine_arrays(no_iso, w_iso, mask):
@@ -268,10 +268,10 @@ def consolidate_new_photo(catalog,plot=False,sample=None, add_pcnn=True, use_pcn
     print("Adding the photo maskbits")
     photo_maskbits =  create_shred_maskbits_from_dict(catalog, bitmasks_to_apply = bitmasks_list, verbose=True)
     catalog["PHOTO_MASKBIT"] = photo_maskbits
-    
+
     #now for the subset that we think has robust photometry, we want to ignore majority of their maskbits above and just start again!
     #However, we only want to do this for sources that have a failed COG photometry?
-    using_org_tractor = revert_back_to_org_tractor(catalog)
+    using_org_tractor = revert_back_to_org_tractor(catalog,use_pcnn=use_pcnn)
     
     print(f"Fraction of sources where org trac is likely good = {np.sum(using_org_tractor)/len(catalog)}")
     #then we need to update some of the maskbits accordingly: bad color, iffy tractor model, we now do not care about the star!!
@@ -279,8 +279,10 @@ def consolidate_new_photo(catalog,plot=False,sample=None, add_pcnn=True, use_pcn
     #if we want to always flag objects where cog value is not measured
     #the bitmask = 0 is for objects that had a nan cog value. So something suspicious could be happening.
     if flag_cog_nan_always:
+        print("Adding bit=0 for tractor_og type!")
         extra_bit = [0]
     else:
+        print("Not adding bit=0 for tractor_og type!")
         extra_bit = []
     
     if sample == "SGA":
@@ -290,22 +292,23 @@ def consolidate_new_photo(catalog,plot=False,sample=None, add_pcnn=True, use_pcn
        bitmasks_list = extra_bit + [7,11,12,13,14,15]
         
     print("Updating the maskbits to reflect some objects reverted to original Tractor photometry")
-    only_trac_maskbits = create_shred_maskbits_from_dict(catalog, bitmasks_to_apply = bitmasks_list, verbose=True)
+    # only_trac_maskbits = create_shred_maskbits_from_dict(catalog, bitmasks_to_apply = bitmasks_list, verbose=True)
+    current_maskbits = np.array(catalog["PHOTO_MASKBIT"], copy=True)
+    
+    new_bits = create_shred_maskbits_from_dict(
+        catalog[using_org_tractor],
+        bitmasks_to_apply=bitmasks_list,
+        verbose=True
+    )
 
-    current_maskbits = np.array(catalog["PHOTO_MASKBIT"])
-    current_maskbits[using_org_tractor] = only_trac_maskbits[using_org_tractor]
+    assert new_bits.shape[0] == np.sum(using_org_tractor)
 
+    current_maskbits[using_org_tractor] = new_bits
 
-    #39627895982789466 -> this is example of tgid where cog fails, and we still want to raise flags on such objects
-    # print("IF THE SMOOTH SEGMENT IS NOT DETECTED THEN WE ALSO RAISE A FLAG AND: 39627709264959315., 39627714767883598, ")
-    # print("Add some other flags on if tractor based mag is much different than cog mag if cog is used? Like if COG is much brighter than tractor based mag, then we might be getting some extra bits ...  ")
-    #eg: 39627866140315628, 
-
-    #updating this in the catalog
     catalog["PHOTO_MASKBIT"] = current_maskbits
 
     #now print the summary statistics of the consolidated photometry!!
-    print_maskbit_statistics(current_maskbits)
+    print_maskbit_statistics(current_maskbits, bitmasks_to_use = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15])
 
     if sample == "SGA":
         #rename the SAMPLE columns
@@ -626,6 +629,9 @@ def create_tractor_data_model(catalog,save_name):
     print("Selecting the subset of columns for TRACTOR extension")
     tractor_tab = catalog[[col for col in tractor_datamodel.keys()]]
 
+    ##add the fiber fluxes for the LOWZ subset
+    tractor_tab = add_lowz_fiberflux(tractor_tab, catalog)
+
     # 2. Add metadata from tractor_datamodel
     for col in tractor_tab.colnames:
         print(f"Column : {col}")
@@ -921,10 +927,38 @@ def get_fastspec_fit_catalog_V2(chunk_size = 250000):
     return
 
 
-def add_lowz_fiberflux():
+def add_lowz_fiberflux(trac_cat,tot_cat):
     '''
+    Function where we cross-match the lowz sources and add the fiber info there! 
     '''
-    return
+
+    if len(trac_cat) != len(tot_cat):
+        raise ValueError("Incorrect lengths for the trac_cat and tot_cat tables!")
+    
+    lowz_mask = (tot_cat["SAMPLE"] == "LOWZ")
+    print(f"{np.sum(lowz_mask)} number of objects in the LOWZ catalog!")
+
+    lowz_tot_cat = tot_cat[lowz_mask]
+
+    print(f"BEFORE: Example FIBERFLUX_R: {trac_cat[lowz_mask]['FIBERFLUX_R'].data[:5]}")
+    
+    #loading the updated lowz tractor catalog
+    lowz_trac_cat_f = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_lowz_filter_zsucc_zrr03_INT.fits")
+
+    ##we cross_match this trac_cat with that
+    idx,d2d,_ = match_c_to_catalog(c_cat = lowz_tot_cat, catalog_cat = lowz_trac_cat_f, c_ra="RA_TARGET",c_dec="DEC_TARGET",catalog_ra="RA",catalog_dec="DEC")
+
+    #get the matching fiberflux_r and fibermag_r
+    lowz_rfib_flux = lowz_trac_cat_f["FIBERFLUX_R"].data[idx]
+    lowz_rfib_mag = lowz_trac_cat_f["FIBERMAG_R"].data[idx]
+
+    #update the trac_cat accordingly!
+    trac_cat["FIBERFLUX_R"][lowz_mask] = lowz_rfib_flux
+    trac_cat["FIBERMAG_R"][lowz_mask] = lowz_rfib_mag
+
+    print(f"AFTER: Example FIBERFLUX_R: {trac_cat[lowz_mask]['FIBERFLUX_R'].data[:5]}")
+    
+    return trac_cat
 
 
 def combine_hdus(hdu_list, base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats",
@@ -944,7 +978,7 @@ def combine_hdus(hdu_list, base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs
 
     hdu_tables = []
     for hdu_name in hdu_list:
-        if hdu_name in ["REPROCESS_PHOTO_CAT"]:
+        if hdu_name in ["REPROCESS_PHOTO"]:
             #this will only exist for the catalog that we reprocessed, so not for the clean sources
             shred_fname = os.path.join(base_path, f"shreds_{hdu_name}_hdu.fits")
             print(f"Reading {shred_fname}...")
@@ -1005,6 +1039,108 @@ def combine_hdus(hdu_list, base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs
     # Write out to FITS
     hdulist.writeto(output_file, overwrite=True)
     print(f"Combined FITS written to {output_file}")
+
+
+def create_spectra_hdu(file_path):
+    """
+    Create a new Astropy Table (HDU) for the NMF+PCA coefficients, normalization factors, 
+    and UMAP 2D coordinates. The table has the same TARGETIDs/order as MAIN HDU in file_path,
+    with missing TARGETIDs filled with zeros (-99 for UMAP).
+    """
+
+    # Load main catalog
+    main_cat = Table.read(file_path, hdu="MAIN")
+    main_tgids = main_cat["TARGETID"].data
+    n_objects = len(main_tgids)
+
+    # Load HDF5 coefficients
+    h5_path = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_dr1_dwarf_catalog_nnmf_pca.h5"
+    with h5py.File(h5_path, "r") as f:
+        pca_coeffs = f["PCA_COEFFS"][:]       # shape (N, 20)
+        nnmf_coeffs = f["NNMF_COEFFS"][:]     # shape (N, 10)
+        tgids = f["TARGETID"][:]
+        norm_facs = f["NORM_FACTOR"][:]
+        nnmf_rnorm = f["NNMF_RNORM"][:]
+        
+    #we ensure that norm_facs do not have any zeroes
+    scale_facs = 1/norm_facs
+    scale_facs = scale_facs[scale_facs != 0]
+    norm_facs = 1/scale_facs
+    
+    # Load UMAP
+    spec_umap_2d = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_dwarfs_umap_nnmf_and_pca_v2.npy")
+
+    # Consistency checks
+    n = pca_coeffs.shape[0]
+    assert nnmf_coeffs.shape[0] == n, "NMF/PCA length mismatch"
+    assert len(tgids) == n, "TGID length mismatch"
+    assert len(norm_facs) == n, "Norm factor length mismatch"
+    assert spec_umap_2d.shape[0] == n, "UMAP length mismatch"
+    assert len(nnmf_rnorm) == n, "NNMF RNORM mismatch"
+    
+    # Create TGID -> index mapping
+    tgid_to_idx = {tgid: i for i, tgid in enumerate(tgids)}
+
+    # Prepare columns
+    new_table = Table()
+    new_table["TARGETID"] = main_tgids
+
+    # NNMF columns
+    print(f"NNMF params = {nnmf_coeffs.shape[1]}")
+    for j in range(nnmf_coeffs.shape[1]):
+        col = np.zeros(n_objects)
+        for i, tgid in enumerate(main_tgids):
+            if tgid in tgid_to_idx:
+                col[i] = nnmf_coeffs[tgid_to_idx[tgid], j]
+        new_table[f"NNMF_{j}"] = col
+
+    # PCA columns
+    print(f"PCA params = {pca_coeffs.shape[1]}")
+    for j in range(pca_coeffs.shape[1]):
+        col = np.zeros(n_objects)
+        for i, tgid in enumerate(main_tgids):
+            if tgid in tgid_to_idx:
+                col[i] = pca_coeffs[tgid_to_idx[tgid], j]
+        new_table[f"PCA_{j}"] = col
+
+    # Normalization factor
+    norm_col = np.zeros(n_objects)
+    for i, tgid in enumerate(main_tgids):
+        if tgid in tgid_to_idx:
+            norm_col[i] = norm_facs[tgid_to_idx[tgid]]
+    new_table["NNMF_NORM_FACTOR"] = norm_col
+
+    #NNMF residuals
+    nnmf_resid_col = np.full(n_objects, -99.0)
+    for i, tgid in enumerate(main_tgids):
+        if tgid in tgid_to_idx:
+            nnmf_resid_col[i] = nnmf_rnorm[tgid_to_idx[tgid]]
+    new_table["NNMF_RESID"] = nnmf_resid_col
+    
+    # UMAP 2D coordinates
+    umap0 = np.full(n_objects, -99.0)
+    umap1 = np.full(n_objects, -99.0)
+    for i, tgid in enumerate(main_tgids):
+        if tgid in tgid_to_idx:
+            idx = tgid_to_idx[tgid]
+            umap0[i] = spec_umap_2d[idx, 0]
+            umap1[i] = spec_umap_2d[idx, 1]
+    new_table["SPEC_UMAP_0"] = umap0
+    new_table["SPEC_UMAP_1"] = umap1
+
+    # Convert Table to BinTableHDU
+    new_hdu = fits.BinTableHDU(new_table, name="SPECTRA_TEMPLATE")
+
+    # Open original FITS, append new HDU, and overwrite file
+    with fits.open(file_path, mode="update") as hdul:
+        hdul.append(new_hdu)
+        hdul.flush()  # write changes to disk
+
+    print(f"Added SPECTRA_TEMPLATE extension to {file_path} (length = {n_objects})")
+    
+    return
+
+
     
 if __name__ == '__main__':
 
@@ -1013,37 +1149,33 @@ if __name__ == '__main__':
     process_shreds = True
     process_clean = True
     
-    process_fastspec=True
-    
+    process_fastspec=False
+
     if process_shreds:
         #loading the shredded catalogs!
         print("Reading ELG shreds!")
         elg_shred = Table.read(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_ELG_shreds_catalog_w_aper_mags.fits")
-        elg_shred = consolidate_new_photo(elg_shred,sample="ELG")
+        elg_shred = consolidate_new_photo(elg_shred,sample="ELG",flag_cog_nan_always=False)
         print("=="*10)
     
         print("Reading BGS Bright shreds!")
         bgsb_shred = Table.read(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_BGS_BRIGHT_shreds_catalog_w_aper_mags.fits")
-        bgsb_shred = consolidate_new_photo(bgsb_shred,sample="BGS_BRIGHT")
+        bgsb_shred = consolidate_new_photo(bgsb_shred,sample="BGS_BRIGHT",flag_cog_nan_always=True)
         print("=="*10)
         
         print("Reading BGS Faint shreds!")
         bgsf_shred = Table.read(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_BGS_FAINT_shreds_catalog_w_aper_mags.fits")
-        bgsf_shred = consolidate_new_photo(bgsf_shred,sample="BGS_FAINT")
+        bgsf_shred = consolidate_new_photo(bgsf_shred,sample="BGS_FAINT",flag_cog_nan_always=True)
         print("=="*10)
     
         print("Reading LOWZ shreds!")
         lowz_shred = Table.read(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_LOWZ_shreds_catalog_w_aper_mags.fits")
-        lowz_shred = consolidate_new_photo(lowz_shred,sample="LOWZ")
+        lowz_shred = consolidate_new_photo(lowz_shred,sample="LOWZ",flag_cog_nan_always=True)
         print("=="*10)
-
-        ##for the lowz-shred update the fiberflux values!
-        # lowz_shred = add_lowz_fiberflux(lowz_shred)
-    
 
         print("Reading SGA shreds!")
         sga_all = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_SGA_sga_catalog_w_aper_mags.fits")
-        sga_all = consolidate_new_photo(sga_all,sample="SGA")
+        sga_all = consolidate_new_photo(sga_all,sample="SGA",flag_cog_nan_always=True)
         print("=="*10)
     
         # --- remove extra columns from SGA before stacking ---
@@ -1063,13 +1195,13 @@ if __name__ == '__main__':
         tot_shred, tot_shred_entire = create_main_data_model(tot_shred, save_path + "/shreds_MAIN_hdu.fits", clean_cat=False)
 
         #get the tractor hdu
-        create_tractor_data_model(tot_shred_entire,save_path + "/shreds_TRACTOR_CAT_hdu.fits")
+        create_tractor_data_model(tot_shred_entire,save_path + "/shreds_TRACTOR_hdu.fits")
 
         #create the zcat hdu
         create_zcat_data_model(tot_shred_entire, save_path + "/shreds_ZCAT_hdu.fits")
 
         #create the reprocess photo hdu
-        create_new_photo_data_model(tot_shred_entire, save_path + "/shreds_REPROCESS_PHOTO_CAT_hdu.fits")
+        create_new_photo_data_model(tot_shred_entire, save_path + "/shreds_REPROCESS_PHOTO_hdu.fits")
         
         ##get the fastspecfit hdu
         if process_fastspec:
@@ -1086,7 +1218,7 @@ if __name__ == '__main__':
         clean_cat, clean_cat_entire = create_main_data_model(clean_cat, save_path + "/clean_MAIN_hdu.fits", clean_cat=True)
 
         #get the tractor hdu
-        create_tractor_data_model(clean_cat_entire,save_path  + "/clean_TRACTOR_CAT_hdu.fits")
+        create_tractor_data_model(clean_cat_entire,save_path  + "/clean_TRACTOR_hdu.fits")
 
         #create the zcat hdu
         create_zcat_data_model(clean_cat_entire, save_path + "/clean_ZCAT_hdu.fits")
@@ -1098,13 +1230,16 @@ if __name__ == '__main__':
             print("Creating the clean fastspecfit hdu")
             get_fastspec_matched_catalog(clean_cat, save_path + "/clean_FASTSPEC_hdu.fits", match_method="TARGETID")
 
-
-    ##ADD FUNCTIONS HERE TO COMBINE THE IMAGE LATENT VECTORS AND SPECTRA TEMPLATE!
-
     #then we consolidate it all into a multi-ext file!
-    #make sure the REPROCESS_PHOTO_CAT is also last in the belwo list!
-    combine_hdus(["MAIN", "ZCAT", "TRACTOR_CAT", "FASTSPEC","REPROCESS_PHOTO_CAT"], base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats",
+    #make sure the REPROCESS_PHOTO_CAT is also last in the below list!
+    combine_hdus(["MAIN", "ZCAT", "TRACTOR", "FASTSPEC","REPROCESS_PHOTO"], base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats",
                  output_file="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits")
+
+    ##add the spectra NMF+PCA information!!
+    create_spectra_hdu("/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits")
+
+    #LATENT IMAGE VECTORS ARE ONLY FOR TRACTOR MAG_Z<20
+
         
 
     

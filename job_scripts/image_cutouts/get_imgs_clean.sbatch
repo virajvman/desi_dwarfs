@@ -7,11 +7,11 @@
 #SBATCH --mail-user=virajvm@stanford.edu
 #SBATCH --mail-type=ALL
 #SBATCH --nodes=1
-#SBATCH --time=01:00:00
+#SBATCH --time=0:15:00
 #SBATCH --output=clean_cutouts.log
 
 N=1
-mp=1
+mp=4
 
 echo Starting at $(date)
 

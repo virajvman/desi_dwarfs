@@ -1162,9 +1162,9 @@ def process_img_shift(img_data, cutout_size=96, org_size=350, return_shift=False
     )
 
     if return_shift:
-        return rgb_img, (x_start, y_start)
+        return rgb_img, (x_start, y_start), img_data
     else:
-        return rgb_img
+        return rgb_img, img_data
 
     
 

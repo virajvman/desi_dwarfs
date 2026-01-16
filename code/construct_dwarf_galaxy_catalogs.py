@@ -309,10 +309,13 @@ def get_final_catalogs(zpix_cat, zpix_trac, sample_name):
     ##adding the not extinction corrected fiber magnitude to the catalog
 
     if sample_name == "LOWZ":
-        zpix_cat["FIBERMAG_R"] = 22.5 - 2.5*np.log10(zpix_trac["FIBERFLUX_R"])
+        zpix_cat["FIBERMAG_R"] = 22.5 - 2.5*np.log10(zpix_trac["FIBERFLUX_R"].data)
+        zpix_cat["FIBERFLUX_R"] = zpix_trac["FIBERFLUX_R"].data
+        
     else:
-        zpix_cat["FIBERMAG_R"] = 22.5 - 2.5*np.log10(zpix_cat["FIBERFLUX_R"])
-
+        zpix_cat["FIBERMAG_R"] = 22.5 - 2.5*np.log10(zpix_cat["FIBERFLUX_R"].data)
+        zpix_cat["FIBERFLUX_R"] = zpix_cat["FIBERFLUX_R"].data
+        
     
     #confirm that the two fiber flux match!
     rfib_mag_org =  22.5 - 2.5*np.log10(zpix_trac["FIBERFLUX_R"])
@@ -1047,9 +1050,9 @@ if __name__ == '__main__':
     from desi_lowz_funcs import match_c_to_catalog, get_stellar_mass, get_stellar_mass_mia, calc_normalized_dist
     from desi_lowz_funcs import get_sweep_filename, save_table, is_target_in_south
 
-    process_sga = True
+    process_sga = False
     compute_nam_dists = True
-    save_int_catalog = False
+    save_int_catalog = True
 
     zred_cuts = { "BGS_BRIGHT" : 0.4, "BGS_FAINT": 0.4, "LOWZ": 0.4, "ELG":0.5 }
     #either BGS_BRIGHT, ELG or BGS_FAINT

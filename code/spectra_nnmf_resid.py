@@ -63,7 +63,7 @@ def parallel_residual(inputs, n_processes=None):
     """
 
     ## load the nnmf templates !
-    nnmf_temps = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/nnmf_templates/templates_dwarfs.npy")
+    nnmf_temps = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/nnmf_templates/templates_dwarfs_v2.npy")
     print(nnmf_temps.shape)
 
     with Pool(processes=n_processes, initializer=init_session, initargs=(nnmf_temps,) ) as pool:

@@ -2,7 +2,8 @@
 This script is run as follows after loading the relevant environments as 
 conda activate
 conda activate ssl-pl
-/global/u1/v/virajvm/miniforge3/envs/ssl-pl/bin/python code/ssl-dwarfs/run_ssl_pretrain_dwarfs.py 
+cd DESI2_LOWZ/desi_dwarfs/code
+/global/u1/v/virajvm/miniforge3/envs/ssl-pl/bin/python ssl-dwarfs/run_ssl_pretrain_dwarfs.py 
 '''
 
 import os
@@ -48,22 +49,22 @@ if __name__ == '__main__':
 
     print("Model finished loading!")
 
-    all_files = glob.glob("/pscratch/sd/v/virajvm/ssl-legacysurvey-dwarfs/h5_datasets/data_chunk*")
+    all_files = glob.glob("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/h5_datasets/data_chunk*")
     print(f"A total of {len(all_files)} data chunk files to be read!")
     
     #we have the data split across different chunks and so we will load them one by one!
     for file_i in range(len(all_files)):
     
-        h5_data_path = f'/pscratch/sd/v/virajvm/ssl-legacysurvey-dwarfs/h5_datasets/data_chunk_{file_i}.h5'
+        h5_data_path = f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/h5_datasets/data_chunk_{file_i}.h5"
         print(h5_data_path)
-        # Load h5py file into dictionary
+        
         DDL = load_data.DecalsDataLoader(image_dir=h5_data_path, npix_in=152)
         gals = DDL.get_data(-1, fields=DDL.fields_available,npix_out=152) # -1 to load all galaxies
         print("Available keys & data shapes:")
-        for k in gals:
-            if k != "image_path" and k != "file_path":
-                print(f"{k} shape:", gals[k].shape)
-            
+
+        ngals =  gals[f'images'].shape[0]
+
+        print(ngals)
             
         class Args: # In general codes in this project use argparse. Args() simplifies this for this example 
             # Data location and GPU availability 
@@ -100,7 +101,8 @@ if __name__ == '__main__':
             num_negatives = 16 #Number of negative samples to keep in queue for Mocov2
             
             # needed for predict.py script
-            out_dir = '/pscratch/sd/v/virajvm/ssl-legacysurvey-dwarfs/representations'
+            out_dir = '/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/representations'
+            
             extract_representations = True
             checkpoint_path = '/pscratch/sd/v/virajvm/ssl-legacysurvey-dwarfs/resnet50.ckpt'
             use_mlp_representation = True
@@ -111,13 +113,14 @@ if __name__ == '__main__':
             num_gpus = 1
             data_dim = 2048
             predict_batch_size = ngals_tot
-            representation_directory = '/pscratch/sd/v/virajvm/ssl-legacysurvey-dwarfs/representations'
+            representation_directory = '/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/representations'
             representation_file_head = file_head
             umap_file_head = '/pscratch/sd/v/virajvm/ssl-legacysurvey-dwarfs/umap_representations'
+            
             train_umap = True
             
             #For dimensionality reduction script
-            n_samples = 1000
+            n_samples = ngals
             sample_dimensionality = 100
             n_pca_components = 8
             n_umap_components = 2
@@ -187,15 +190,16 @@ if __name__ == '__main__':
            representations = representations.detach()
             
         representations = representations.numpy()
-    
+            
         print(f"Representations shape = {representations.shape}")
-
-        save_rep = f'/pscratch/sd/v/virajvm/ssl-legacysurvey-dwarfs/representations/represent_chunk_{file_i}.npy'
-
-        ##SAVE THESE REPRESENTATIONS AS A FLOAT32 OBJECT
         
+        save_rep = f'/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/representations/represent_chunk_{file_i}.npy'
+
+        print(f"Saving file = {save_rep}")
+                
         #save this array
         np.save( save_rep, representations )
+            
         
 
 

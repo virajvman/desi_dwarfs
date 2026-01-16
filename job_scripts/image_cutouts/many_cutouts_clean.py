@@ -25,6 +25,7 @@ import fitsio
 import multiprocessing
 from glob import glob
 from astropy.table import vstack
+import time
 
 def weighted_partition(weights, n, groups_per_node=None):
     '''
@@ -85,7 +86,7 @@ def weighted_partition(weights, n, groups_per_node=None):
 
 def _cutout_one(args):
     return cutout_one(*args)
-
+    
 def cutout_one(jpegfile, ra, dec, dry_run, rank, iobj,cut_size):
     """
     pixscale = 0.262
@@ -103,6 +104,7 @@ def cutout_one(jpegfile, ra, dec, dry_run, rank, iobj,cut_size):
     else:
         cutout(ra, dec, jpegfile, width=width, height=height, layer='ls-dr9', pixscale=0.262, force=False, bands = ["g","r","z"],invvar=True,maskbits=True)
 
+
 def plan(comm=None,outdir_data='.', mp=1):
     
     from astropy.table import Table
@@ -117,6 +119,7 @@ def plan(comm=None,outdir_data='.', mp=1):
     clean_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4.fits")
     #subselect:
     print(f"Total number = {len(clean_cat)}")
+    
     ## we select the first 10k clean objects in each sample
     # clean_lowz = clean_cat[clean_cat["SAMPLE"] == "LOWZ"][:10000]
     # clean_elg = clean_cat[clean_cat["SAMPLE"] == "ELG"][:10000]
@@ -126,7 +129,6 @@ def plan(comm=None,outdir_data='.', mp=1):
     
     out = clean_cat
     
-
     print("TOTAL NUMBER = ", len(out))
     
     # out = out #just trying with the first one hundred or so
@@ -134,12 +136,14 @@ def plan(comm=None,outdir_data='.', mp=1):
     allra = np.array(out["RA"],dtype = object)
     alldec = np.array(out["DEC"],dtype = object)
     allobjids = np.array(out["TARGETID"],dtype = object)
-    allsizes = np.array(out["IMAGE_SIZE_PIX"],dtype = object)
+    # allsizes = np.array(out["IMAGE_SIZE_PIX"],dtype = object)
+    allsizes = np.full(len(out), 152, dtype=int)
+    #we do not need the large 350, just 152 is good enough as for SSL stuff!!
+
      ##need to check what fraction of these files exist!!
     file_names = []
     need_inds = []
     n = len(out)
-
     
     print("Checking what images already exist!!")
     for k in range(len(allobjids)):
@@ -151,13 +155,12 @@ def plan(comm=None,outdir_data='.', mp=1):
             need_inds.append(k)
 
         # log every 100 iterations
-        if (k + 1) % 1000 == 0 or (k + 1) == n:
+        if (k + 1) % 10000 == 0 or (k + 1) == n:
             print(f"Processed {k+1}/{n} ({(k+1)/n:.1%})")
 
     need_inds = np.array(need_inds)
 
     print(f"Need to download {len(need_inds)}/{len(allra)} images!")
-
     
     allra = allra[need_inds]
     alldec = alldec[need_inds]
@@ -202,25 +205,30 @@ def do_cutouts(args, comm=None, outdir_data='.'):
     # all done
     if len(jpegfiles) == 0 or len(np.hstack(jpegfiles)) == 0:
         return
-        
-    assert(len(groups) == size)
-    
 
+    assert(len(groups) == size)
+
+    if args.mp > 1:
+        P = multiprocessing.Pool(args.mp)
+    
     for ii in groups[rank]:
         print(f'Rank {rank} started at {time.asctime()}')
         sys.stdout.flush()
-        
-        ## the list of args below are for the _cutout_one function
-        # mpargs = [(jpegfile, ra, dec, args.dry_run, rank, iobj) for iobj, (jpegfile, ra, dec) in
-        #           enumerate(zip(jpegfiles[ii], allra[ii], alldec[ii]))]
-        
+    
+        # If jpegfiles[ii] is already a list of cutouts, batch them
         mpargs = [(jpegfiles[ii], allra[ii], alldec[ii], args.dry_run, rank, allobjids[ii],allsizes[ii])]
-        
+    
         if args.mp > 1:
-            with multiprocessing.Pool(args.mp) as P:
-                P.map(_cutout_one, mpargs)
+            # non-blocking, more robust
+            for _ in P.imap_unordered(_cutout_one, mpargs, chunksize=1):
+                pass
         else:
-            [cutout_one(*mparg) for mparg in mpargs]
+            for args1 in mpargs:
+                cutout_one(*args1)
+    
+    if args.mp > 1:
+        P.close()
+        P.join()
 
     print(f'  rank {rank} is done')
     sys.stdout.flush()
@@ -232,8 +240,7 @@ def do_cutouts(args, comm=None, outdir_data='.'):
         print(f'All done at {time.asctime()}')
             
             
-            
-            
+                 
 def main():
     """Main wrapper.
 

@@ -13,4 +13,4 @@
 
 cd /global/u1/v/virajvm/DESI2_LOWZ
 source /global/cfs/cdirs/desi/software/desi_environment.sh main
-python3 desi_dwarfs/code/nnmf_analysis.py
+python3 -u desi_dwarfs/code/nnmf_analysis.py

@@ -215,7 +215,7 @@ if __name__ == '__main__':
     make_umap_plot(fig,ax[0], spec_temp_cat, nnmf_mask, nnmf_rnorm, 
                     n_bins=nbins, limits = None,
                   cmap = "Reds",scatter=False, 
-                  cb_label = r"NMF Fit Residaul", cb_size = cb_size,cb_pos = [0.08,cb_height,bar_size,0.02])
+                  cb_label = r"NMF Fit Residaul", cb_size = cb_size,cb_pos = 0)
 
     ####
     
@@ -227,32 +227,17 @@ if __name__ == '__main__':
 
     ####
     
-    oiii_snr = (np.array(fspec_cat["OIII_5007_FLUX"]) * np.sqrt(np.array(fspec_cat["OIII_5007_FLUX_IVAR"]))) > 3
-    oii_snr = (np.array(fspec_cat["OII_3726_FLUX"]) * np.sqrt(np.array(fspec_cat["OII_3726_FLUX_IVAR"])) ) > 3
-    halpha_snr = (np.array(fspec_cat["HALPHA_FLUX"]) * np.sqrt(np.array(fspec_cat["HALPHA_FLUX_IVAR"]))) > 3
-    sii_snr_1 = (np.array(fspec_cat["SII_6716_FLUX"]) * np.sqrt(np.array(fspec_cat["SII_6716_FLUX_IVAR"])) ) > 3
-    sii_snr_2 = (np.array(fspec_cat["SII_6731_FLUX"]) * np.sqrt(np.array(fspec_cat["SII_6731_FLUX_IVAR"])) ) > 3
-    
-    snr_mask = oiii_snr & oii_snr & halpha_snr & sii_snr_1 & sii_snr_2
-
-
-    oiii_oii_ratio = np.log10(np.array(fspec_cat["OIII_5007_FLUX"])/np.array(fspec_cat["OII_3726_FLUX"]))
-    
     make_umap_plot(fig,ax[2], spec_temp_cat, snr_mask, oiii_oii_ratio, 
                 n_bins=nbins, limits = None,
               cmap = cmr.sapphire,scatter=False, 
               cb_label = r"log([OIII]/[OII])", cb_size = cb_size,cb_pos = [0.08+ 2*offset_bar,cb_height,bar_size,0.02])
 
-    ####
-    
-    sii_tot = np.array(fspec_cat["SII_6716_FLUX"]) + np.array(fspec_cat["SII_6731_FLUX"])
-    sii_ha_ratio = np.log10( sii_tot/np.array(fspec_cat["HALPHA_FLUX"]) )
-    
+
     make_umap_plot(fig,ax[3], spec_temp_cat, snr_mask, sii_ha_ratio, 
                 n_bins=nbins, limits = None,
               cmap = cmr.rainforest,scatter=False, 
               cb_label = r"log([SII]/[H$\alpha$])", cb_size = cb_size,cb_pos = [0.08+ 3*offset_bar,cb_height,bar_size,0.02])
 
-    plt.savefig(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/plots/umap_spec_multi_panel.pdf",bbox_inches="tight")
+    plt.savefig(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/plots/umap_img_multi_panel.pdf",bbox_inches="tight")
     plt.close()
 

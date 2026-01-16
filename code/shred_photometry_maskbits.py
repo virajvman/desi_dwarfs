@@ -269,7 +269,12 @@ def aper_cen_masked(cat,verbose=True):
     What will happen to do this when the we do the light-weighted mask and no geometrical mask?
     '''
 
-    bad_mask = cat["APER_CEN_MASKED_FINAL"].data
+    col = cat["APER_CEN_MASKED_FINAL"]
+    
+    if hasattr(col, "mask"):
+        raise ValueError("This column is a masked column type. Be careful of bugs!!!")
+
+    bad_mask = np.asarray(col, dtype=bool)
 
     bad_frac = np.sum(bad_mask)/len(bad_mask)
     if verbose:
@@ -425,7 +430,7 @@ def create_shred_maskbits_from_dict(cat, bitmasks_to_apply = [0,1,2,3,4,5,6,7,8,
 
 
 
-def print_maskbit_statistics(maskbit_col, bitmasks_to_use = [0,1,2,3,4,5,6,7,8,9,10,11,12,13]):
+def print_maskbit_statistics(maskbit_col, bitmasks_to_use = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]):
     """
     Print statistics on what fraction of sources have each maskbit (0..n_bits-1) set.
 
@@ -462,7 +467,36 @@ def print_maskbit_statistics(maskbit_col, bitmasks_to_use = [0,1,2,3,4,5,6,7,8,9
 
 
     
-# # #mask sources where the nearest smooth blob final is not on the DESI fiber?: 39627462455334432
+##### OTHER MASKBITS
+
+def flag_weird_spectra(spec_cat, main_cat, fspec_cat):
+    '''
+    Function that constructs maskbits for weird spectra, likely wrong redrock redshifts
+    '''
+
+    ##MASK_1 ARE SOME WEIRD SPECTRA DATA ANOMALIES, like poor sky subtraction etc.
+    mask_1 = inspect_anomalies(spec_temp_cat, 2.8,6, radius_cut = 2)
+    
+    #MASK 2 is also unclear, appear like weird spectra or wrong redrock redshifts 
+    mask_2 = inspect_anomalies(spec_temp_cat, 5.8,6.7, radius_cut = 1)
+    
+    mask_3 = inspect_anomalies(spec_temp_cat,6.7,7, radius_cut = 0.3)
+    ##for the mask_3 we want them to be only ELG objects that we remove!!
+    mask_3 = mask_3 & (main_cat["SAMPLE"] == "ELG")
+
+    ## identify objects with confident strong lines
+    halpha_snr  = np.array(fspec_cat["HALPHA_FLUX"].data) * np.sqrt(np.array(fspec_cat["HALPHA_FLUX_IVAR"].data))
+    hbeta_snr  = np.array(fspec_cat["HBETA_FLUX"]) * np.sqrt(np.array(fspec_cat["HBETA_FLUX_IVAR"]))
+    oiii_snr  = np.array(fspec_cat["OIII_5007_FLUX"]) * np.sqrt(np.array(fspec_cat["OIII_5007_FLUX_IVAR"]))
+    strong_line_conf = (halpha_snr > 3) & (hbeta_snr > 3) & (oiii_snr > 3)
+    
+    weird_mask = (mask_1 | mask_2 | mask_3) & (~strong_line_conf)
+
+    print(f"Total weird identified = {np.sum(weird_mask)}")
+
+    #we can check that there are no significant emission lines 
+
+    return weird_mask
 
 
 

@@ -14,7 +14,8 @@ Code adapted from https://github.com/georgestein/ssl-legacysurvey/blob/main/scri
 
 conda activate
 conda activate ssl-pl
-/global/u1/v/virajvm/miniforge3/envs/ssl-pl/bin/python similarity_search.py
+cd DESI2_LOWZ/desi_dwarfs/code
+/global/u1/v/virajvm/miniforge3/envs/ssl-pl/bin/python ssl-dwarfs/similarity_search.py
 """
 
 import os
@@ -26,17 +27,8 @@ from joblib import Parallel, delayed
 
 def load_all_representations(): #rep_dir, file_pattern="represent*.npy"
     """Load & stack all chunked .npy rep files into one float32 array."""
-    # rep_files = sorted(glob.glob(os.path.join(rep_dir, file_pattern)))
-    # reps_list = []
-    # for f in rep_files:
-    #     reps = np.load(f).astype(np.float32)
-    #     reps_list.append(reps)
 
-    # reps_list = np.vstack(reps_list)
-    
-    # print(f"Shape of representation array = {reps_list}")
-
-    reps_list = np.load("/pscratch/sd/v/virajvm/ssl-legacysurvey-dwarfs/representations/total_representation_arr.npy")
+    reps_list = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/dwarf_dr1/total_representation_arr.npy")
     
     return reps_list
 
@@ -101,7 +93,6 @@ def run_similarity_by_mag_bins(reps, mags, tgids, k, delta_mag, output_dir, mag_
 
     #there are bins in which I am doing the chunked similarity search
     bins = np.arange(mags.min(), mags.max() + mag_bin_width, mag_bin_width)
-    # bins = np.arange(16, 21.75 + mag_bin_width, mag_bin_width)
 
     print(f"Found this targetid = {tgids[tgids == 39627631053769626]}")
     
@@ -114,6 +105,9 @@ def run_similarity_by_mag_bins(reps, mags, tgids, k, delta_mag, output_dir, mag_
 
     faiss.normalize_L2(reps)
 
+    # fixed output width
+    kmax = max(k, 50)
+
     for i in range(len(bins)-1): 
         print("==="*10)
         
@@ -121,7 +115,9 @@ def run_similarity_by_mag_bins(reps, mags, tgids, k, delta_mag, output_dir, mag_
 
         mag_center = 0.5*(bins[i] + bins[i+1])
         print(f"Galaxies whose similarity scores are being computed = {[bins[i], bins[i+1]]}")
-        print(f"Processing mag slice {mag_center:.2f} ± {mag_bin_width:.2f}")
+        
+        print(f"Index built over |mag − {mag_center:.2f}| ≤ {delta_mag:.2f}")
+        print(f"Querying objects with mag in [{bins[i]:.2f}, {bins[i+1]:.2f})")
 
         # 1. build index only once
         idxs_in_bin = np.where(np.abs(mags - mag_center) <= delta_mag)[0]
@@ -145,13 +141,27 @@ def run_similarity_by_mag_bins(reps, mags, tgids, k, delta_mag, output_dir, mag_
         query_mask = (mags >= bins[i]) & (mags < bins[i+1])
         query_idxs = np.where(query_mask)[0]
 
-        print(f"Galaxies for which similarity is being computed = {len(query_idxs)}")
+        # effective k for FAISS query
+        keff = min(kmax, len(idxs_in_bin))
         
+        print(f"Galaxies for which similarity is being computed = {len(query_idxs)}")
+
         def query_one_in_bin(qidx):
             qvec = reps[qidx:qidx+1]
-            D, I = index.search(qvec, k)
-            selected_global_inds = idxs_in_bin[I[0]]
-            return selected_global_inds, tgids[selected_global_inds], D[0]
+            D, I = index.search(qvec, keff)
+
+            inds = idxs_in_bin[I[0]]
+            tgs  = tgids[inds]
+            sims = D[0]
+
+            # ---- PAD TO FIXED LENGTH ----
+            if keff < kmax:
+                pad = kmax - keff
+                inds = np.pad(inds, (0, pad), constant_values=-1)
+                tgs  = np.pad(tgs,  (0, pad), constant_values=-1)
+                sims = np.pad(sims, (0, pad), constant_values=np.nan)
+
+            return inds, tgs, sims
 
         if use_parallel:
             results = Parallel(n_jobs=n_jobs, backend="threading", verbose=5)(
@@ -171,7 +181,7 @@ def run_similarity_by_mag_bins(reps, mags, tgids, k, delta_mag, output_dir, mag_
                 results_sims.append(sims)
 
         ##temporary saving results 
-        results_inds_i = np.stack(results_inds)
+        results_inds_i = np.stack(results_inds) # (N, kmax)
         results_tgids_i = np.stack(results_tgids)
         results_sims_i = np.stack(results_sims)
             
@@ -227,13 +237,13 @@ def main(mag_file, tgid_file, output_dir,
     
 if __name__ == "__main__":
     # === User parameters: edit these paths & values ===
-    mag_file    = "/pscratch/sd/v/virajvm/ssl-legacysurvey-dwarfs/representations/total_rmags_arr.npy"
-    tgid_file    = "/pscratch/sd/v/virajvm/ssl-legacysurvey-dwarfs/representations/total_targetids_arr.npy"
-    output_dir  = "/pscratch/sd/v/virajvm/ssl-legacysurvey-dwarfs/similarity_search_magb"
-    k           = 5
+    mag_file    = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/dwarf_dr1/total_rmags_arr.npy"
+    tgid_file    = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/dwarf_dr1/total_targetids_arr.npy"
+    output_dir  = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/similarity_search_magb"
+    kmin           = 5
     delta_mag   = 0.5
     n_jobs      = 2
     use_parallel = False
 
-    main(mag_file, tgid_file, output_dir, k, delta_mag, n_jobs, use_parallel)
+    main(mag_file, tgid_file, output_dir, kmin, delta_mag, n_jobs, use_parallel)
 

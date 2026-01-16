@@ -42,26 +42,9 @@ def dr2_rgb(rimgs, bands, **ignored):
 
 
 
-def scatter_plot_as_images_from_array(img_file_array, z_emb, nx=8, ny=8, npix_show=64, iseed=13579):
+def scatter_plot_as_images_from_array(imgs, z_emb, nx=8, ny=8, npix_show=152, iseed=13579):
     """
     Sample points from 2D embedding space and display the corresponding galaxy images.
-
-    tgids_array and z_emb have a one to one mapping!
-
-    Parameters
-    ----------
-    tgids_array : array
-        Array of shape (N_images) which are the targetids of the images!
-    z_emb : array
-        (N_total, 2+) array of the galaxy locations in UMAP embedding space.
-    nx, ny : int
-        Number of tiles in x and y direction for the image grid.
-    npix_show : int
-        Output size per image tile in pixels (assumed square).
-    iseed : int
-        Seed for reproducibility in image selection per tile.
-    display_image : bool
-        If True, show the matplotlib image.
 
     Returns
     -------
@@ -84,6 +67,7 @@ def scatter_plot_as_images_from_array(img_file_array, z_emb, nx=8, ny=8, npix_sh
     
     inds_lin = np.arange(z_emb.shape[0])
     inds_selected = []
+    
 
     n_candidates = 3
 
@@ -101,165 +85,63 @@ def scatter_plot_as_images_from_array(img_file_array, z_emb, nx=8, ny=8, npix_sh
             #     ind_plt = np.random.choice(inds)
             #     inds_selected.append(ind_plt)  # This is an index into image_array
 
+    text_entries = []
+    
     # Now build the composite image
     iimg = 0
     for ix in range(nx):
         for iy in range(ny):
             if iimg % 100 == 0 and iimg > 0:
                 print(f"{iimg}/{nx*ny}")
+                
             # dm = (z_emb_bins[:, 0] == ix) & (z_emb_bins[:, 1] == iy)
             # inds = inds_lin[dm]
             candidates = inds_selected[iimg]  # list of candidate indices
-    
-            for cand in candidates:
-                try:
-                    tgid_file = img_file_array[cand]
-    
-                    img = fits.open(tgid_file)[0].data
-    
-                    # Crop center
-                    size = npix_show
-                    start = (img.shape[1] - size) // 2
-                    end = start + size
-                    img = img[:, start:end, start:end]
-    
-                    rgb_img = dr2_rgb(img, ['g', 'r', 'z'])[::-1]
-    
-                    img_full[ix * npix_show:(ix + 1) * npix_show,
-                             iy * npix_show:(iy + 1) * npix_show] = rgb_img
 
-                    break  # exit candidate loop once one image is loaded
-        
-                except Exception as e:
-                    print(f"Warning: could not load {tgid_file} – {e}")
-                    continue
+            if len(candidates) > 0:
+                ind = candidates[0]
+                img = imgs[ind]
+    
+                # Crop center
+                size = npix_show
+                start = (img.shape[1] - size) // 2
+                end = start + size
+                img = img[:, start:end, start:end]
+    
+                rgb_img = dr2_rgb(img, ['g', 'r', 'z'])[::-1]
+    
+                img_full[ix * npix_show:(ix + 1) * npix_show,
+                         iy * npix_show:(iy + 1) * npix_show] = rgb_img
+
+                # record text position (x, y) and label
+                x_text = iy * npix_show + 4
+                y_text = ix * npix_show + npix_show - 8
+                text_entries.append((x_text, y_text, str(ind)))
     
             iimg += 1
             #####
 
-            # if len(inds) > 0:
-            #     #this whole thing can be made better when we add the image path to the h5 dataset itself! We do not have access to fits in this
-            #     tgid_file = img_file_array[inds_selected[iimg]]
-
-            #     img = fits.open(tgid_file)[0].data
-            #     #crop the image to center 152
-            #     size = 96
-            #     start = (img.shape[1] - size) // 2  # assumes square images
-            #     end = start + size
-            #     img = img[:, start:end, start:end]
-
-            #     #conver to to the rgb image!
-            #     rgb_img = dr2_rgb(img,
-            #                          ['g','r','z'])[::-1]
-                
-            #     img_full[iy * npix_show:(iy + 1) * npix_show,
-            #              ix * npix_show:(ix + 1) * npix_show] = rgb_img
-            #     iimg += 1
-
-    #once this image is returned, we will plot it!
-    
-    # fig, ax = plt.subplots(figsize=(10, 10))
-    # ax.imshow(img_full,origin = "lower")
-    # ax.set_xticks(np.arange(0, nx * npix_show, npix_show) )
-    # ax.set_yticks(np.arange(0, ny * npix_show, npix_show) )
-    # ax.set_xticklabels(np.arange(nx))
-    # ax.set_yticklabels(np.arange(ny))
-
-    # ax.set_xlim([-2*npix_show, (nx+2) * npix_show ] )
-    # ax.set_ylim([-2*npix_show, (ny+2) * npix_show ] )
-            
-    # ax.set_xlabel("ix")
-    # ax.set_ylabel("iy")
-    # ax.set_title("Image grid: (ix, iy) indices")
-    # ax.grid(True, color='red', linestyle='--', linewidth=0.5)
-    
-    # plt.savefig("/pscratch/sd/v/virajvm/ssl-legacysurvey-dwarfs/plots/image_grid_debug_labels.png")
-    # plt.close()
-
-    return img_full
+    return img_full, text_entries
 
 
-# def scatter_plot_as_images_rectangular_grid(img_file_array, z_emb, nx=8, ny=8, npix_show=64, iseed=13579):
-#     """
-#     Arrange galaxy images in a rectangular grid using UMAP ordering.
+def plot_umap(img_full, text_entries, save_path):
 
-#     Parameters
-#     ----------
-#     tgids_array : array
-#         Array of targetids for the galaxy images.
-#     z_emb : array
-#         (N_total, 2+) array of UMAP locations.
-#     nx, ny : int
-#         Grid size (number of tiles along x and y).
-#     npix_show : int
-#         Size (pixels) of each image tile.
-#     iseed : int
-#         Random seed for reproducibility in selection.
+    plt.figure(figsize=(60, 60))
+    plt.imshow(img_full, origin="lower")
 
-#     Returns
-#     -------
-#     img_full : np.ndarray
-#         Composite RGB image in a rectangular layout.
-#     """
-    
-#     print(f"Dimensions of input UMAP space: {z_emb.shape}")
-#     z_emb = z_emb[:, :2]
-#     n_total = z_emb.shape[0]
-#     n_show = nx * ny
+    for x, y, label in text_entries:
+        plt.text(
+            x, y, label,
+            color="white",
+            fontsize=10,
+            ha="left",
+            va="top",
+            bbox=dict(facecolor="black", alpha=0.5, pad=1)
+        )
 
-#     # Normalize UMAP coordinates to [0, 1]
-#     z_norm = (z_emb - z_emb.min(0)) / (z_emb.max(0) - z_emb.min(0))
-
-#     # Sort by x then y for approximate UMAP ordering
-#     sort_idx = np.lexsort((z_norm[:, 1], z_norm[:, 0]))
-#     sorted_img_file = img_file_array[sort_idx]
-
-#     # Randomly sample n_show from top sorted indices
-#     np.random.seed(iseed)
-#     selected_img_file = sorted_img_file[:n_show]
-
-#     # Build the RGB composite image
-#     img_full = np.zeros((ny * npix_show, nx * npix_show, 3)) + 255  # white background
-
-#     iimg = 0
-#     for iy in range(ny):
-#         for ix in range(nx):
-#             if iimg % 100 == 0 and iimg > 0:
-#                 print(f"{iimg}/{nx * ny}")
-#             tgid_file = selected_img_file[iimg]
-  
-#             img = fits.open(tgid_file)[0].data
-#             size = 96
-#             start = (img.shape[1] - size) // 2
-#             end = start + size
-#             img = img[:, start:end, start:end]
-
-#             rgb_img = dr2_rgb(img, ['g', 'r', 'z'])[::-1]
-
-#             img_full[ix * npix_show:(ix + 1) * npix_show,
-#                      iy * npix_show:(iy + 1) * npix_show] = rgb_img
-
-#             iimg += 1
-
-#     return img_full
-   
-
-def plot_umap(img_full,save_path):
-    
-    #save plot and save this now!!
-    plt.figure(figsize = (10,10))
-    plt.imshow(img_full,origin="lower")
-    # plt.xlim([-8,15])
-    # plt.ylim([-8,15])
-    # plt.xticks([])
-    # plt.yticks([])
-    # plt.axis('off') 
-    plt.savefig(save_path,bbox_inches="tight")
+    plt.axis("off")
+    plt.savefig(save_path, bbox_inches="tight")
     plt.close()
-
-
-    
-    return
 
 
 def make_umap_plot(umap_embedding_cos,nx, ny):
@@ -299,28 +181,21 @@ def make_umap_plot(umap_embedding_cos,nx, ny):
     return
 
     
-
 if __name__ == '__main__':
 
-    #load the umap and tgids array
-    umap_embedding_cos = np.load("/pscratch/sd/v/virajvm/ssl-legacysurvey-dwarfs/umap_representations/total_umap_embedding_2d.npy")
-
-
-    #load all the image file paths of these images!!
-    all_image_files = np.load("/pscratch/sd/v/virajvm/ssl-legacysurvey-dwarfs/representations/total_image_files_arr.npy",allow_pickle = True)
-
-    # mask = (umap_embedding_cos[:,0] > -8) &   (umap_embedding_cos[:,1] > -8)  &   (umap_embedding_cos[:,1] < 15) & (umap_embedding_cos[:,0] < 15)
-    # umap_embedding_cos = umap_embedding_cos[  mask  ]
-    # all_image_files = all_image_files[  mask  ]
-
-    # make the image collage plot
-    nx, ny = 50,50
-    img_full = scatter_plot_as_images_from_array(all_image_files, umap_embedding_cos, nx=nx, ny=ny)
-
-    make_umap_plot(umap_embedding_cos,nx,ny)
-
-    # # img_full_rect = scatter_plot_as_images_rectangular_grid(all_image_files, umap_embedding_cos, nx=nx, ny=ny)
-
-    plot_umap(img_full, save_path =  "/pscratch/sd/v/virajvm/ssl-legacysurvey-dwarfs/plots/umap_galaxy_imgs.png")
-    # plot_umap(img_full, save_path =  "/pscratch/sd/v/virajvm/ssl-legacysurvey-dwarfs/plots/umap_galaxy_rect_imgs.png")
-    
+    for size in [25,50,75]:
+        for img_type in ["recon"]:
+            #load the umap and tgids array
+            umap_embedding_cos = np.load(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/umap/total_umap_embedding_2d_{img_type}.npy")
+        
+            #load all the image file paths of these images!!
+            all_images = np.load(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/total_image_{img_type}_arr.npy")
+        
+            print(all_images.shape)
+            
+            # make the image collage plot
+            nx, ny = size,size
+            img_full, text_entries = scatter_plot_as_images_from_array(all_images, umap_embedding_cos, nx=nx, ny=ny, npix_show=128)
+        
+            plot_umap(img_full, text_entries, save_path =  f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/plots/umap_galaxy_imgs_{img_type}_{size}.pdf")
+            
