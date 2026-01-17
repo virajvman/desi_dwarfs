@@ -310,15 +310,11 @@ Explore the DESI Dwarf Galaxy catalog interactively in your browser.
 <details>
 <summary><strong>DESI DR1 Extragalactic Dwarf Galaxy Catalog — Image Cutouts</strong></summary>
 
-We provide 152 × 152 pixel image cutouts for all galaxies in the catalog with z-band magnitudes \( z < 0.20 \).  
-The image cutouts are stored in an HDF5 (.h5) file available at the link below.
+<br>
 
-Each image cutout can be matched to a row in the catalog using the `TARGETID` column.  
-Example code demonstrating how to read the HDF5 file and visualize the image cutouts is provided in the tutorials.
+We provide 152 × 152 pixel image cutouts for all galaxies in the catalog with z-band magnitudes (z < 20). The image cutouts are stored in an HDF5 (.h5) file available at this link. Each image cutout can be matched to a row in the catalog using the `TARGETID` column. Example code demonstrating how to read the HDF5 file and visualize the image cutouts is provided in the tutorials.
 
-For sources identified as shredded, the image cutouts have been recentered on the reconstructed parent galaxy center.
-
-The 2048-dimensional representations derived from the self-supervised learning (SSL) model for these image cutouts are available at the link below.
+For sources identified as shredded, the image cutouts have been recentered on the reconstructed parent galaxy center. The 2048-dimensional representations derived from the self-supervised learning (SSL) model for these image cutouts are available at the same link.
 
 </details>
 
@@ -326,10 +322,9 @@ The 2048-dimensional representations derived from the self-supervised learning (
 <details>
 <summary><strong>DESI DR1 Extragalactic Dwarf Galaxy Catalog — Spectra</strong></summary>
 
-We provide all available DESI spectra for objects in this catalog.  
-The spectra are stored in an HDF5 (.h5) file available at the link below.
+<br>
 
-Each spectrum can be matched to a row in the catalog using the `TARGETID` column.  
+We provide all available DESI spectra for objects in this catalog. The spectra are stored in an HDF5 (.h5) file available at the link below. Each spectrum can be matched to a row in the catalog using the `TARGETID` column.  
 Example code demonstrating how to read the HDF5 file and visualize the spectra is provided in the tutorials.
 
 </details>
