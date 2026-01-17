@@ -230,6 +230,10 @@ Explore the DESI Dwarf Galaxy catalog interactively in your browser.
 
 
 <details>
+
+
+
+    
 <summary><strong>Extension: SPECTRA_TEMPLATE</strong></summary>
 
 <br>
@@ -340,21 +344,6 @@ Example code demonstrating how to read the HDF5 file and visualize the spectra i
 ### Additional Notes
 
 <details>
-<summary><strong>Extension: FASTSPEC</strong></summary>
-
-<br>
-
-| Name | Type | Units | Description |
-|------|------|-------|-------------|
-| TARGETID | int64 |  | DESI TARGET ID |
-| DN4000 | float32 |  | Narrow 4000-Å break index (Balogh et al. 1999) measured from the emission-line subtracted spectrum. |
-| DN4000_OBS | float32 |  | Narrow 4000-Å break index measured from the observed spectrum. |
-
-
-
-
-
-<details>
 <summary><strong>DWARF_MASKBIT Descriptions</strong></summary>
 
 <br>
@@ -384,9 +373,6 @@ A value of `1 << n` indicates that the bit at position `n` is set.
 | 15 | 32768 | Likely incorrect Redrock redshift, based on UMAP analysis  | 
 
 </details>
-
-</details>
-
 
 
 <details>
