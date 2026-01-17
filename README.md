@@ -1,6 +1,5 @@
 
-
-## DESI DR1 Extragalactic Dwarf Galaxy Catalog
+## DESI Extragalactic Dwarf Galaxy Catalog
 
 IN PROGRESS!
 
@@ -11,8 +10,10 @@ Contact: Viraj Manwadkar (virajvm@stanford.edu)
 Explore the DESI Dwarf Galaxy catalog interactively in your browser.
 
 
-### DESI DR1 Extragalactic Dwarf Galaxy Catalog — Data Model
+<details>
+<summary><strong>DESI Extragalactic Dwarf Galaxy Catalog — Catalog Data Model</strong></summary>
 
+<br>
 
 <details>
 <summary><strong>Extension: MAIN</strong></summary>
@@ -97,7 +98,7 @@ Explore the DESI Dwarf Galaxy catalog interactively in your browser.
 </details>
 
 <details>
-<summary><strong>Extension: TRACTOR_CAT</strong></summary>
+<summary><strong>Extension: TRACTOR</strong></summary>
 
 
 <br>
@@ -161,7 +162,7 @@ Explore the DESI Dwarf Galaxy catalog interactively in your browser.
 </details>
 
 <details>
-<summary><strong>Extension: REPROCESS_PHOTO_CAT</strong></summary>
+<summary><strong>Extension: REPROCESS_PHOTO</strong></summary>
 
 <br>
 
@@ -229,19 +230,21 @@ Explore the DESI Dwarf Galaxy catalog interactively in your browser.
 
 
 <details>
-<summary><strong>Extension: SPECTRA_TEMPLATE_CAT</strong></summary>
+<summary><strong>Extension: SPECTRA_TEMPLATE</strong></summary>
 
 <br>
 
 | Name | Type | Units | Description |
 |------|------|-------|-------------|
 | TARGETID | int64 |  | DESI TARGET ID |
-| COEFFS | float32, shape (30,)  |  | 20 NNMF + 10 PCA spectral template coefficients  |
-| UMAP_D2 | float32, shape (2,) |  | 2D UMAP coordinates |
-| UMAP_D3 | float32, shape (3,) |  | 3D UMAP coordinates |
+| NNMF_i | float32, shape (30,)  |  | ith NNMF spectral template coefficent (total 10)  |
+| PCA_i | float32, shape (30,)  |  | ith PCA spectral template coefficent (total 20)  |
+| SPEC_UMAP_0 | float32 |  | spectra 2D UMAP co-ordinate (x) |
+| SPEC_UMAP_1 | float32 |  | spectra 2D UMAP co-ordinate (y)  |
+| NNMF_RESID | float32, shape (3,) |  | The residual norm of NNMF fit to spectra |
+| NNMF_NORM_FACTOR | float32, shape (3,) |  | The normalization factor used to normalize spectra before fitting templates |
 
 </details>
-
 
 
 <details>
@@ -256,14 +259,13 @@ Explore the DESI Dwarf Galaxy catalog interactively in your browser.
 | DN4000_OBS | float32 |  | Narrow 4000-Å break index measured from the observed spectrum. |
 | DN4000_IVAR | float32 |  | Inverse variance of DN4000 and DN4000_OBS. |
 | DN4000_MODEL | float32 |  | Narrow 4000-Å break index measured from the best-fitting continuum model. |
-| DN4000_MODEL_IVAR | float32 |  | Inverse variance of DN4000_MODEL. |
 | SNR_B | float32 |  | Median signal-to-noise ratio per pixel in the b camera. |
 | SNR_R | float32 |  | Median signal-to-noise ratio per pixel in the r camera. |
 | SNR_Z | float32 |  | Median signal-to-noise ratio per pixel in the z camera. |
-| APERCORR | float32 |  | Median aperture correction factor. |
-| APERCORR_G | float32 |  | Aperture correction factor measured in the g band. |
-| APERCORR_R | float32 |  | Aperture correction factor measured in the r band. |
-| APERCORR_Z | float32 |  | Aperture correction factor measured in the z band. |
+| APERCORR | float32 |  | Median aperture correction factor (Warning: does not account for shredding). |
+| APERCORR_G | float32 |  | Aperture correction factor measured in the g band (Warning: does not account for shredding). |
+| APERCORR_R | float32 |  | Aperture correction factor measured in the r band (Warning: does not account for shredding). |
+| APERCORR_Z | float32 |  | Aperture correction factor measured in the z band (Warning: does not account for shredding).  |
 | OII_3726_FLUX | float32 | 1e-17 erg / (cm2 s) | Gaussian-integrated emission-line flux for OII_3726. |
 | OII_3726_FLUX_IVAR | float32 | 1e+34 cm4 s2 / erg2 | Inverse variance in OII_3726_FLUX. |
 | OII_3729_FLUX | float32 | 1e-17 erg / (cm2 s) | Gaussian-integrated emission-line flux for OII_3729. |
@@ -300,10 +302,35 @@ Explore the DESI Dwarf Galaxy catalog interactively in your browser.
 | HALPHA_BOXFLUX_IVAR | float32 | 1e+34 cm4 s2 / erg2 | Inverse variance in HALPHA_BOXFLUX. |
 | HALPHA_EW | float32 | Angstrom | Rest-frame equivalent width of Halpha emission line. |
 | HALPHA_EW_IVAR | float32 | 1 / Angstrom2 | Inverse variance in HALPHA_EW. |
-| HALPHA_SIGMA | float32 | km / s | Gaussian emission-line width of Halpha before convolution with the resolution matrix. |
-| HALPHA_SIGMA_IVAR | float32 | s2 / km2 | Inverse variance in HALPHA_SIGMA. |
 </details>
 
+
+<details>
+<summary><strong>DESI DR1 Extragalactic Dwarf Galaxy Catalog — Image Cutouts</strong></summary>
+
+We provide 152 × 152 pixel image cutouts for all galaxies in the catalog with z-band magnitudes \( z < 0.20 \).  
+The image cutouts are stored in an HDF5 (.h5) file available at the link below.
+
+Each image cutout can be matched to a row in the catalog using the `TARGETID` column.  
+Example code demonstrating how to read the HDF5 file and visualize the image cutouts is provided in the tutorials.
+
+For sources identified as shredded, the image cutouts have been recentered on the reconstructed parent galaxy center.
+
+The 2048-dimensional representations derived from the self-supervised learning (SSL) model for these image cutouts are available at the link below.
+
+</details>
+
+
+<details>
+<summary><strong>DESI DR1 Extragalactic Dwarf Galaxy Catalog — Spectra</strong></summary>
+
+We provide all available DESI spectra for objects in this catalog.  
+The spectra are stored in an HDF5 (.h5) file available at the link below.
+
+Each spectrum can be matched to a row in the catalog using the `TARGETID` column.  
+Example code demonstrating how to read the HDF5 file and visualize the spectra is provided in the tutorials.
+
+</details>
 
 
 ### Additional Notes
@@ -338,6 +365,9 @@ A value of `1 << n` indicates that the bit at position `n` is set.
 
 </details>
 
+</details>
+
+
 
 <details>
 <summary><strong>MAG_TYPE Descriptions</strong></summary>
@@ -346,10 +376,15 @@ A value of `1 << n` indicates that the bit at position `n` is set.
 
 <a name="mag-type-description"></a>
 
-TRACTOR_ORIGINAL = 
-COG = 
-SIMPLE = 
-TRACTOR_BASED = 
+TRACTOR_ORIGINAL = Original Tractor DR9 photometry 
+
+COG = Remeasured photometry using curve-of-growth approach
+
+SIMPLE = Remeasured photometry using curve-of-growth approach, but no color-based association criterion is used.
+
+TRACTOR_BASED = Remeasured photometry by simply adding the fluxes of individual, associated Tractor sources
+
+See Manwadkar et al. 2026A (need to attach link) for details.
 
 </details>
 

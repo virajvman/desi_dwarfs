@@ -37,15 +37,6 @@ def process_shred_imgs(tot_cat, i):
     '''
     Function that returns the img_data for the shredded data after properly re-centering the galaxy!
     '''
-    # fp = tot_cat["FILE_PATH"][i]
-    
-    # #if true, use no isolate
-    # use_no_isolate = tot_cat["ISOLATE_MASK_LIKELY_SHREDDING"][i]
-
-    # if use_no_isolate:
-    #     reconst_img = np.load(fp + "/final_reconstruct_galaxy_subfunction_no_isolate.npy")
-    # else:
-    #     reconst_img = np.load(fp + "/final_reconstruct_galaxy_subfunction.npy")
 
     with fits.open(tot_cat["IMAGE_PATH"][i], memmap=False) as hdul:
         org_img = hdul[0].data

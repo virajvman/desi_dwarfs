@@ -823,7 +823,9 @@ fastspec_tot_cols = fastspec_cols +  fastspec_emlines_cols
 
 def get_fastspec_fit_catalog_V3():
     '''
-    In this function, we combine the relevant columns and healpix fastspec files (VERSION 3 CATALOG)
+    In this function, we combine the relevant columns and healpix fastspec files (VERSION 3 CATALOG). 
+
+    NOTE: WE WILL BE USING FASTSPEC V2.1, not V3.0
     '''
 
     # Path pattern to your FITS files
