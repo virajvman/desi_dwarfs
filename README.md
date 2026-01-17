@@ -100,7 +100,6 @@ Explore the DESI Dwarf Galaxy catalog interactively in your browser.
 <details>
 <summary><strong>Extension: TRACTOR</strong></summary>
 
-
 <br>
 
 
@@ -229,11 +228,7 @@ Explore the DESI Dwarf Galaxy catalog interactively in your browser.
 </details>
 
 
-<details>
-
-
-
-    
+<details> 
 <summary><strong>Extension: SPECTRA_TEMPLATE</strong></summary>
 
 <br>
@@ -307,6 +302,9 @@ Explore the DESI Dwarf Galaxy catalog interactively in your browser.
 | HALPHA_EW | float32 | Angstrom | Rest-frame equivalent width of Halpha emission line. |
 | HALPHA_EW_IVAR | float32 | 1 / Angstrom2 | Inverse variance in HALPHA_EW. |
 </details>
+
+</details>
+
 
 
 <details>
