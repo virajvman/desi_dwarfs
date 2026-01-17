@@ -310,10 +310,6 @@ Explore the DESI Dwarf Galaxy catalog interactively in your browser.
 
 
 <details>
-
-
-
-<details>
 <summary><strong>DESI DR1 Extragalactic Dwarf Galaxy Catalog — Image Cutouts</strong></summary>
 
 We provide 152 × 152 pixel image cutouts for all galaxies in the catalog with z-band magnitudes \( z < 0.20 \).  
