@@ -306,6 +306,10 @@ Explore the DESI Dwarf Galaxy catalog interactively in your browser.
 
 
 <details>
+
+
+
+<details>
 <summary><strong>DESI DR1 Extragalactic Dwarf Galaxy Catalog — Image Cutouts</strong></summary>
 
 We provide 152 × 152 pixel image cutouts for all galaxies in the catalog with z-band magnitudes \( z < 0.20 \).  
@@ -336,6 +340,21 @@ Example code demonstrating how to read the HDF5 file and visualize the spectra i
 ### Additional Notes
 
 <details>
+<summary><strong>Extension: FASTSPEC</strong></summary>
+
+<br>
+
+| Name | Type | Units | Description |
+|------|------|-------|-------------|
+| TARGETID | int64 |  | DESI TARGET ID |
+| DN4000 | float32 |  | Narrow 4000-Å break index (Balogh et al. 1999) measured from the emission-line subtracted spectrum. |
+| DN4000_OBS | float32 |  | Narrow 4000-Å break index measured from the observed spectrum. |
+
+
+
+
+
+<details>
 <summary><strong>DWARF_MASKBIT Descriptions</strong></summary>
 
 <br>
@@ -346,7 +365,7 @@ Each bit in the `DWARF_MASKBIT` column corresponds to a specific quality or clea
 A value of `1 << n` indicates that the bit at position `n` is set.
 
 | Bit | Value | Description |
-|:--:|:--:|:--|:--|
+|----|---|------|
 | 0 | 1 | Curve of growth computation failed (NaN values) | 
 | 1 | 2 | Curve of growth likely not converged (APER R4 - COG > 0.5 mag) |
 | 2 | 4 | Large residuals in curve of growth fit | 
@@ -362,6 +381,7 @@ A value of `1 << n` indicates that the bit at position `n` is set.
 | 12 | 4096 | Source within twice of SGA-2020 galaxy at same redshift, but not flagged as SGA-2020 source in Tractor  | 
 | 13 | 8192 | Low signal-to-noise detection (SNR > 5 in only one band or less) | 
 | 14 | 16384 | If `MAG_TYPE = TRACTOR_ORIGINAL` and `TRACTOR_MASKBITS` has at least one of {2,3,4,8,9} [Tractor bits](https://www.legacysurvey.org/dr9/bitmasks/) flagged  | 
+| 15 | 32768 | Likely incorrect Redrock redshift, based on UMAP analysis  | 
 
 </details>
 
