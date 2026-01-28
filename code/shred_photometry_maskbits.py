@@ -469,18 +469,27 @@ def print_maskbit_statistics(maskbit_col, bitmasks_to_use = [0,1,2,3,4,5,6,7,8,9
     
 ##### OTHER MASKBITS
 
+def inspect_anomalies(spec_cat, umap_x_cen, umap_y_cen, radius_cut = 0.1):
+    rads = np.sqrt( (spec_cat["SPEC_UMAP_0"].data - umap_x_cen)**2 + (spec_cat["SPEC_UMAP_1"].data - umap_y_cen)**2 )
+
+    mask = (rads < radius_cut)
+
+    print(f"Objects found = {np.sum(mask)}")
+    
+    return mask
+
 def flag_weird_spectra(spec_cat, main_cat, fspec_cat):
     '''
     Function that constructs maskbits for weird spectra, likely wrong redrock redshifts
     '''
 
     ##MASK_1 ARE SOME WEIRD SPECTRA DATA ANOMALIES, like poor sky subtraction etc.
-    mask_1 = inspect_anomalies(spec_temp_cat, 2.8,6, radius_cut = 2)
+    mask_1 = inspect_anomalies(spec_cat, 2.8,6, radius_cut = 2)
     
     #MASK 2 is also unclear, appear like weird spectra or wrong redrock redshifts 
-    mask_2 = inspect_anomalies(spec_temp_cat, 5.8,6.7, radius_cut = 1)
+    mask_2 = inspect_anomalies(spec_cat, 5.8,6.7, radius_cut = 1)
     
-    mask_3 = inspect_anomalies(spec_temp_cat,6.7,7, radius_cut = 0.3)
+    mask_3 = inspect_anomalies(spec_cat,6.7,7, radius_cut = 0.3)
     ##for the mask_3 we want them to be only ELG objects that we remove!!
     mask_3 = mask_3 & (main_cat["SAMPLE"] == "ELG")
 
@@ -498,6 +507,7 @@ def flag_weird_spectra(spec_cat, main_cat, fspec_cat):
 
     return weird_mask
 
+##maybe add one for a large fraction of spectra being negative??
 
 
     

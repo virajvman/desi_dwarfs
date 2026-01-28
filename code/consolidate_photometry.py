@@ -7,12 +7,13 @@ import astropy.units as u
 from astropy.table import Table, vstack, join, hstack
 from shred_photometry_maskbits import cog_mag_converge, cog_nan_mask, cog_curve_decrease, bad_colors, iffy_tractor_model
 from io import BytesIO
-from shred_photometry_maskbits import create_shred_maskbits_from_dict, print_maskbit_statistics
+from shred_photometry_maskbits import create_shred_maskbits_from_dict, print_maskbit_statistics, flag_weird_spectra
 import os
 import glob
 from tqdm import trange
 import h5py
 from desi_lowz_funcs import get_stellar_mass, match_c_to_catalog, match_fastspec_catalog, get_stellar_mass_mia
+from get_associated_fibers import find_associated_tgids, get_dwarf_primary
 
 def combine_arrays(no_iso, w_iso, mask):
     '''
@@ -589,8 +590,49 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
     #then we loop over the columns to get the final subset of columns
     # Keep only columns present in main_datamodel
     print("Selecting the subset of columns for MAIN extension")
-    catalog_main = catalog[[col for col in main_datamodel.keys()]]
+    catalog_main = catalog[ [col for col in main_datamodel.keys() if col not in ["ASSOCIATED_TARGETIDS", "DWARF_PRIMARY_TARGETID", "DWARF_PRIMARY"] ] ]
     
+    for col in main_datamodel.keys():
+        if col not in ["ASSOCIATED_TARGETIDS", "DWARF_PRIMARY_TARGETID", "DWARF_PRIMARY"]:
+            print(f"Column : {col}")
+            meta = main_datamodel[col]
+    
+            # Set dtype if it doesn’t match (optional, only if you want strict consistency)
+            desired_dtype = np.dtype(meta["dtype"])
+            if catalog_main[col].dtype != desired_dtype:
+                catalog_main[col] = catalog_main[col].astype(desired_dtype)
+    
+            # Add description and unit
+            if meta.get("description"):
+                catalog_main[col].description = meta["description"]
+            if meta.get("unit") is not None:
+                catalog_main[col].unit = meta["unit"]
+    
+            # Handle blank values if desired, we will only explicity provide a blank value in the datamodel if it is a nan type
+    
+            blank_val = meta.get("blank_value", None)
+            if blank_val is not None:
+                # replace masked or invalid entries
+                mask = np.isnan(catalog_main[col])
+                catalog_main[col][mask] = blank_val
+
+    #save to fits file
+    catalog_main.write(save_name, overwrite=True)
+
+    return catalog_main, catalog
+
+
+def finalize_main_hdu(catalog_main):
+    '''
+    We add the associated targetid columns!
+    '''
+    ##add the associated targetid columns!!
+
+    print("Finding the associated TARGETIDs!")
+
+    catalog_main = find_associated_tgids(catalog_main)
+    catalog_main = get_dwarf_primary(catalog_main)
+
     print("Need to think a bit more about the blank value stuff")
     for col in main_datamodel.keys():
         print(f"Column : {col}")
@@ -615,10 +657,7 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
             mask = np.isnan(catalog_main[col])
             catalog_main[col][mask] = blank_val
 
-    #save to fits file
-    catalog_main.write(save_name, overwrite=True)
-
-    return catalog_main, catalog
+    return catalog_main
 
 
 def create_tractor_data_model(catalog,save_name):
@@ -999,6 +1038,10 @@ def combine_hdus(hdu_list, base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs
             shred_tab = Table.read(shred_fname)
     
             tab = vstack([clean_tab, shred_tab])
+
+            if hdu_name in ["MAIN"]:
+                ##if main, we will add three new columns
+                tab = finalize_main_hdu(tab)
             
             hdu_tables.append(tab)
 
@@ -1139,9 +1182,81 @@ def create_spectra_hdu(file_path):
         hdul.flush()  # write changes to disk
 
     print(f"Added SPECTRA_TEMPLATE extension to {file_path} (length = {n_objects})")
-    
+
     return
 
+
+def add_wrong_redrock_maskbit(cat_path, main_datamodel, bit=16):
+    """
+    Identify objects with wrong Redrock redshifts and update DWARF_MASKBIT.
+    Updates the MAIN HDU safely, preserving variable-length columns and all other HDUs.
+    
+    Parameters
+    ----------
+    cat_path : str
+        Path to the multi-extension FITS catalog.
+    main_datamodel : dict
+        Dictionary describing column metadata (dtype, description, unit, blank_value).
+    bit : int, optional
+        Bit index to set for weird/redshift-flagged objects (default 16).
+    """
+
+    # --- Read relevant tables ---
+    main_cat = Table.read(cat_path, hdu="MAIN")
+    fspec_cat = Table.read(cat_path, hdu="FASTSPEC")
+    spec_cat = Table.read(cat_path, hdu="SPECTRA_TEMPLATE")
+
+    # --- Identify weird/redshift-mismatch objects ---
+    weird_mask = flag_weird_spectra(spec_cat, main_cat, fspec_cat)
+    weird_mask = np.asarray(weird_mask, dtype=bool)
+    if len(weird_mask) != len(main_cat):
+        raise ValueError("weird_mask length does not match MAIN table")
+
+    # --- Update DWARF_MASKBIT ---
+    dwarf_maskbits = np.asarray(main_cat["DWARF_MASKBIT"], dtype=np.int64)
+    dwarf_maskbits[weird_mask] |= np.int64(1) << bit
+    main_cat["DWARF_MASKBIT"] = dwarf_maskbits
+
+    # --- Apply main_datamodel metadata ---
+    for col in main_datamodel.keys():
+        if col not in main_cat.colnames:
+            print(f"Skipping column: {col}")
+            continue  # skip if column missing
+        meta = main_datamodel[col]
+
+        # Ensure dtype matches datamodel
+        desired_dtype = np.dtype(meta["dtype"])
+        if main_cat[col].dtype != desired_dtype:
+            main_cat[col] = main_cat[col].astype(desired_dtype)
+
+        # Set description
+        if meta.get("description"):
+            main_cat[col].description = meta["description"]
+
+        # Set unit
+        if meta.get("unit") is not None:
+            main_cat[col].unit = meta["unit"]
+
+        # Set blank values if provided
+        blank_val = meta.get("blank_value", None)
+        if blank_val is not None:
+            mask = np.isnan(main_cat[col])
+            main_cat[col][mask] = blank_val
+
+    # --- Write MAIN HDU to a temporary HDU ---
+    buf = BytesIO()
+    main_cat.write(buf, format="fits")
+    buf.seek(0)
+    main_hdu = fits.open(buf)[1]
+    main_hdu.name = "MAIN"
+    main_hdu.add_checksum()
+
+    # --- Open original file and replace MAIN HDU ---
+    with fits.open(cat_path, mode="update") as hdul:
+        hdul[1] = main_hdu  # HDU[1] is MAIN in your multi-extension file
+        hdul.flush()
+
+    print(f"Set DWARF_MASKBIT bit {bit} for {weird_mask.sum()} objects (MAIN HDU updated).")
 
     
 if __name__ == '__main__':
@@ -1152,6 +1267,8 @@ if __name__ == '__main__':
     process_clean = True
     
     process_fastspec=False
+
+    main_cat_outpath = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits"
 
     if process_shreds:
         #loading the shredded catalogs!
@@ -1235,12 +1352,13 @@ if __name__ == '__main__':
     #then we consolidate it all into a multi-ext file!
     #make sure the REPROCESS_PHOTO_CAT is also last in the below list!
     combine_hdus(["MAIN", "ZCAT", "TRACTOR", "FASTSPEC","REPROCESS_PHOTO"], base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats",
-                 output_file="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits")
+                 output_file=main_cat_outpath)
 
     ##add the spectra NMF+PCA information!!
-    create_spectra_hdu("/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits")
+    create_spectra_hdu(main_cat_outpath)
 
-    #LATENT IMAGE VECTORS ARE ONLY FOR TRACTOR MAG_Z<20
+    #update the dwarf_maskbit with some weird spectra masks
+    add_wrong_redrock_maskbit(main_cat_outpath, main_datamodel)
 
         
 

@@ -424,7 +424,52 @@ def print_radecs(object_list, num=100, ra="TARGET_RA", dec="TARGET_DEC"):
         
     return
 
-def find_objects_nearby(object_list, find_ra, find_dec, deg_rad = 1e-3,ra="TARGET_RA", dec="TARGET_DEC"):
+
+def find_objects_nearby(
+    object_list,
+    find_ra,
+    find_dec,
+    deg_rad=1e-3,
+    ra="RA",
+    dec="DEC",
+):
+    """
+    Find objects within an angular radius on the sky.
+
+    Works correctly whether input RA/DEC have astropy units or are plain floats.
+
+    Parameters
+    ----------
+    object_list : astropy.table.Table
+        Table containing RA/DEC columns.
+    find_ra, find_dec : float or astropy.units.Quantity
+        Reference position.
+    deg_rad : float
+        Search radius in degrees (if unitless). Can also be Quantity.
+    ra, dec : str
+        Column names for RA and DEC.
+
+    Returns
+    -------
+    astropy.table.Table
+        Subset of object_list within deg_rad of the reference position.
+    """
+
+    # Wrap the catalog coordinates in SkyCoord
+    cat_ra = object_list[ra]
+    cat_dec = object_list[dec]
+
+    coords = SkyCoord(ra=np.array(cat_ra) * u.deg, dec= np.array(cat_dec) * u.deg, frame="icrs")
+
+    # Wrap the reference coordinates in SkyCoord
+    center = SkyCoord(find_ra * u.deg, find_dec * u.deg, frame="icrs")
+
+    sep = coords.separation(center).deg
+
+    return object_list[sep < deg_rad]
+
+    
+def find_objects_nearby_approximate(object_list, find_ra, find_dec, deg_rad = 1e-3,ra="TARGET_RA", dec="TARGET_DEC"):
     
     mask = (np.abs(object_list[ra] - find_ra) < deg_rad) & (np.abs(object_list[dec] - find_dec) < deg_rad)
     

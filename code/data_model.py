@@ -179,7 +179,32 @@ main_datamodel = {
         "unit": None,
         "description": "Boolean indicating whether targeted source had Tractor MASKBITS=12, that is, in SGA-2020 catalog",
         "dtype": "bool"
-    }
+    },
+    "ASSOCIATED_TARGETIDS": {
+        "unit": None,
+        "description": (
+            "List of associated TARGETIDs. Variable-length per row."
+        ),
+        "dtype": "object"
+    },
+    
+    "DWARF_PRIMARY_TARGETID": {
+        "unit": None,
+        "description": (
+            "TARGETID selected as the primary fiber for this dwarf galaxy, chosen "
+            "as the brightest MAG_R_TARGET among associated fibers."
+        ),
+        "dtype": "int64"
+    },
+    
+    "DWARF_PRIMARY": {
+        "unit": None,
+        "description": (
+            "Boolean flag indicating whether this row corresponds to the primary "
+            "fiber (TARGETID == DWARF_PRIMARY_TARGETID) for the dwarf galaxy."
+        ),
+        "dtype": "bool"
+}
 }
 
 
