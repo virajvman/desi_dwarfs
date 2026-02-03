@@ -125,24 +125,23 @@ def read_tractorphot(zcat, verbose=False):
     for pixel in set(pixels):
         J = pixel == pixels
         photfile = os.path.join(vacdir, 'tractorphot', 'tractorphot-nside4-hp{:03d}-iron.fits'.format(pixel))
-        targetids = fitsio.read(photfile, columns='TARGETID')
-        K = np.where(np.isin(targetids, zcat['TARGETID'][J]))[0]
-        
-        tot_sofar += len(K)
-        
-        if verbose:
-            # print('Reading photometry for {} objects from {}'.format(len(K), photfile))
-            print("%.2f percent done!"%(100*tot_sofar/tot_len))
-         
-        _phot = fitsio.read(photfile, rows=K)
-        phot.append(Table(_phot))
+        if os.path.exists(photfile):
+            
+            targetids = fitsio.read(photfile, columns='TARGETID')
+            K = np.where(np.isin(targetids, zcat['TARGETID'][J]))[0]
+            tot_sofar += len(K)
+            
+            if verbose:
+                # print('Reading photometry for {} objects from {}'.format(len(K), photfile))
+                print("%.2f percent done!"%(100*tot_sofar/tot_len))
+             
+            _phot = fitsio.read(photfile, rows=K)
+            phot.append(Table(_phot))
+        else:
+            print(f"ERROR!! Not catastrophic. File not found: {photfile}")
+            
     phot = vstack(phot)
 
-    # Is there a better way to sort here??
-    # srt = np.hstack([np.where(tid == phot['TARGETID'])[0] for tid in trange(zcat['TARGETID'])]) 
-    # phot = phot[srt]
-    ## I will just match by RA, Dec later
-    
     return phot
 
 
@@ -749,7 +748,7 @@ def format_extra_dists_as_string(extra_dists):
     return [",".join(f"{d:.2f}" for d in dlist) for dlist in extra_dists]
 
 
-def get_nam_distances(desi_catalog):
+def get_nam_distances(desi_catalog, compute_other_nam=True):
     '''
     Function that adds columns for different distance estimates! Makes the DIST_MPC_FIDU column which collects our best distance estimates
     '''
@@ -785,8 +784,11 @@ def get_nam_distances(desi_catalog):
     fidu_dists,extra_dists = NAM_query(cat_nam, chunk_size=500,calc_type = "NAM")
     fidu_dists =np.array(fidu_dists)
     cat_nam["DIST_MPC_NAM"] = fidu_dists
-    extra_dists_str = format_extra_dists_as_string(extra_dists)
-    cat_nam["OTHER_DIST_MPC_NAM"] = extra_dists_str
+    
+    if compute_other_nam:
+        extra_dists_str = format_extra_dists_as_string(extra_dists)
+        cat_nam["OTHER_DIST_MPC_NAM"] = extra_dists_str
+        
     cat_nam["DIST_MPC_FIDU"] = fidu_dists
 
     #wherever the NAM distance is negative, we make it a nan, make the DIST_MPC_FIDU column
@@ -800,10 +802,12 @@ def get_nam_distances(desi_catalog):
     cat_far["DIST_MPC_FIDU"] = cat_far["DIST_MPC_VCMB"].data
     #putting nan distances for NAM 
     cat_far["DIST_MPC_NAM"] = np.full(len(cat_far), np.nan)
-    # Create a list of empty lists for the other_dist_mmp
-    blank_extra_dists = [[] for _ in range(len(cat_far))]
-    blank_extra_dists_str = format_extra_dists_as_string(blank_extra_dists)
-    cat_far["OTHER_DIST_MPC_NAM"] = blank_extra_dists_str
+
+    if compute_other_nam:
+        # Create a list of empty lists for the other_dist_mmp
+        blank_extra_dists = [[] for _ in range(len(cat_far))]
+        blank_extra_dists_str = format_extra_dists_as_string(blank_extra_dists)
+        cat_far["OTHER_DIST_MPC_NAM"] = blank_extra_dists_str
 
     #now we stack these two!!
     desi_catalog_f = vstack([cat_far, cat_nam])
