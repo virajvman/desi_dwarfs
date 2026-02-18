@@ -115,7 +115,9 @@ def plan(comm=None,outdir_data='.', mp=1):
         rank, size = comm.rank, comm.size
         
     ## let us read the file to get ra, dec info     
-    out = Table.read("/pscratch/sd/v/virajvm/agent_ai_data/desi_dwarf_training_sample_full.fits.gz")
+    # out = Table.read("/pscratch/sd/v/virajvm/agent_ai_data/desi_dwarf_training_sample_full.fits.gz")
+    out = Table.read("/pscratch/sd/v/virajvm/agent_ai_data/download_round_2_catalog.fits")
+    
     #subselect:
     print(f"Total number to download = {len(out)}")
     
@@ -125,7 +127,8 @@ def plan(comm=None,outdir_data='.', mp=1):
     #use this to make the file names using objid
     allra = np.array(out["ra"],dtype = object)
     alldec = np.array(out["dec"],dtype = object)
-    allobjids = np.array(out["targetid"],dtype = object)
+    ##NOTE: this used to be targetid
+    allobjids = np.array(out["objids"],dtype = object)
     allsizes = np.full(len(out), 128, dtype=int)
 
      ##need to check what fraction of these files exist!!

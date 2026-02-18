@@ -7,7 +7,7 @@
 #SBATCH --mail-user=virajvm@stanford.edu
 #SBATCH --mail-type=ALL
 #SBATCH --nodes=1
-#SBATCH --time=00:30:00
+#SBATCH --time=00:15:00
 #SBATCH --output=get_imgs_general.log
 
 N=1

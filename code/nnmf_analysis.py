@@ -45,12 +45,14 @@ def get_wave(wavemin=3600, wavemax=10000, dloglam=1e-4):
 
 
 def _deredshift_one_spectrum(args):
-    """
-    Helper spectrum deredshifting function for parallel processing.
-    """
+    # print("Transforming both wave and flux arrays when de-redshifting!")
     wave, flux, ivar, zred, wave_out = args
     rest_wave = wave / (1 + zred)
-    flux_out, ivar_out = resample_flux(wave_out, rest_wave, flux, ivar=ivar)
+    flux_rest = flux * (1 + zred)
+    ivar_rest = ivar / (1 + zred)**2
+    flux_out = resample_flux(wave_out, rest_wave, flux_rest, ivar=None)
+    _, ivar_out = resample_flux(wave_out, rest_wave, flux_rest, ivar=ivar_rest)
+    
     return flux_out, ivar_out
 
 

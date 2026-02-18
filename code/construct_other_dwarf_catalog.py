@@ -106,6 +106,18 @@ def apply_maskbit_cuts(catalog):
     return good_mask
 
 
+def apply_pmra_cuts(catalog):
+    """Apply pmra cleaning cuts."""
+    
+    pmra_snr = np.abs(catalog["PMRA"].data) * np.sqrt(catalog["PMRA_IVAR"].data)
+    pmdec_snr = np.abs(catalog["PMDEC"].data) * np.sqrt(catalog["PMDEC_IVAR"].data)
+    signi_pm = (pmra_snr > 2) | (pmdec_snr > 2)
+
+    print(f"{np.sum(signi_pm)}/{len(catalog)} objects have significant proper motion.")
+
+    return ~signi_pm
+
+
 def apply_shred_cuts(catalog):
     """
     Remove shredded objects with FRACFLUX > 0.2 in 2 or more bands.
@@ -267,12 +279,15 @@ def process_sample(sample_name, zpix_sub_cat, main_dwarf_cat,
     
     # Step 4: Apply maskbit cuts
     maskbit_good = apply_maskbit_cuts(zpix_trac)
+
+    #apply no star cut
+    not_star_mask = apply_pmra_cuts(zpix_trac)
     
     if verbose:
         print(f"Fraction passing maskbit cuts: {np.sum(maskbit_good)/len(maskbit_good):.3f}")
     
-    zpix_sub_cat = zpix_sub_cat[maskbit_good]
-    zpix_trac = zpix_trac[maskbit_good]
+    zpix_sub_cat = zpix_sub_cat[maskbit_good & not_star_mask]
+    zpix_trac = zpix_trac[maskbit_good & not_star_mask]
     
     if len(zpix_sub_cat) == 0:
         print(f"No objects remaining after maskbit cuts for {sample_name}")
@@ -319,7 +334,8 @@ def process_sample(sample_name, zpix_sub_cat, main_dwarf_cat,
     
     if verbose:
         print(f"\nObjects passing all cleaning cuts: {len(zpix_sub_cat)}")
-    
+
+
     # Step 8: Compute NAM distances and velocities
     if compute_nam_dists:
         zpix_sub_cat = compute_distances_and_velocities(zpix_sub_cat, verbose=verbose)

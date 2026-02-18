@@ -1329,8 +1329,95 @@ fastspec_hdu_datamodel = {
         "description": "Aperture correction factor measured in the z band.",
         "dtype": "float32"
     },
-
+    "ABSMAG01_SDSS_G": {
+        "unit": u.mag,
+        "description": "Absolute magnitude in SDSS g-band band-shifted to z=0.1 assuming h=1.0.",
+        "dtype": "float32"
+    },
+    "ABSMAG01_SDSS_R": {
+        "unit": u.mag,
+        "description": "Absolute magnitude in SDSS r-band band-shifted to z=0.1 assuming h=1.0.",
+        "dtype": "float32"
+    },
+    "ABSMAG01_SDSS_I": {
+        "unit": u.mag,
+        "description": "Absolute magnitude in SDSS i-band band-shifted to z=0.1 assuming h=1.0.",
+        "dtype": "float32"
+    },
+    "ABSMAG01_SDSS_Z": {
+        "unit": u.mag,
+        "description": "Absolute magnitude in SDSS z-band band-shifted to z=0.1 assuming h=1.0.",
+        "dtype": "float32"
+    },
+    "ABSMAG01_IVAR_SDSS_G": {
+        "unit": 1/u.mag**2,
+        "description": "Inverse variance of absolute magnitude in SDSS g-band band-shifted to z=0.1 assuming h=1.0.",
+        "dtype": "float32"
+    },
+    "ABSMAG01_IVAR_SDSS_R": {
+        "unit": 1/u.mag**2,
+        "description": "Inverse variance of absolute magnitude in SDSS r-band band-shifted to z=0.1 assuming h=1.0.",
+        "dtype": "float32"
+    },
+    "ABSMAG01_IVAR_SDSS_I": {
+        "unit": 1/u.mag**2,
+        "description": "Inverse variance of absolute magnitude in SDSS i-band band-shifted to z=0.1 assuming h=1.0.",
+        "dtype": "float32"
+    },
+    "ABSMAG01_IVAR_SDSS_Z": {
+        "unit": 1/u.mag**2,
+        "description": "Inverse variance of absolute magnitude in SDSS z-band band-shifted to z=0.1 assuming h=1.0.",
+        "dtype": "float32"
+    },
+    
 }
+                    
+# Emission-line definitions
+_emission_lines = [
+    "OII_3726", "OII_3729", "OIII_4363", "HEII_4686", "HBETA",
+    "OIII_4959", "OIII_5007", "HEI_5876", "NII_6548", "HALPHA",
+    "HALPHA_BROAD", "NII_6584", "SII_6716", "SII_6731",
+    "SIII_9069", "SIII_9532"
+]
+
+# Add flux-related fields for all emission lines
+for line in _emission_lines:
+    fastspec_hdu_datamodel[f"{line}_FLUX"] = {
+        "unit": "1e-17 erg / (cm2 s)",
+        "description": f"Gaussian-integrated emission-line flux for {line}.",
+        "dtype": "float32"
+    }
+    fastspec_hdu_datamodel[f"{line}_FLUX_IVAR"] = {
+        "unit": "1e+34 cm4 s2 / erg2",
+        "description": f"Inverse variance in {line}_FLUX.",
+        "dtype": "float32"
+    }
+
+
+# Add additional HALPHA-only measurements
+fastspec_hdu_datamodel["HALPHA_BOXFLUX"] = {
+    "unit": "1e-17 erg / (cm2 s)",
+    "description": "Boxcar-integrated Halpha emission-line flux.",
+    "dtype": "float32"
+}
+fastspec_hdu_datamodel["HALPHA_BOXFLUX_IVAR"] = {
+    "unit": "1e+34 cm4 s2 / erg2",
+    "description": "Inverse variance in HALPHA_BOXFLUX.",
+    "dtype": "float32"
+}
+fastspec_hdu_datamodel["HALPHA_EW"] = {
+    "unit": "Angstrom",
+    "description": "Rest-frame equivalent width of Halpha emission line.",
+    "dtype": "float32"
+}
+fastspec_hdu_datamodel["HALPHA_EW_IVAR"] = {
+    "unit": "1 / Angstrom2",
+    "description": "Inverse variance in HALPHA_EW.",
+    "dtype": "float32"
+}
+
+
+
     # "DN4000_MODEL_IVAR": {
     #     "unit": None,
     #     "description": "Inverse variance of DN4000_MODEL.",
@@ -1388,49 +1475,7 @@ fastspec_hdu_datamodel = {
 #     }
 # }
 
-# Emission-line definitions
-_emission_lines = [
-    "OII_3726", "OII_3729", "OIII_4363", "HEII_4686", "HBETA",
-    "OIII_4959", "OIII_5007", "HEI_5876", "NII_6548", "HALPHA",
-    "HALPHA_BROAD", "NII_6584", "SII_6716", "SII_6731",
-    "SIII_9069", "SIII_9532"
-]
 
-# Add flux-related fields for all emission lines
-for line in _emission_lines:
-    fastspec_hdu_datamodel[f"{line}_FLUX"] = {
-        "unit": "1e-17 erg / (cm2 s)",
-        "description": f"Gaussian-integrated emission-line flux for {line}.",
-        "dtype": "float32"
-    }
-    fastspec_hdu_datamodel[f"{line}_FLUX_IVAR"] = {
-        "unit": "1e+34 cm4 s2 / erg2",
-        "description": f"Inverse variance in {line}_FLUX.",
-        "dtype": "float32"
-    }
-
-
-# Add additional HALPHA-only measurements
-fastspec_hdu_datamodel["HALPHA_BOXFLUX"] = {
-    "unit": "1e-17 erg / (cm2 s)",
-    "description": "Boxcar-integrated Halpha emission-line flux.",
-    "dtype": "float32"
-}
-fastspec_hdu_datamodel["HALPHA_BOXFLUX_IVAR"] = {
-    "unit": "1e+34 cm4 s2 / erg2",
-    "description": "Inverse variance in HALPHA_BOXFLUX.",
-    "dtype": "float32"
-}
-fastspec_hdu_datamodel["HALPHA_EW"] = {
-    "unit": "Angstrom",
-    "description": "Rest-frame equivalent width of Halpha emission line.",
-    "dtype": "float32"
-}
-fastspec_hdu_datamodel["HALPHA_EW_IVAR"] = {
-    "unit": "1 / Angstrom2",
-    "description": "Inverse variance in HALPHA_EW.",
-    "dtype": "float32"
-}
 
 # fastspec_hdu_datamodel["HALPHA_SIGMA"] = {
 #     "unit": "km / s",

@@ -738,9 +738,6 @@ def create_zcat_data_model(catalog, save_name):
     return zcat_tab
 
 
-
-
-
 def create_fastspec_data_model(fastspec_cat,save_name):
     '''
     Function that creates the data model for the tractor hdu
@@ -847,7 +844,6 @@ def get_fastspec_matched_catalog(gal_cat, save_name, match_method = "TARGETID"):
     return
 
 
-
 ##THESE ARE ALL THE FASTSPEC COLUMNS WE WISH TO READ!
 fastspec_metadata_cols = ["TARGETID","RA","DEC"]
 
@@ -855,10 +851,11 @@ fastspec_specphot_cols = ["DN4000", "DN4000_OBS", "DN4000_IVAR", "DN4000_MODEL",
 
 fastspec_cols = ["SNR_B", "SNR_R", "SNR_Z", "APERCORR", "APERCORR_G", "APERCORR_R", "APERCORR_Z"] 
 
+fastspec_mag_cols = ["ABSMAG01_SDSS_G", "ABSMAG01_SDSS_R", "ABSMAG01_SDSS_I", "ABSMAG01_SDSS_Z", "ABSMAG01_IVAR_SDSS_G", "ABSMAG01_IVAR_SDSS_R", "ABSMAG01_IVAR_SDSS_I", "ABSMAG01_IVAR_SDSS_Z" ]
+
 fastspec_emlines_cols = ["OII_3726_FLUX", "OII_3726_FLUX_IVAR", "OII_3729_FLUX", "OII_3729_FLUX_IVAR", "OIII_4363_FLUX", "OIII_4363_FLUX_IVAR", "HEII_4686_FLUX", "HEII_4686_FLUX_IVAR", "HBETA_FLUX", "HBETA_FLUX_IVAR", "OIII_4959_FLUX", "OIII_4959_FLUX_IVAR", "OIII_5007_FLUX", "OIII_5007_FLUX_IVAR", "HEI_5876_FLUX", "HEI_5876_FLUX_IVAR", "NII_6548_FLUX", "NII_6548_FLUX_IVAR", "HALPHA_FLUX", "HALPHA_FLUX_IVAR", "HALPHA_BROAD_FLUX", "HALPHA_BROAD_FLUX_IVAR", "NII_6584_FLUX", "NII_6584_FLUX_IVAR", "SII_6716_FLUX", "SII_6716_FLUX_IVAR", "SII_6731_FLUX", "SII_6731_FLUX_IVAR", "SIII_9069_FLUX", "SIII_9069_FLUX_IVAR", "SIII_9532_FLUX", "SIII_9532_FLUX_IVAR", "HALPHA_BOXFLUX", "HALPHA_BOXFLUX_IVAR", "HALPHA_EW", "HALPHA_EW_IVAR", "HALPHA_SIGMA", "HALPHA_SIGMA_IVAR"]
 
-fastspec_tot_cols = fastspec_cols +  fastspec_emlines_cols
-
+fastspec_tot_cols = fastspec_cols +  fastspec_emlines_cols + fastspec_mag_cols
 
 def get_fastspec_fit_catalog_V3():
     '''
@@ -916,6 +913,7 @@ def get_fastspec_fit_catalog_V3():
 def get_fastspec_fit_catalog_V2(chunk_size = 250000):
     '''
     In this function, we combine the relevant columns and healpix fastspec files (VERSION 2 CATALOG)
+    This function is run before the dwarf catalog is being constructed as it prepares the intermediate file we will be matching to
     ''' 
 
     main_cat_path = "/global/cfs/cdirs/desi/public/dr1/vac/dr1/fastspecfit/iron/v2.1/catalogs/fastspec-iron.fits"
@@ -1266,7 +1264,7 @@ if __name__ == '__main__':
     process_shreds = True
     process_clean = True
     
-    process_fastspec=False
+    process_fastspec=True
 
     main_cat_outpath = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits"
 
@@ -1359,6 +1357,9 @@ if __name__ == '__main__':
 
     #update the dwarf_maskbit with some weird spectra masks
     add_wrong_redrock_maskbit(main_cat_outpath, main_datamodel)
+
+    print("TODO: add emfit broad line info, add image hdu with similar targetids and umap co-ordinates. see img ssl notebook for more details")
+    print("TODO: add the ~15k or so QSO+SCND objects!")
 
         
 
