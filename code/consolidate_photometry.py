@@ -823,7 +823,99 @@ def create_new_photo_data_model(catalog, save_name):
     return
 
 
-    
+
+
+def compute_emission_line_snr(flux, flux_ivar):
+    """
+    Compute emission-line signal-to-noise ratio as flux * sqrt(flux_ivar).
+    Returns 0 for entries with non-finite or negative ivar.
+    """
+    flux = np.asarray(flux, dtype=np.float64)
+    flux_ivar = np.asarray(flux_ivar, dtype=np.float64)
+    valid = np.isfinite(flux_ivar) & (flux_ivar > 0) & np.isfinite(flux)
+    snr = np.zeros_like(flux)
+    snr[valid] = flux[valid] * np.sqrt(flux_ivar[valid])
+    return snr
+
+
+def apply_emission_line_snr_cuts(fastspec_cat, snr_threshold=3.0):
+    """
+    Return a boolean mask selecting rows where ALL three emission lines
+    (Halpha, Hbeta, OIII 5007) have SNR >= snr_threshold.
+    """
+    halpha_snr = compute_emission_line_snr(fastspec_cat["HALPHA_FLUX"], fastspec_cat["HALPHA_FLUX_IVAR"])
+    hbeta_snr = compute_emission_line_snr(fastspec_cat["HBETA_FLUX"], fastspec_cat["HBETA_FLUX_IVAR"])
+    oiii_snr = compute_emission_line_snr(fastspec_cat["OIII_5007_FLUX"], fastspec_cat["OIII_5007_FLUX_IVAR"])
+
+    passing = (halpha_snr >= snr_threshold) & (hbeta_snr >= snr_threshold) & (oiii_snr >= snr_threshold)
+
+    print(f"Emission line SNR >= {snr_threshold} cut summary:")
+    print(f"  Halpha passing: {np.sum(halpha_snr >= snr_threshold)}")
+    print(f"  Hbeta  passing: {np.sum(hbeta_snr >= snr_threshold)}")
+    print(f"  OIII   passing: {np.sum(oiii_snr >= snr_threshold)}")
+    print(f"  All three passing: {np.sum(passing)} / {len(passing)}")
+
+    return passing
+
+
+def load_and_filter_qso_scnd_candidates(input_path, snr_threshold=3.0):
+    """
+    Load hidden dwarf candidates from QSO/SCND target selections, deduplicate,
+    remove MWS objects, match to FastSpecFit, and apply emission-line SNR cuts
+    to ensure robust redshifts.
+
+    Parameters
+    ----------
+    input_path : str
+        Path to the hidden_dwarf_candidates_qso_mws_scnd.fits file.
+    snr_threshold : float
+        Minimum SNR required on Halpha, Hbeta, and OIII 5007 (all three must pass).
+
+    Returns
+    -------
+    catalog : astropy.table.Table
+        Filtered catalog with SAMPLE set to "OTHER".
+    """
+    print("=" * 60)
+    print("Loading QSO/SCND hidden dwarf candidates")
+    print("=" * 60)
+
+    cats = Table.read(input_path)
+    print(f"Total rows loaded: {len(cats)}")
+
+    # Deduplicate by TARGETID
+    _, uni_idx = np.unique(cats["TARGETID"].data, return_index=True)
+    cats = cats[uni_idx]
+    print(f"After TARGETID deduplication: {len(cats)}")
+
+    # Remove MWS objects
+    cats = cats[cats["ORIGIN_SAMPLE"] != "MWS"]
+    print(f"After removing MWS: {len(cats)}")
+    print(f"  Unique ORIGIN_SAMPLE values: {np.unique(cats['ORIGIN_SAMPLE'])}")
+    for sample in np.unique(cats["ORIGIN_SAMPLE"]):
+        print(f"    {sample}: {np.sum(cats['ORIGIN_SAMPLE'] == sample)}")
+
+    # Match to FastSpecFit by TARGETID to get emission-line measurements
+    print("Matching to FastSpecFit catalog by TARGETID...")
+    fastspec_matched = match_fastspec_catalog(cats, coord_name="", match_method="TARGETID")
+
+    # Apply emission-line SNR cuts
+    snr_mask = apply_emission_line_snr_cuts(fastspec_matched, snr_threshold=snr_threshold)
+
+    cats = cats[snr_mask]
+    print(f"After emission-line SNR >= {snr_threshold} cuts: {len(cats)}")
+    for sample in np.unique(cats["ORIGIN_SAMPLE"]):
+        print(f"    {sample}: {np.sum(cats['ORIGIN_SAMPLE'] == sample)}")
+
+    # Set SAMPLE column to "OTHER"
+    cats["SAMPLE"] = np.full(len(cats), "OTHER", dtype=object)
+
+    print(f"Final QSO/SCND catalog: {len(cats)} objects (SAMPLE='OTHER')")
+    print("=" * 60)
+
+    return cats
+
+
 def get_fastspec_matched_catalog(gal_cat, save_name, match_method = "TARGETID"):
     '''
     Get the RA,DEC matched fastspec catalog and save it   
@@ -1001,7 +1093,8 @@ def add_lowz_fiberflux(trac_cat,tot_cat):
 
 
 def combine_hdus(hdu_list, base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats",
-                 output_file="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dwarfs_combined.fits"):
+                 output_file="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dwarfs_combined.fits",
+                 extra_prefixes=None):
     """
     Combine multiple HDUs (Astropy tables) into a single multi-extension FITS file.
 
@@ -1013,12 +1106,16 @@ def combine_hdus(hdu_list, base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs
         Directory containing the HDU FITS files.
     output_file : str
         Path for the combined FITS file.
+    extra_prefixes : list of str, optional
+        Additional catalog prefixes to vstack alongside clean/shreds
+        (e.g., ["qso_scnd"]). Files are included only if they exist on disk.
     """
+    if extra_prefixes is None:
+        extra_prefixes = []
 
     hdu_tables = []
     for hdu_name in hdu_list:
         if hdu_name in ["REPROCESS_PHOTO"]:
-            #this will only exist for the catalog that we reprocessed, so not for the clean sources
             shred_fname = os.path.join(base_path, f"shreds_{hdu_name}_hdu.fits")
             print(f"Reading {shred_fname}...")
             shred_tab = Table.read(shred_fname)
@@ -1035,7 +1132,17 @@ def combine_hdus(hdu_list, base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs
             clean_tab = Table.read(clean_fname)
             shred_tab = Table.read(shred_fname)
     
-            tab = vstack([clean_tab, shred_tab])
+            tables_to_stack = [clean_tab, shred_tab]
+
+            for prefix in extra_prefixes:
+                extra_fname = os.path.join(base_path, f"{prefix}_{hdu_name}_hdu.fits")
+                if os.path.exists(extra_fname):
+                    print(f"Reading {extra_fname}...")
+                    tables_to_stack.append(Table.read(extra_fname))
+                else:
+                    print(f"Skipping {extra_fname} (not found)")
+
+            tab = vstack(tables_to_stack)
 
             if hdu_name in ["MAIN"]:
                 ##if main, we will add three new columns
@@ -1131,7 +1238,7 @@ def create_spectra_hdu(file_path):
     # NNMF columns
     print(f"NNMF params = {nnmf_coeffs.shape[1]}")
     for j in range(nnmf_coeffs.shape[1]):
-        col = np.zeros(n_objects)
+        col = np.full(n_objects, -99.0)
         for i, tgid in enumerate(main_tgids):
             if tgid in tgid_to_idx:
                 col[i] = nnmf_coeffs[tgid_to_idx[tgid], j]
@@ -1140,14 +1247,14 @@ def create_spectra_hdu(file_path):
     # PCA columns
     print(f"PCA params = {pca_coeffs.shape[1]}")
     for j in range(pca_coeffs.shape[1]):
-        col = np.zeros(n_objects)
+        col = np.full(n_objects, -99.0)
         for i, tgid in enumerate(main_tgids):
             if tgid in tgid_to_idx:
                 col[i] = pca_coeffs[tgid_to_idx[tgid], j]
         new_table[f"PCA_{j}"] = col
 
     # Normalization factor
-    norm_col = np.zeros(n_objects)
+    norm_col = np.full(n_objects, -99.0)
     for i, tgid in enumerate(main_tgids):
         if tgid in tgid_to_idx:
             norm_col[i] = norm_facs[tgid_to_idx[tgid]]
@@ -1263,6 +1370,7 @@ if __name__ == '__main__':
     
     process_shreds = True
     process_clean = True
+    process_qso_scnd = True
     
     process_fastspec=True
 
@@ -1347,10 +1455,28 @@ if __name__ == '__main__':
             print("Creating the clean fastspecfit hdu")
             get_fastspec_matched_catalog(clean_cat, save_path + "/clean_FASTSPEC_hdu.fits", match_method="TARGETID")
 
+    if process_qso_scnd:
+        qso_scnd_input = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/hidden_dwarf_candidates_qso_mws_scnd.fits"
+        qso_scnd_cat = load_and_filter_qso_scnd_candidates(qso_scnd_input, snr_threshold=3.0)
+
+        print("Creating the QSO/SCND main hdu")
+        qso_scnd_cat, qso_scnd_entire = create_main_data_model(
+            qso_scnd_cat, save_path + "/qso_scnd_MAIN_hdu.fits", clean_cat=True
+        )
+
+        create_tractor_data_model(qso_scnd_entire, save_path + "/qso_scnd_TRACTOR_hdu.fits")
+        create_zcat_data_model(qso_scnd_entire, save_path + "/qso_scnd_ZCAT_hdu.fits")
+
+        if process_fastspec:
+            print("Creating the QSO/SCND fastspecfit hdu")
+            get_fastspec_matched_catalog(qso_scnd_cat, save_path + "/qso_scnd_FASTSPEC_hdu.fits", match_method="TARGETID")
+
     #then we consolidate it all into a multi-ext file!
     #make sure the REPROCESS_PHOTO_CAT is also last in the below list!
-    combine_hdus(["MAIN", "ZCAT", "TRACTOR", "FASTSPEC","REPROCESS_PHOTO"], base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats",
-                 output_file=main_cat_outpath)
+    combine_hdus(["MAIN", "ZCAT", "TRACTOR", "FASTSPEC","REPROCESS_PHOTO"],
+                 base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats",
+                 output_file=main_cat_outpath,
+                 extra_prefixes=["qso_scnd"] if process_qso_scnd else [])
 
     ##add the spectra NMF+PCA information!!
     create_spectra_hdu(main_cat_outpath)
@@ -1359,7 +1485,6 @@ if __name__ == '__main__':
     add_wrong_redrock_maskbit(main_cat_outpath, main_datamodel)
 
     print("TODO: add emfit broad line info, add image hdu with similar targetids and umap co-ordinates. see img ssl notebook for more details")
-    print("TODO: add the ~15k or so QSO+SCND objects!")
 
         
 
