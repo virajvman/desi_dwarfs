@@ -1,6 +1,9 @@
 '''
 python3 desi_dwarfs/code/download_spectra.py -random -nchunks 50 -save_name desi_y1_dwarf_combine > download_spectra.log 2>&1
 
+python3 download_spectra.py -nchunks 10 -append_sample OTHER -existing_h5 /pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/data/desi_dr1_dwarf_catalog_spectra.h5
+
+
 '''
 
 import numpy as np

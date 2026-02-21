@@ -13,6 +13,10 @@ import glob
 from tqdm import trange
 import h5py
 from desi_lowz_funcs import get_stellar_mass, match_c_to_catalog, match_fastspec_catalog, get_stellar_mass_mia
+from desi_lowz_funcs import add_sweeps_column
+from desi_lowz_funcs import get_sga_norm_dists_FAST
+from construct_dwarf_galaxy_catalogs import bright_star_filter
+
 from get_associated_fibers import find_associated_tgids, get_dwarf_primary
 
 def combine_arrays(no_iso, w_iso, mask):
@@ -27,20 +31,45 @@ def combine_arrays(no_iso, w_iso, mask):
         expanded_mask = np.expand_dims(mask, axis=tuple(range(1, no_iso.ndim)))
         return np.where(expanded_mask, no_iso, w_iso)
 
+# def make_catalog_unmasked(cat):
+#     """
+#     Return a new Table where all MaskedColumns are replaced by regular ndarray columns.
+#     Masked entries are filled with np.nan.
+#     """
+#     new_cat = cat.copy()
+#     for col in new_cat.colnames:
+#         c = new_cat[col]
+#         if hasattr(c, "mask"):   # MaskedColumn
+#             new_cat[col] = np.asarray(c.filled(np.nan))
+#         else:
+#             new_cat[col] = np.asarray(c)
+#     return new_cat
+
 def make_catalog_unmasked(cat):
     """
     Return a new Table where all MaskedColumns are replaced by regular ndarray columns.
-    Masked entries are filled with np.nan.
+    Masked entries are filled with appropriate default values.
     """
     new_cat = cat.copy()
     for col in new_cat.colnames:
         c = new_cat[col]
-        if hasattr(c, "mask"):   # MaskedColumn
-            new_cat[col] = np.asarray(c.filled(np.nan))
+        if hasattr(c, "mask"):
+            if np.issubdtype(c.dtype, np.floating):
+                fill_val = np.nan
+            elif np.issubdtype(c.dtype, np.integer):
+                fill_val = -99  # or 0, or whatever sentinel makes sense for your catalog
+            elif np.issubdtype(c.dtype, np.bool_):
+                fill_val = False
+            elif c.dtype.kind in ('U', 'S', 'O'):  # string/object
+                fill_val = ""
+            else:
+                fill_val = 0
+            new_cat[col] = np.asarray(c.filled(fill_val))
         else:
             new_cat[col] = np.asarray(c)
+            
     return new_cat
-
+    
 
 def num_deblend_blob_boundary(zred):
     '''
@@ -494,8 +523,6 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
     Note that the stuff passed here is before the shred and clean photo are combined. Here we are just selecting the relevant columns and prepping them
     '''
 
-    # print("TODO: add Z_CMB to main hdu, also add MU_R and sizes.")
-    
     #let us duplicate the RA,DEC to RA_TARGET,DEC_TARGET
     #for the shredded sources, the RA,DEC columns will be updated!
     
@@ -510,13 +537,24 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
     #make sure none of the columns are masked columns to avoid subtle, unknown bugs!!
 
     if clean_cat:
-        #we need to remove some of the SGA columns as they are masked and it makes some issues! 
-        #there are SGA columns here because there are 47 objects in SGA catalog that have robust tractor photometry, so we just put them in here
-        in_sga_2020 = np.zeros(len(catalog))
-        print(f"{np.sum(~catalog['SGA_RA_MOMENT'].data.mask)} objects in clean that are in SGA-2020")
-        in_sga_2020[~catalog["SGA_RA_MOMENT"].data.mask]  = 1
-        catalog["IN_SGA_2020"] = in_sga_2020.astype(bool)
 
+        if "SGA_RA_MOMENT" in catalog.keys():
+            #we need to remove some of the SGA columns as they are masked and it makes some issues! 
+            #there are SGA columns here because there are 47 objects in SGA catalog that have robust tractor photometry, so we just put them in here
+            in_sga_2020 = np.zeros(len(catalog))
+            print(f"{np.sum(~catalog['SGA_RA_MOMENT'].data.mask)} objects in clean that are in SGA-2020")
+            in_sga_2020[~catalog["SGA_RA_MOMENT"].data.mask]  = 1
+            catalog["IN_SGA_2020"] = in_sga_2020.astype(bool)
+        else:
+            #we need to add the IN_SGA_2020 column as this is where we deal with the QSO scn catalog
+            #this is only if the tractor maskbit = 12 is on
+            maskbit_12_flagged = (catalog["MASKBITS"] & (1 << 12)) != 0
+            catalog["IN_SGA_2020"] = maskbit_12_flagged
+            #note: there will be objects in qso/scnd catalog that are shreds, but low fracflux values, and in SGA-2020 catalog
+            #these will likely be in outskirts and so will be flagged by clean_maskbits later in dwarf_maskbit code below (dwarf_maskbit=12)
+            #but that source is explicity also not considering sources with tractor maskbits = 12.
+            #so make a note in the catalog that the OTHER objects are not processsed through our pipeline!
+            
         #then remove the not necessary columns
         columns_to_remove = [
             "SGA_RA_MOMENT", "SGA_DEC_MOMENT", "SGA_SMA_SB26", "SGA_SMA_SB25",
@@ -526,7 +564,7 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
         # Only remove columns that exist in the catalog
         cols_in_cat = [col for col in columns_to_remove if col in catalog.colnames]
         catalog.remove_columns(cols_in_cat)
-        
+
         catalog = make_catalog_unmasked(catalog)
         
     else:
@@ -537,9 +575,15 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
 
         catalog["MAG_TYPE"] = np.full(len(catalog), "TRACTOR_OG", dtype=object)
 
-        catalog.rename_column("LOGM_SAGA_FIDU", "LOG_MSTAR_SAGA")
-        #note that even for the clean catalog, there will be some maskbits activated, within twice of D26 of SGA at same redshift, bad gr color, low SNR, close to star? Need to think about whether the TRACTOR MASKBITS should be ignored or not here.
-        #TODO: create function that will add maskbits to clean catalog
+
+        if "LOGM_SAGA_FIDU" in catalog.keys():
+            catalog.rename_column("LOGM_SAGA_FIDU", "LOG_MSTAR_SAGA")
+        else:
+            #compute the fiducial stellar mass
+            gr_colors = catalog["MAG_G"].data - catalog["MAG_R"].data
+            mstars_SAGA_new = get_stellar_mass(gr_colors, catalog["MAG_R"].data, catalog["Z_CMB"].data ,d_in_mpc = catalog["LUMI_DIST_MPC"].data, input_zred=False )
+            catalog["LOG_MSTAR_SAGA"] = mstars_SAGA_new
+            
         catalog["PHOTOMETRY_UPDATED"] = np.zeros(len(catalog)).astype(bool)  
 
         #updating the stellar mass from M24, uses g band magnitude
@@ -858,7 +902,7 @@ def apply_emission_line_snr_cuts(fastspec_cat, snr_threshold=3.0):
     return passing
 
 
-def load_and_filter_qso_scnd_candidates(input_path, snr_threshold=3.0):
+def load_and_filter_qso_scnd_candidates(input_path = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/hidden_dwarf_candidates_qso_mws_scnd.fits", snr_threshold=3.0):
     """
     Load hidden dwarf candidates from QSO/SCND target selections, deduplicate,
     remove MWS objects, match to FastSpecFit, and apply emission-line SNR cuts
@@ -909,6 +953,23 @@ def load_and_filter_qso_scnd_candidates(input_path, snr_threshold=3.0):
 
     # Set SAMPLE column to "OTHER"
     cats["SAMPLE"] = np.full(len(cats), "OTHER", dtype=object)
+
+    ##add in SGA and other information!
+
+    cats = get_sga_norm_dists_FAST(cats, siena_path="/global/cfs/cdirs/cosmo/data/sga/2020/SGA-2020.fits")
+
+    #keys to be added to catalog regarding bright star information
+    bstar_keys = [ "STARFDIST", "STARDIST_DEG","STARMAG", "STAR_RADIUS_ARCSEC", "STAR_RA","STAR_DEC"]
+
+    # Check if all bright star keys exist
+    if all(key in cats.colnames for key in bstar_keys):
+        print("Bright star information already exists!")
+    else:
+        # Recompute if missing
+        print("Bright star information did not exist and will be computed.")
+        cats = bright_star_filter(cats)
+
+    cats = add_sweeps_column(cats)
 
     print(f"Final QSO/SCND catalog: {len(cats)} objects (SAMPLE='OTHER')")
     print("=" * 60)
@@ -1420,12 +1481,15 @@ if __name__ == '__main__':
         tot_shred, tot_shred_entire = create_main_data_model(tot_shred, save_path + "/shreds_MAIN_hdu.fits", clean_cat=False)
 
         #get the tractor hdu
+        print("Creating the shred tractor hdu")
         create_tractor_data_model(tot_shred_entire,save_path + "/shreds_TRACTOR_hdu.fits")
 
         #create the zcat hdu
+        print("Creating the shred zcat hdu")
         create_zcat_data_model(tot_shred_entire, save_path + "/shreds_ZCAT_hdu.fits")
 
         #create the reprocess photo hdu
+        print("Creating the shred reprocess photo hdu")
         create_new_photo_data_model(tot_shred_entire, save_path + "/shreds_REPROCESS_PHOTO_hdu.fits")
         
         ##get the fastspecfit hdu
@@ -1443,11 +1507,13 @@ if __name__ == '__main__':
         clean_cat, clean_cat_entire = create_main_data_model(clean_cat, save_path + "/clean_MAIN_hdu.fits", clean_cat=True)
 
         #get the tractor hdu
+        print("Creating the clean tractor main hdu")
         create_tractor_data_model(clean_cat_entire,save_path  + "/clean_TRACTOR_hdu.fits")
 
         #create the zcat hdu
+        print("Creating the clean zcat main hdu")
         create_zcat_data_model(clean_cat_entire, save_path + "/clean_ZCAT_hdu.fits")
-
+        
         #will not make the reprocess photo hdu here!!
 
         ##get the fastspecfit hdu
@@ -1484,7 +1550,7 @@ if __name__ == '__main__':
     #update the dwarf_maskbit with some weird spectra masks
     add_wrong_redrock_maskbit(main_cat_outpath, main_datamodel)
 
-    print("TODO: add emfit broad line info, add image hdu with similar targetids and umap co-ordinates. see img ssl notebook for more details")
+    print("TODO: add image hdu with similar targetids and umap co-ordinates. see img ssl notebook for more details")
 
         
 

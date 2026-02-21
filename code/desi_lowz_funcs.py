@@ -1302,8 +1302,13 @@ def match_fastspec_catalog_targetid(gal_cat, vac_data):
     valid_mask = ~np.isnan(vac_aligned["RA"])
     if np.any(valid_mask):
         # Ensure the units are proper floats in degrees
-        ra_vals = np.array(gal_cat["RA_TARGET"][valid_mask], dtype=float)
-        dec_vals = np.array(gal_cat["DEC_TARGET"][valid_mask], dtype=float)
+        if "RA_TARGET" in gal_cat.keys():
+            ra_vals = np.array(gal_cat["RA_TARGET"][valid_mask], dtype=float)
+            dec_vals = np.array(gal_cat["DEC_TARGET"][valid_mask], dtype=float)
+        else:
+            ra_vals = np.array(gal_cat["RA"][valid_mask], dtype=float)
+            dec_vals = np.array(gal_cat["DEC"][valid_mask], dtype=float)
+            
         ra_vac = np.array(vac_aligned["RA"][valid_mask], dtype=float)
         dec_vac = np.array(vac_aligned["DEC"][valid_mask], dtype=float)
         
