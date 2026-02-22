@@ -1272,7 +1272,20 @@ def create_spectra_hdu(file_path):
         tgids = f["TARGETID"][:]
         norm_facs = f["NORM_FACTOR"][:]
         nnmf_rnorm = f["NNMF_RNORM"][:]
-        
+
+    print(f"PCA COEFFS SHAPE: {pca_coeffs.shape}")
+
+    print(f"PCA COEFFS Example: {pca_coeffs[5]}")
+
+    print(f"PCA COEFFS 3 median and std: {np.median(pca_coeffs[3]), np.std(pca_coeffs[3]) }")
+
+    print(f"NNMF COEFFS SHAPE: {nnmf_coeffs.shape}")
+
+    print(f"NNMF COEFFS Example: {nnmf_coeffs[10]}")
+
+    print(f"NNMF COEFFS 5 median and std: {np.median(nnmf_coeffs[5]), np.std(nnmf_coeffs[5])}")
+    
+
     #we ensure that norm_facs do not have any zeroes
     scale_facs = 1/norm_facs
     scale_facs = scale_facs[scale_facs != 0]
@@ -1547,6 +1560,8 @@ if __name__ == '__main__':
     ##add the spectra NMF+PCA information!!
     create_spectra_hdu(main_cat_outpath)
 
+    print("TODO: remake the NNMF plots and the criterion for weird spectra!!")
+        
     #update the dwarf_maskbit with some weird spectra masks
     add_wrong_redrock_maskbit(main_cat_outpath, main_datamodel)
 

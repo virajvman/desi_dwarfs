@@ -78,8 +78,8 @@ if __name__ == '__main__':
 
     on_gpu_node=True
     #if we are not on a gpu node, the below are just effectivelt False    
-    run_pca = False
-    run_umap = False
+    run_pca = True
+    run_umap = True
     
     save_path = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_dr1_dwarf_catalog_nnmf.h5"
     with h5py.File(save_path, "r") as f:
