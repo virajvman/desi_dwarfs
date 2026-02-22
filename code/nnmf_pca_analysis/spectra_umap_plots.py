@@ -214,8 +214,8 @@ if __name__ == '__main__':
         plt.close()
 
 
-    if False:
-        ##make a multi-panel umap plot color-coded by nmf_fit resid, redshift, oiii/oii, sii/halpha
+    if True:
+        ##make a multi-panel umap plot: BGS+ELG density, nmf_fit resid, redshift, sii/halpha
     
         fig,ax = make_subplots(ncol=4,nrow=1,plot_size=4,return_fig=True,col_spacing = 0.25)
         
@@ -231,38 +231,46 @@ if __name__ == '__main__':
         cb_size = 16
         cb_height = 0.95
         
-        make_umap_plot(fig,ax[0], spec_temp_cat, nnmf_mask, nnmf_rnorm, 
+        #### Panel 0: BGS + ELG two-color density map
+
+        ax[0].pcolormesh(xedges_noelg, yedges_noelg, counts_noelg_m.T, shading='auto', cmap=cmap_noelg,norm=LogNorm(vmin=minc,vmax=maxc),rasterized=True,alpha=0.85)
+        ax[0].pcolormesh(xedges_elg, yedges_elg, counts_elg_m.T, shading='auto', cmap=cmap_elg,norm=LogNorm(vmin=minc,vmax=maxc),rasterized=True,alpha=0.55)
+
+        ax[0].text(0.5,1.05,"BGS & LOWZ",transform=ax[0].transAxes,fontsize = 14,
+                   color="darkorange",weight="bold",alpha=0.95,ha="right")
+        ax[0].text(0.5,1.05,"  /  ",transform=ax[0].transAxes,fontsize = 14,
+                   color="k",alpha=0.95,ha="center")
+        ax[0].text(0.5,1.05,"ELG",transform=ax[0].transAxes,fontsize = 14,
+                   color="steelblue",weight="bold",alpha=0.95,ha="left")
+
+        ax[0].set_xlim([4,15])
+        ax[0].set_ylim([-1,10])
+        ax[0].set_xticks([])
+        ax[0].set_yticks([])
+        for spine in ax[0].spines.values():
+            spine.set_visible(False)
+
+        #### Panel 1: NMF Fit Residual
+        
+        make_umap_plot(fig,ax[1], spec_temp_cat, nnmf_mask, nnmf_rnorm, 
                         n_bins=nbins, limits = None,
                       cmap = "Reds",scatter=False, 
-                      cb_label = r"NMF Fit Residaul", cb_size = cb_size,cb_pos = [0.08,cb_height,bar_size,0.02])
+                      cb_label = r"NMF Fit Residaul", cb_size = cb_size,cb_pos = [0.08+ offset_bar,cb_height,bar_size,0.02])
     
-        ####
+        #### Panel 2: Redshift
         
-        make_umap_plot(fig,ax[1], spec_temp_cat, nnmf_mask, data_cat["Z"].data, 
+        make_umap_plot(fig,ax[2], spec_temp_cat, nnmf_mask, data_cat["Z"].data, 
                     n_bins=nbins, limits = [0.01,0.3],
                   cmap = cmr.lilac,scatter=False, 
-                  cb_label = r"Redshift", cb_size = cb_size,cb_pos = [0.08+ offset_bar,cb_height,bar_size,0.02])
+                  cb_label = r"Redshift", cb_size = cb_size,cb_pos = [0.08+ 2*offset_bar,cb_height,bar_size,0.02])
     
-    
-        ####
+        #### Panel 3: SII / Halpha
         
-        oiii_snr = (np.array(fspec_cat["OIII_5007_FLUX"]) * np.sqrt(np.array(fspec_cat["OIII_5007_FLUX_IVAR"]))) > 3
-        oii_snr = (np.array(fspec_cat["OII_3726_FLUX"]) * np.sqrt(np.array(fspec_cat["OII_3726_FLUX_IVAR"])) ) > 3
         halpha_snr = (np.array(fspec_cat["HALPHA_FLUX"]) * np.sqrt(np.array(fspec_cat["HALPHA_FLUX_IVAR"]))) > 3
         sii_snr_1 = (np.array(fspec_cat["SII_6716_FLUX"]) * np.sqrt(np.array(fspec_cat["SII_6716_FLUX_IVAR"])) ) > 3
         sii_snr_2 = (np.array(fspec_cat["SII_6731_FLUX"]) * np.sqrt(np.array(fspec_cat["SII_6731_FLUX_IVAR"])) ) > 3
         
-        snr_mask = oiii_snr & oii_snr & halpha_snr & sii_snr_1 & sii_snr_2
-    
-    
-        oiii_oii_ratio = np.log10(np.array(fspec_cat["OIII_5007_FLUX"])/np.array(fspec_cat["OII_3726_FLUX"]))
-        
-        make_umap_plot(fig,ax[2], spec_temp_cat, snr_mask, oiii_oii_ratio, 
-                    n_bins=nbins, limits = None,
-                  cmap = cmr.sapphire,scatter=False, 
-                  cb_label = r"log([OIII]/[OII])", cb_size = cb_size,cb_pos = [0.08+ 2*offset_bar,cb_height,bar_size,0.02])
-    
-        ####
+        snr_mask = halpha_snr & sii_snr_1 & sii_snr_2
         
         sii_tot = np.array(fspec_cat["SII_6716_FLUX"]) + np.array(fspec_cat["SII_6731_FLUX"])
         sii_ha_ratio = np.log10( sii_tot/np.array(fspec_cat["HALPHA_FLUX"]) )

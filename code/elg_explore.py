@@ -2,7 +2,7 @@ from astropy.table import Table, hstack, vstack
 import h5py
 import numpy as np
 from tqdm import tqdm
-from nnmf_analysis import deredshift_resample_desi_spectra
+from nnmf_pca_analysis.nnmf_analysis import deredshift_resample_desi_spectra
 from desi_lowz_funcs import print_stage, check_path_existence
 import matplotlib.pyplot as plt
 
