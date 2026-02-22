@@ -1365,6 +1365,94 @@ def create_spectra_hdu(file_path):
     return
 
 
+def create_image_ssl_hdu(file_path):
+    """
+    Create and append an IMG_SSL HDU containing image-based SSL UMAP 2D
+    coordinates and the top-10 most similar TARGETIDs (with cosine similarity
+    scores) for every object in the MAIN HDU.
+
+    Rows are aligned to MAIN by TARGETID.  Objects without SSL data are
+    filled with -99 (int64 columns) or -99.0 (float64 columns).
+    """
+
+    # Load main catalog to get authoritative TARGETID ordering
+    main_cat = Table.read(file_path, hdu="MAIN")
+    main_tgids = main_cat["TARGETID"].data
+    n_objects = len(main_tgids)
+
+    # Load similarity data
+    sim_scores = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/similarity_search_magb/all_similarity_scores_total.npy")
+    sim_tgids = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/similarity_search_magb/all_similarity_targetids_total.npy")
+
+    # Load UMAP 2D coordinates and their associated TARGETIDs
+    umaps_dwarfs = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/umap/total_umap_embedding_2d.npy")
+    tgid_vals = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/dwarf_dr1/total_targetids_arr.npy")
+
+    print(f"Similarity arrays shape: scores={sim_scores.shape}, tgids={sim_tgids.shape}")
+    print(f"UMAP array shape: {umaps_dwarfs.shape}, tgid_vals length: {len(tgid_vals)}")
+
+    assert umaps_dwarfs.shape[0] == len(tgid_vals), "UMAP rows and tgid_vals length mismatch"
+    assert sim_scores.shape == sim_tgids.shape, "sim_scores and sim_tgids shape mismatch"
+
+    n_sim = 10
+
+    # Build lookup: query TARGETID -> row index in sim arrays
+    # sim_tgids[:, 0] holds the query TARGETID for each row
+    sim_tgid_to_row = {int(sim_tgids[i, 0]): i for i in range(sim_tgids.shape[0])}
+
+    # Build lookup: TARGETID -> row index in UMAP arrays
+    umap_tgid_to_idx = {int(tgid_vals[i]): i for i in range(len(tgid_vals))}
+
+    # Prepare output columns
+    img_umap_0 = np.full(n_objects, -99.0, dtype=np.float64)
+    img_umap_1 = np.full(n_objects, -99.0, dtype=np.float64)
+
+    sim_targetid_cols = np.full((n_objects, n_sim), -99, dtype=np.int64)
+    sim_score_cols = np.full((n_objects, n_sim), -99.0, dtype=np.float64)
+
+    for i, tgid in enumerate(main_tgids):
+        tgid_int = int(tgid)
+
+        # UMAP coordinates
+        if tgid_int in umap_tgid_to_idx:
+            uidx = umap_tgid_to_idx[tgid_int]
+            img_umap_0[i] = umaps_dwarfs[uidx, 0]
+            img_umap_1[i] = umaps_dwarfs[uidx, 1]
+
+        # Similarity: skip self (column 0), take next 10
+        if tgid_int in sim_tgid_to_row:
+            row = sim_tgid_to_row[tgid_int]
+            avail = min(n_sim, sim_tgids.shape[1] - 1)
+            sim_targetid_cols[i, :avail] = sim_tgids[row, 1:1 + avail]
+            sim_score_cols[i, :avail] = sim_scores[row, 1:1 + avail]
+
+    # Build astropy Table
+    new_table = Table()
+    new_table["TARGETID"] = main_tgids
+
+    new_table["IMG_UMAP_0"] = img_umap_0
+    new_table["IMG_UMAP_1"] = img_umap_1
+
+    for j in range(n_sim):
+        new_table[f"SIM_TARGETID_{j}"] = sim_targetid_cols[:, j]
+        new_table[f"SIM_SCORE_{j}"] = sim_score_cols[:, j]
+
+    # Append as new HDU
+    new_hdu = fits.BinTableHDU(new_table, name="IMG_SSL")
+
+    with fits.open(file_path, mode="update") as hdul:
+        hdul.append(new_hdu)
+        hdul.flush()
+
+    n_matched_umap = np.sum(img_umap_0 != -99.0)
+    n_matched_sim = np.sum(sim_targetid_cols[:, 0] != -99)
+    print(f"Added IMG_SSL extension to {file_path} (length = {n_objects})")
+    print(f"  UMAP matched: {n_matched_umap}/{n_objects}")
+    print(f"  Similarity matched: {n_matched_sim}/{n_objects}")
+
+    return
+
+
 def add_wrong_redrock_maskbit(cat_path, main_datamodel, bit=16):
     """
     Identify objects with wrong Redrock redshifts and update DWARF_MASKBIT.
@@ -1560,12 +1648,13 @@ if __name__ == '__main__':
     ##add the spectra NMF+PCA information!!
     create_spectra_hdu(main_cat_outpath)
 
+    ##add image SSL UMAP + similarity information
+    create_image_ssl_hdu(main_cat_outpath)
+
     print("TODO: remake the NNMF plots and the criterion for weird spectra!!")
         
     #update the dwarf_maskbit with some weird spectra masks
     add_wrong_redrock_maskbit(main_cat_outpath, main_datamodel)
-
-    print("TODO: add image hdu with similar targetids and umap co-ordinates. see img ssl notebook for more details")
 
         
 

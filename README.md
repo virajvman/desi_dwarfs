@@ -3,7 +3,7 @@
 
 **Contact:** Viraj Manwadkar ([virajvm@stanford.edu](mailto:virajvm@stanford.edu))
 
-The DESI Extragalactic Dwarf Galaxy Catalog provides spectroscopically confirmed dwarf galaxies from the Dark Energy Spectroscopic Instrument (DESI) Data Release 1. The catalog includes reprocessed photometry, spectral measurements, and value-added properties for low-mass galaxies with $\log(M_\star / M_\odot) < 9.25$. The catalog is stored as a multi-extension FITS file with six extensions: **MAIN**, **ZCAT**, **TRACTOR**, **FASTSPEC**, **REPROCESS_PHOTO**, and **SPECTRA_TEMPLATE**.
+The DESI Extragalactic Dwarf Galaxy Catalog provides spectroscopically confirmed dwarf galaxies from the Dark Energy Spectroscopic Instrument (DESI) Data Release 1. The catalog includes reprocessed photometry, spectral measurements, and value-added properties for low-mass galaxies with $\log(M_\star / M_\odot) < 9.25$. The catalog is stored as a multi-extension FITS file with seven extensions: **MAIN**, **ZCAT**, **TRACTOR**, **FASTSPEC**, **REPROCESS_PHOTO**, **SPECTRA_TEMPLATE**, and **IMG_SSL**.
 
 <p align="center">
   <img src="figs/dwarf_example_panel.jpg" width="90%" alt="Example dwarf galaxies from the DESI catalog">
@@ -340,6 +340,25 @@ Spectral template decomposition coefficients and UMAP coordinates.
 | `SPEC_UMAP_1` | float32 | | Spectra 2D UMAP coordinate (*y*) |
 | `NNMF_RESID` | float32 | | Residual norm of NNMF fit to spectra |
 | `NNMF_NORM_FACTOR` | float32 | | Normalization factor used before fitting templates |
+
+</details>
+
+---
+
+<details>
+<summary><strong>Extension 7 &mdash; IMG_SSL</strong></summary>
+
+<br>
+
+Image-based self-supervised learning (SSL) UMAP coordinates and similarity search results. For each galaxy, the 10 most similar objects (by cosine similarity of SSL image representations) are listed in descending order of similarity. Missing values are filled with &minus;99 (int64 columns) or &minus;99.0 (float64 columns).
+
+| Name | Type | Units | Description |
+| :--- | :--- | :---: | :---------- |
+| `TARGETID` | int64 | | DESI TARGET ID |
+| `IMG_UMAP_0` | float64 | | Image SSL 2D UMAP coordinate (*x*) |
+| `IMG_UMAP_1` | float64 | | Image SSL 2D UMAP coordinate (*y*) |
+| `SIM_TARGETID_i` | int64 | | TARGETID of the *i*-th most similar object (10 columns: `SIM_TARGETID_0` ... `SIM_TARGETID_9`) |
+| `SIM_SCORE_i` | float64 | | Cosine similarity score for the *i*-th most similar object (10 columns: `SIM_SCORE_0` ... `SIM_SCORE_9`) |
 
 </details>
 
