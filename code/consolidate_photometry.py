@@ -1000,7 +1000,17 @@ def get_fastspec_matched_catalog(gal_cat, save_name, match_method = "TARGETID"):
 ##THESE ARE ALL THE FASTSPEC COLUMNS WE WISH TO READ!
 fastspec_metadata_cols = ["TARGETID","RA","DEC"]
 
-fastspec_specphot_cols = ["DN4000", "DN4000_OBS", "DN4000_IVAR", "DN4000_MODEL", "DN4000_MODEL_IVAR", "VDISP", "VDISP_IVAR", "FOII_3727_CONT", "FOII_3727_CONT_IVAR", "FHBETA_CONT", "FHBETA_CONT_IVAR", "FOIII_5007_CONT", "FOIII_5007_CONT_IVAR","FHALPHA_CONT", "FHALPHA_CONT_IVAR" ]
+fastspec_specphot_cols = [
+    "DN4000", "DN4000_OBS", "DN4000_IVAR", "DN4000_MODEL", "DN4000_MODEL_IVAR",
+    "VDISP", "VDISP_IVAR",
+    "FOII_3727_CONT", "FOII_3727_CONT_IVAR",
+    "FHBETA_CONT", "FHBETA_CONT_IVAR",
+    "FOIII_5007_CONT", "FOIII_5007_CONT_IVAR",
+    "FHALPHA_CONT", "FHALPHA_CONT_IVAR",
+    "FLUX_SYNTH_G", "FLUX_SYNTH_R", "FLUX_SYNTH_Z",
+    "FLUX_SYNTH_SPECMODEL_G", "FLUX_SYNTH_SPECMODEL_R", "FLUX_SYNTH_SPECMODEL_Z",
+    "FLUX_SYNTH_PHOTMODEL_G", "FLUX_SYNTH_PHOTMODEL_R", "FLUX_SYNTH_PHOTMODEL_Z",
+]
 
 fastspec_cols = ["SNR_B", "SNR_R", "SNR_Z", "APERCORR", "APERCORR_G", "APERCORR_R", "APERCORR_Z"] 
 
@@ -1525,7 +1535,51 @@ def add_wrong_redrock_maskbit(cat_path, main_datamodel, bit=16):
 
     print(f"Set DWARF_MASKBIT bit {bit} for {weird_mask.sum()} objects (MAIN HDU updated).")
 
+
+
+def incorporate_updated_distances(main_cat_path):
+
+    main_hdu,_, _, _ = update_distance_catalog(main_cat_path, keep_lumi_dist_orig=False)
+
+    #with the updated distance in LUMI_DIST_MPC, we will remeasure the stellar mass!!
+    gr_arr = np.array(main_hdu["MAG_G"]) - np.array(main_hdu["MAG_R"])
+    mag_r_arr = np.array(main_hdu["MAG_R"])
+    mag_g_arr = np.array(main_hdu["MAG_G"])
+    zcmb_arr = np.array(main_hdu["Z_CMB"])
+
+    logm_saga = get_stellar_mass(gr_arr, mag_r_arr, zcmb_arr,  d_in_mpc = dist_arr, input_zred=False)
+
+    logm_m24 = get_stellar_mass_mia(gr_arr, mag_g_arr ,zcmb_arr, d_in_mpc = dist_arr, input_zred=False)
+
+    #make a quick plot doing a comparison
+    plt.figure(figsize = (5,5))
+    plt.hist2d( main_hdu["LOG_MSTAR_M24"], logm_m24, range= ((6,9.25),(6,9.25)), bins=50,norm=LogNorm()  )
+    plt.xlabel("MSTAR M24 OLD",fontsize = 12)
+    plt.ylabel("MSTAR M24 NEW",fontsize=12)
+    plt.xlim([6,9.25])
+    plt.ylim([6,9.25])
+    plt.savefig("global/homes/v/virajvm/DESI2_LOWZ/quenched_fracs_nbs/paper_plots/mstar_dist_update_comp.png")
+    plt.close()
+
+    #print some statistics on how many objects have more than 0.25 dex shift in mstar
+
+    #update the stellar mass columns
+    main_hdu["LOG_MSTAR_SAGA"] = logm_saga
+    main_hdu["LOG_MSTAR_M24"] = logm_m24
     
+    #create a mask for objects that are no longer below 9.25 based on LOG_MSTAR_M24
+    not_dwarf_mask = (logm_m24 > 9.25)
+    
+    #then use that mask to update all rows in the catalog and save the updated multi-extension catalog at same location!
+
+    #save the targetids to be removed so we can remove them from the other data products we have avaialbel!
+
+
+    return 
+
+    
+
+
 if __name__ == '__main__':
 
     save_path = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats"
@@ -1656,6 +1710,8 @@ if __name__ == '__main__':
     #update the dwarf_maskbit with some weird spectra masks
     add_wrong_redrock_maskbit(main_cat_outpath, main_datamodel)
 
+    ##update the distances in the catalog and then remove objects that are not dwarf based on that!!
+    incorporate_updated_distances(main_cat_outpath)
         
 
     

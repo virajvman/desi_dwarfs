@@ -74,14 +74,16 @@ class PCA(nn.Module):
 
 if __name__ == '__main__':
 
-    compute_norm_resis = False
+    compute_norm_resis = True
 
     on_gpu_node=True
     #if we are not on a gpu node, the below are just effectivelt False    
     run_pca = True
     run_umap = True
+
+    flag = "NEW" #this is OG or NEW
     
-    save_path = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_dr1_dwarf_catalog_nnmf.h5"
+    save_path = f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_dr1_dwarf_catalog_nnmf_{flag}.h5"
     with h5py.File(save_path, "r") as f:
         wave_rest = f["WAVE_REST"][:]
         flux_scale = f["FLUX_NORM"][:]
@@ -93,7 +95,7 @@ if __name__ == '__main__':
     print(np.shape(nnmf_coeffs))
 
     ## load the nnmf templates !
-    nnmf_temps = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/nnmf_templates/templates_dwarfs_v2.npy")
+    nnmf_temps = np.load(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/nnmf_templates/templates_dwarfs_{flag}.npy")
     print(nnmf_temps.shape)
 
     if compute_norm_resis:
@@ -104,11 +106,11 @@ if __name__ == '__main__':
         print(all_inputs[0][0].shape, all_inputs[0][1].shape, all_inputs[0][2].shape)
         from spectra_nnmf_resid import parallel_residual
         all_norm_resis = parallel_residual(all_inputs,  n_processes=128)
-        np.save( "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/norm_residuals_dwarfs_v2.npy", all_norm_resis )
+        np.save( f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/norm_residuals_dwarfs_{flag}.npy", all_norm_resis )
     else:
         print("Loading NNMF residuals!")
         
-        all_norm_resis = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/norm_residuals_dwarfs_v2.npy"  )
+        all_norm_resis = np.load(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/norm_residuals_dwarfs_{flag}.npy"  )
     
     print(f"all_norm_resis shape = {all_norm_resis.shape}")
 
@@ -142,8 +144,8 @@ if __name__ == '__main__':
             t_arr = pca.transform(X_full).cpu().numpy()  # (Ngal, 20)
         
             # Save components and transformed coefficients
-            np.save("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/pca_components.npy",templates_pca_arr)
-            np.save("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/pca_transform.npy",t_arr)
+            np.save(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/pca_components_{flag}.npy",templates_pca_arr)
+            np.save(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/pca_transform_{flag}.npy",t_arr)
         
             print("PCA finished on subset and applied to full dataset!")
         
@@ -151,18 +153,18 @@ if __name__ == '__main__':
             print("Reading PCA results!")
         
             # Load precomputed components and transformed data
-            templates_pca_arr = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/pca_components.npy")
-            t_arr = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/pca_transform.npy")
+            templates_pca_arr = np.load(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/pca_components_{flag}.npy")
+            t_arr = np.load(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/pca_transform_{flag}.npy")
             
         print(np.shape(t_arr))
 
         print("Saving the data in h5 files!!")
         
         # Existing file
-        h5_in = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_dr1_dwarf_catalog_nnmf.h5"
+        h5_in = f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_dr1_dwarf_catalog_nnmf_{flag}.h5"
         
         # New file with PCA_COEFFS added
-        h5_out = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_dr1_dwarf_catalog_nnmf_pca.h5"
+        h5_out = f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_dr1_dwarf_catalog_nnmf_pca_{flag}.h5"
         
         # PCA coefficients from your PCA fit
         # Make sure this is shape (N_spectra, n_components)
@@ -193,7 +195,7 @@ if __name__ == '__main__':
             scaled_t_arr = StandardScaler().fit_transform(all_spec_feats)
             print(scaled_t_arr[0])
             embedding = reducer.fit_transform(scaled_t_arr)
-            np.save("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_dwarfs_umap_nnmf_and_pca_v2.npy", embedding)
+            np.save(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_dwarfs_umap_nnmf_and_pca_{flag}.npy", embedding)
         else:
             pass
 
