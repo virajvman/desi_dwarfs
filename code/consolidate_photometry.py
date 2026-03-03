@@ -636,10 +636,10 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
     #then we loop over the columns to get the final subset of columns
     # Keep only columns present in main_datamodel
     print("Selecting the subset of columns for MAIN extension")
-    catalog_main = catalog[ [col for col in main_datamodel.keys() if col not in ["ASSOCIATED_TARGETIDS", "DWARF_PRIMARY_TARGETID", "DWARF_PRIMARY"] ] ]
+    catalog_main = catalog[ [col for col in main_datamodel.keys() if col not in ["ASSOCIATED_TARGETIDS", "DWARF_PRIMARY_TARGETID", "DWARF_PRIMARY", "DIST_SOURCE"] ] ]
     
     for col in main_datamodel.keys():
-        if col not in ["ASSOCIATED_TARGETIDS", "DWARF_PRIMARY_TARGETID", "DWARF_PRIMARY"]:
+        if col not in ["ASSOCIATED_TARGETIDS", "DWARF_PRIMARY_TARGETID", "DWARF_PRIMARY", "DIST_SOURCE"]:
             print(f"Column : {col}")
             meta = main_datamodel[col]
     
@@ -1907,11 +1907,11 @@ if __name__ == '__main__':
     incorporate_updated_distances(main_cat_outpath)
 
     ##propagate the TARGETID removals into the spectra and images H5 files
-    prune_h5_files(
-        main_cat_path=main_cat_outpath,
-        spectra_h5_path="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/data/desi_dr1_dwarf_catalog_spectra.h5",
-        images_h5_path="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/desi_dr1_dwarf_catalog_images.h5",
-    )
+    # prune_h5_files(
+    #     main_cat_path=main_cat_outpath,
+    #     spectra_h5_path="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/data/desi_dr1_dwarf_catalog_spectra.h5",
+    #     images_h5_path="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/desi_dr1_dwarf_catalog_images.h5",
+    # )
 
     
 
