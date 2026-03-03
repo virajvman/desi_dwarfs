@@ -59,7 +59,7 @@ def find_associated_tgids(dwarf_cat, cache_path="/pscratch/sd/v/virajvm/catalog_
     dwarf_coords = SkyCoord(ra=dwarf_cat["RA"], dec=dwarf_cat["DEC"], unit=u.deg)
     zpix_coords = SkyCoord(ra=zpix_iron["RA"], dec=zpix_iron["DEC"], unit=u.deg)
     
-    max_radius_deg = (2.0 * np.max(dwarf_cat["R50_R"]) / 3600.0) * u.deg
+    max_radius_deg = (2.0 * np.nanmax(dwarf_cat["R50_R"]) / 3600.0) * u.deg
     
     print(f"Running search_around_sky (max radius = {max_radius_deg:.4f})... this may take a while")
     idx_zpix, idx_dwarf, sep2d, _ = dwarf_coords.search_around_sky(zpix_coords, seplimit=max_radius_deg)
