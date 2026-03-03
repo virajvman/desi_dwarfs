@@ -212,6 +212,10 @@ def main():
     stackids = np.arange(n_bins)
     stack_redshift = np.zeros(n_bins)
 
+    ##save the stacked spectra as a numpy array!!
+    np.save("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/scratch/stacked_flux_ew.npy", stacked_flux)
+    np.save("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/scratch/stacked_wave_ew.npy", wave)
+
     table_cols = {
         "NSPEC": bin_counts,
         "HALPHA_EW_LO": bin_edges[:-1],
