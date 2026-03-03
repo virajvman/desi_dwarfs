@@ -27,7 +27,7 @@ def cog_nan_mask(cat,verbose=True):
     # nan_mask = nan_mask_1 | nan_mask_2
 
     if verbose:
-        frac = np.sum(nan_mask.data)/len(nan_mask)
+        frac = np.sum(nan_mask)/len(nan_mask)
         print(f"MASKBIT=2^0, cog nan mask, {frac:.4f}",  )
     
     return nan_mask

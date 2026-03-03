@@ -33,20 +33,6 @@ def combine_arrays(no_iso, w_iso, mask):
         expanded_mask = np.expand_dims(mask, axis=tuple(range(1, no_iso.ndim)))
         return np.where(expanded_mask, no_iso, w_iso)
 
-# def make_catalog_unmasked(cat):
-#     """
-#     Return a new Table where all MaskedColumns are replaced by regular ndarray columns.
-#     Masked entries are filled with np.nan.
-#     """
-#     new_cat = cat.copy()
-#     for col in new_cat.colnames:
-#         c = new_cat[col]
-#         if hasattr(c, "mask"):   # MaskedColumn
-#             new_cat[col] = np.asarray(c.filled(np.nan))
-#         else:
-#             new_cat[col] = np.asarray(c)
-#     return new_cat
-
 def make_catalog_unmasked(cat):
     """
     Return a new Table where all MaskedColumns are replaced by regular ndarray columns.
@@ -59,7 +45,7 @@ def make_catalog_unmasked(cat):
             if np.issubdtype(c.dtype, np.floating):
                 fill_val = np.nan
             elif np.issubdtype(c.dtype, np.integer):
-                fill_val = -99  # or 0, or whatever sentinel makes sense for your catalog
+                fill_val = -99
             elif np.issubdtype(c.dtype, np.bool_):
                 fill_val = False
             elif c.dtype.kind in ('U', 'S', 'O'):  # string/object
@@ -71,6 +57,31 @@ def make_catalog_unmasked(cat):
             new_cat[col] = np.asarray(c)
             
     return new_cat
+
+
+def safe_read_table(*args, **kwargs):
+    """Table.read wrapper that immediately strips all MaskedColumns."""
+    return make_catalog_unmasked(Table.read(*args, **kwargs))
+
+
+def safe_vstack(tables, **kwargs):
+    """vstack wrapper that strips MaskedColumns introduced by stacking."""
+    return make_catalog_unmasked(vstack(tables, **kwargs))
+
+
+def safe_hstack(tables, **kwargs):
+    """hstack wrapper that strips MaskedColumns introduced by stacking."""
+    return make_catalog_unmasked(hstack(tables, **kwargs))
+
+
+def assert_no_masked_columns(table, label=""):
+    """Debug helper: raises ValueError if any column is still a MaskedColumn."""
+    masked_cols = [col for col in table.colnames if hasattr(table[col], "mask")]
+    if masked_cols:
+        raise ValueError(
+            f"[{label}] Masked columns found: {masked_cols}. "
+            "Call make_catalog_unmasked() first."
+        )
     
 
 def num_deblend_blob_boundary(zred):
@@ -251,7 +262,7 @@ def consolidate_cog_photo(catalog,sample=None, add_pcnn=True):
             flag="sga"
         else:
             flag = "shreds"
-        pcnn_cat = Table.read(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_{sample}_{flag}_catalog_w_aper_mags_pcnn_vals.fits")
+        pcnn_cat = safe_read_table(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_{sample}_{flag}_catalog_w_aper_mags_pcnn_vals.fits")
     
         if len(pcnn_cat) != len(catalog):
             raise ValueError(f"Pcnn cat and catalog do not have the same lengths = { len(pcnn_cat), len(catalog) }")
@@ -541,11 +552,15 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
     if clean_cat:
 
         if "SGA_RA_MOMENT" in catalog.keys():
-            #we need to remove some of the SGA columns as they are masked and it makes some issues! 
             #there are SGA columns here because there are 47 objects in SGA catalog that have robust tractor photometry, so we just put them in here
+            sga_col = catalog['SGA_RA_MOMENT']
+            if hasattr(sga_col, 'mask'):
+                valid = ~np.asarray(sga_col.mask)
+            else:
+                valid = ~np.isnan(np.asarray(sga_col))
             in_sga_2020 = np.zeros(len(catalog))
-            print(f"{np.sum(~catalog['SGA_RA_MOMENT'].data.mask)} objects in clean that are in SGA-2020")
-            in_sga_2020[~catalog["SGA_RA_MOMENT"].data.mask]  = 1
+            print(f"{np.sum(valid)} objects in clean that are in SGA-2020")
+            in_sga_2020[valid] = 1
             catalog["IN_SGA_2020"] = in_sga_2020.astype(bool)
         else:
             #we need to add the IN_SGA_2020 column as this is where we deal with the QSO scn catalog
@@ -654,13 +669,12 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
             if meta.get("unit") is not None:
                 catalog_main[col].unit = meta["unit"]
     
-            # Handle blank values if desired, we will only explicity provide a blank value in the datamodel if it is a nan type
-    
             blank_val = meta.get("blank_value", None)
             if blank_val is not None:
-                # replace masked or invalid entries
-                mask = np.isnan(catalog_main[col])
-                catalog_main[col][mask] = blank_val
+                col_data = np.asarray(catalog_main[col], dtype=float)
+                bad = np.isnan(col_data)
+                col_data[bad] = blank_val
+                catalog_main[col] = col_data
 
     #save to fits file
     catalog_main.write(save_name, overwrite=True)
@@ -681,6 +695,8 @@ def finalize_main_hdu(catalog_main):
 
     print("Need to think a bit more about the blank value stuff")
     for col in main_datamodel.keys():
+        if col not in catalog_main.colnames:
+            continue
         print(f"Column : {col}")
         meta = main_datamodel[col]
 
@@ -695,13 +711,12 @@ def finalize_main_hdu(catalog_main):
         if meta.get("unit") is not None:
             catalog_main[col].unit = meta["unit"]
 
-        # Handle blank values if desired, we will only explicity provide a blank value in the datamodel if it is a nan type
-
         blank_val = meta.get("blank_value", None)
         if blank_val is not None:
-            # replace masked or invalid entries
-            mask = np.isnan(catalog_main[col])
-            catalog_main[col][mask] = blank_val
+            col_data = np.asarray(catalog_main[col], dtype=float)
+            bad = np.isnan(col_data)
+            col_data[bad] = blank_val
+            catalog_main[col] = col_data
 
     return catalog_main
 
@@ -733,14 +748,13 @@ def create_tractor_data_model(catalog,save_name):
         if meta.get("unit") is not None:
             tractor_tab[col].unit = meta["unit"]
 
-        # Handle blank values if desired
-
         blank_val = meta.get("blank_value", None)
         if blank_val is not None:
-            # replace masked or invalid entries
             print(col)
-            mask = np.isnan(tractor_tab[col])
-            tractor_tab[col][mask] = blank_val
+            col_data = np.asarray(tractor_tab[col], dtype=float)
+            bad = np.isnan(col_data)
+            col_data[bad] = blank_val
+            tractor_tab[col] = col_data
 
     # 3. Save to FITS
     tractor_tab.write(save_name, overwrite=True)
@@ -770,13 +784,12 @@ def create_zcat_data_model(catalog, save_name):
         if meta.get("unit") is not None:
             zcat_tab[col].unit = meta["unit"]
 
-        # Handle blank values if desired
-
         blank_val = meta.get("blank_value", None)
         if blank_val is not None:
-            # replace masked or invalid entries
-            mask = np.isnan(zcat_tab[col])
-            zcat_tab[col][mask] = blank_val
+            col_data = np.asarray(zcat_tab[col], dtype=float)
+            bad = np.isnan(col_data)
+            col_data[bad] = blank_val
+            zcat_tab[col] = col_data
 
     # 3. Save to FITS
     zcat_tab.write(save_name, overwrite=True)
@@ -789,6 +802,8 @@ def create_fastspec_data_model(fastspec_cat,save_name):
     Function that creates the data model for the tractor hdu
     '''
     
+    fastspec_cat = make_catalog_unmasked(fastspec_cat)
+
     fastspec_cat.rename_column("RA","RA_TARGET")
     fastspec_cat.rename_column("DEC","DEC_TARGET")
 
@@ -811,9 +826,10 @@ def create_fastspec_data_model(fastspec_cat,save_name):
         # Handle blank values if desired
         blank_val = meta.get("blank_value", None)
         if blank_val is not None:
-            # replace masked or invalid entries
-            mask = fastspec_cat[col].mask if hasattr(fastspec_cat[col], 'mask') else np.isnan(fastspec_cat[col])
-            fastspec_cat[col][mask] = blank_val
+            col_data = np.asarray(fastspec_cat[col], dtype=float)
+            bad = np.isnan(col_data)
+            col_data[bad] = blank_val
+            fastspec_cat[col] = col_data
 
     # 3. Save to FITS
     # fastspec_cat.write(save_name, overwrite=True)
@@ -855,13 +871,12 @@ def create_new_photo_data_model(catalog, save_name):
         if meta.get("unit") is not None:
             catalog[col].unit = meta["unit"]
 
-        # Handle blank values if desired, we will only explicity provide a blank value in the datamodel if it is a nan type
-
         blank_val = meta.get("blank_value", None)
         if blank_val is not None:
-            # replace masked or invalid entries
-            mask = np.isnan(catalog[col])
-            catalog[col][mask] = blank_val
+            col_data = np.asarray(catalog[col], dtype=float)
+            bad = np.isnan(col_data)
+            col_data[bad] = blank_val
+            catalog[col] = col_data
 
     #save to fits file
     catalog.write(save_name, overwrite=True)
@@ -926,7 +941,7 @@ def load_and_filter_qso_scnd_candidates(input_path = "/pscratch/sd/v/virajvm/cat
     print("Loading QSO/SCND hidden dwarf candidates")
     print("=" * 60)
 
-    cats = Table.read(input_path)
+    cats = safe_read_table(input_path)
     print(f"Total rows loaded: {len(cats)}")
 
     # Deduplicate by TARGETID
@@ -1059,7 +1074,7 @@ def get_fastspec_fit_catalog_V3():
             tab_meta = Table(hdul["METADATA"].data[zmask])[fastspec_metadata_cols]
     
             #hstack these!!
-            tab_i = hstack([tab_meta, tab_fastspec, tab_specphot])
+            tab_i = safe_hstack([tab_meta, tab_fastspec, tab_specphot])
     
             #let us only keep objects that are galaxies a
             print(len(tab_i))
@@ -1068,7 +1083,7 @@ def get_fastspec_fit_catalog_V3():
     
 
     #now we stack this all and save it!
-    tables = vstack(tables)
+    tables = safe_vstack(tables)
 
     tables.write("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_fastspec_catalog/iron_fastspec_v3.fits",overwrite=True)
         
@@ -1106,9 +1121,9 @@ def get_fastspec_fit_catalog_V2(chunk_size = 250000):
 
             tab_meta = Table(meta[start:stop][zmask])[fastspec_metadata_cols]
             tab_fastspec = Table(fastspec[start:stop][zmask])[fastspec_tot_cols_v2 + fastspec_specphot_cols_v2]
-            out_chunks.append(hstack([tab_meta, tab_fastspec]))
+            out_chunks.append(safe_hstack([tab_meta, tab_fastspec]))
 
-        result = vstack(out_chunks)
+        result = safe_vstack(out_chunks)
         print(len(result))
         result.write("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_fastspec_catalog/iron_fastspec_v21.fits",overwrite=True)
 
@@ -1147,7 +1162,7 @@ def add_lowz_fiberflux(trac_cat,tot_cat):
     print(f"BEFORE: Example FIBERFLUX_R: {trac_cat[lowz_mask]['FIBERFLUX_R'].data[:5]}")
     
     #loading the updated lowz tractor catalog
-    lowz_trac_cat_f = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_lowz_filter_zsucc_zrr03_INT.fits")
+    lowz_trac_cat_f = safe_read_table("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_lowz_filter_zsucc_zrr03_INT.fits")
 
     ##we cross_match this trac_cat with that
     idx,d2d,_ = match_c_to_catalog(c_cat = lowz_tot_cat, catalog_cat = lowz_trac_cat_f, c_ra="RA_TARGET",c_dec="DEC_TARGET",catalog_ra="RA",catalog_dec="DEC")
@@ -1191,7 +1206,7 @@ def combine_hdus(hdu_list, base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs
         if hdu_name in ["REPROCESS_PHOTO"]:
             shred_fname = os.path.join(base_path, f"shreds_{hdu_name}_hdu.fits")
             print(f"Reading {shred_fname}...")
-            shred_tab = Table.read(shred_fname)
+            shred_tab = safe_read_table(shred_fname)
             
             hdu_tables.append(shred_tab)
         
@@ -1202,8 +1217,8 @@ def combine_hdus(hdu_list, base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs
             print(f"Reading {shred_fname}...")
             print(f"Reading {clean_fname}...")
             
-            clean_tab = Table.read(clean_fname)
-            shred_tab = Table.read(shred_fname)
+            clean_tab = safe_read_table(clean_fname)
+            shred_tab = safe_read_table(shred_fname)
     
             tables_to_stack = [clean_tab, shred_tab]
 
@@ -1211,11 +1226,11 @@ def combine_hdus(hdu_list, base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs
                 extra_fname = os.path.join(base_path, f"{prefix}_{hdu_name}_hdu.fits")
                 if os.path.exists(extra_fname):
                     print(f"Reading {extra_fname}...")
-                    tables_to_stack.append(Table.read(extra_fname))
+                    tables_to_stack.append(safe_read_table(extra_fname))
                 else:
                     print(f"Skipping {extra_fname} (not found)")
 
-            tab = vstack(tables_to_stack)
+            tab = safe_vstack(tables_to_stack)
 
             if hdu_name in ["MAIN"]:
                 ##if main, we will add three new columns
@@ -1272,7 +1287,7 @@ def create_spectra_hdu(file_path):
     """
 
     # Load main catalog
-    main_cat = Table.read(file_path, hdu="MAIN")
+    main_cat = safe_read_table(file_path, hdu="MAIN")
     main_tgids = main_cat["TARGETID"].data
     n_objects = len(main_tgids)
 
@@ -1388,7 +1403,7 @@ def create_image_ssl_hdu(file_path):
     """
 
     # Load main catalog to get authoritative TARGETID ordering
-    main_cat = Table.read(file_path, hdu="MAIN")
+    main_cat = safe_read_table(file_path, hdu="MAIN")
     main_tgids = main_cat["TARGETID"].data
     n_objects = len(main_tgids)
 
@@ -1481,9 +1496,9 @@ def add_wrong_redrock_maskbit(cat_path, main_datamodel, bit=16):
     """
 
     # --- Read relevant tables ---
-    main_cat = Table.read(cat_path, hdu="MAIN")
-    fspec_cat = Table.read(cat_path, hdu="FASTSPEC")
-    spec_cat = Table.read(cat_path, hdu="SPECTRA_TEMPLATE")
+    main_cat = safe_read_table(cat_path, hdu="MAIN")
+    fspec_cat = safe_read_table(cat_path, hdu="FASTSPEC")
+    spec_cat = safe_read_table(cat_path, hdu="SPECTRA_TEMPLATE")
 
     # --- Identify weird/redshift-mismatch objects ---
     weird_mask = flag_weird_spectra(spec_cat, main_cat, fspec_cat)
@@ -1516,11 +1531,12 @@ def add_wrong_redrock_maskbit(cat_path, main_datamodel, bit=16):
         if meta.get("unit") is not None:
             main_cat[col].unit = meta["unit"]
 
-        # Set blank values if provided
         blank_val = meta.get("blank_value", None)
         if blank_val is not None:
-            mask = np.isnan(main_cat[col])
-            main_cat[col][mask] = blank_val
+            col_data = np.asarray(main_cat[col], dtype=float)
+            bad = np.isnan(col_data)
+            col_data[bad] = blank_val
+            main_cat[col] = col_data
 
     # --- Write MAIN HDU to a temporary HDU ---
     buf = BytesIO()
@@ -1545,6 +1561,13 @@ def incorporate_updated_distances(main_cat_path):
     from matplotlib.colors import LogNorm
 
     main_hdu, _, _, _ = update_distance_catalog(main_cat_path, keep_lumi_dist_orig=False)
+    main_hdu = make_catalog_unmasked(main_hdu)
+
+    dist_meta = main_datamodel["DIST_SOURCE"]
+    if dist_meta.get("description"):
+        main_hdu["DIST_SOURCE"].description = dist_meta["description"]
+    if dist_meta.get("unit") is not None:
+        main_hdu["DIST_SOURCE"].unit = dist_meta["unit"]
 
     # With the updated distance in LUMI_DIST_MPC, remeasure the stellar mass
     gr_arr = np.array(main_hdu["MAG_G"]) - np.array(main_hdu["MAG_R"])
@@ -1615,7 +1638,7 @@ def incorporate_updated_distances(main_cat_path):
     for hdu_name in orig_hdu_names:
         if hdu_name == "PRIMARY":
             continue
-        ext_tables[hdu_name] = Table.read(main_cat_path, hdu=hdu_name)
+        ext_tables[hdu_name] = safe_read_table(main_cat_path, hdu=hdu_name)
 
     for hdu_name in orig_hdu_names:
         if hdu_name == "PRIMARY":
@@ -1743,7 +1766,7 @@ def prune_h5_files(main_cat_path, spectra_h5_path, images_h5_path):
 
     print_stage("Pruning H5 files to match updated catalog")
 
-    catalog_tgids = np.array(Table.read(main_cat_path, hdu="MAIN")["TARGETID"])
+    catalog_tgids = np.array(safe_read_table(main_cat_path, hdu="MAIN")["TARGETID"])
     print(f"  Catalog contains {len(catalog_tgids)} surviving TARGETIDs")
 
     # --- Spectra H5 -------------------------------------------------------
@@ -1788,27 +1811,27 @@ if __name__ == '__main__':
     if process_shreds:
         #loading the shredded catalogs!
         print("Reading ELG shreds!")
-        elg_shred = Table.read(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_ELG_shreds_catalog_w_aper_mags.fits")
+        elg_shred = safe_read_table(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_ELG_shreds_catalog_w_aper_mags.fits")
         elg_shred = consolidate_new_photo(elg_shred,sample="ELG",flag_cog_nan_always=False)
         print("=="*10)
     
         print("Reading BGS Bright shreds!")
-        bgsb_shred = Table.read(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_BGS_BRIGHT_shreds_catalog_w_aper_mags.fits")
+        bgsb_shred = safe_read_table(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_BGS_BRIGHT_shreds_catalog_w_aper_mags.fits")
         bgsb_shred = consolidate_new_photo(bgsb_shred,sample="BGS_BRIGHT",flag_cog_nan_always=True)
         print("=="*10)
         
         print("Reading BGS Faint shreds!")
-        bgsf_shred = Table.read(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_BGS_FAINT_shreds_catalog_w_aper_mags.fits")
+        bgsf_shred = safe_read_table(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_BGS_FAINT_shreds_catalog_w_aper_mags.fits")
         bgsf_shred = consolidate_new_photo(bgsf_shred,sample="BGS_FAINT",flag_cog_nan_always=True)
         print("=="*10)
     
         print("Reading LOWZ shreds!")
-        lowz_shred = Table.read(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_LOWZ_shreds_catalog_w_aper_mags.fits")
+        lowz_shred = safe_read_table(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_LOWZ_shreds_catalog_w_aper_mags.fits")
         lowz_shred = consolidate_new_photo(lowz_shred,sample="LOWZ",flag_cog_nan_always=True)
         print("=="*10)
 
         print("Reading SGA shreds!")
-        sga_all = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_SGA_sga_catalog_w_aper_mags.fits")
+        sga_all = safe_read_table("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_SGA_sga_catalog_w_aper_mags.fits")
         sga_all = consolidate_new_photo(sga_all,sample="SGA",flag_cog_nan_always=True)
         print("=="*10)
     
@@ -1821,7 +1844,7 @@ if __name__ == '__main__':
         # optional: reorder columns to match LOWZ (keeps order consistent)
         sga_all = sga_all[lowz_shred.colnames]
     
-        tot_shred = vstack([ bgsb_shred, bgsf_shred, lowz_shred, elg_shred, sga_all])
+        tot_shred = safe_vstack([ bgsb_shred, bgsf_shred, lowz_shred, elg_shred, sga_all])
     
         ##get the main hdu
         print("Creating the shred main hdu")
@@ -1849,7 +1872,7 @@ if __name__ == '__main__':
 
     if process_clean:
         ##get the clean catalog stuff now!!
-        clean_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4.fits")
+        clean_cat = safe_read_table("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4.fits")
 
         print("Creating the clean main hdu")
         clean_cat, clean_cat_entire = create_main_data_model(clean_cat, save_path + "/clean_MAIN_hdu.fits", clean_cat=True)
