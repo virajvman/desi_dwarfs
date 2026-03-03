@@ -12,11 +12,15 @@ zpix_iron  =  Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/zminimal-pix
 
 '''
 
+import os
+import pickle
+
 from desi_lowz_funcs import find_objects_nearby
 from astropy.table import Table, vstack
 import numpy as np
 from astropy import units as u
 from astropy.coordinates import SkyCoord
+from tqdm import tqdm
 
 def is_zred_consistent(ref_z, cat, delta_zred=250 / 300000):
     """
@@ -39,61 +43,65 @@ def is_zred_consistent(ref_z, cat, delta_zred=250 / 300000):
     return np.abs(cat["Z"] - ref_z) < delta_zred
 
 
-def find_associated_tgids(dwarf_cat):
-    # Read catalogs
+def find_associated_tgids(dwarf_cat, cache_path="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/associated_tgids_cache.pkl"):
+    if cache_path and os.path.exists(cache_path):
+        print(f"Loading cached associated TARGETIDs from {cache_path}")
+        with open(cache_path, "rb") as f:
+            results = pickle.load(f)
+        dwarf_cat["ASSOCIATED_TARGETIDS"] = results
+        return dwarf_cat
+
+    print("Reading zpix_iron catalog...")
     zpix_iron  = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/zminimal-pix-iron.fits")
+    print(f"  zpix_iron: {len(zpix_iron)} rows")
     
-    # Convert positions to SkyCoord (RA, DEC in degrees)
+    print("Building SkyCoord objects...")
     dwarf_coords = SkyCoord(ra=dwarf_cat["RA"], dec=dwarf_cat["DEC"], unit=u.deg)
     zpix_coords = SkyCoord(ra=zpix_iron["RA"], dec=zpix_iron["DEC"], unit=u.deg)
     
-    # Maximum search radius (2 x R50 in arcsec -> deg)
     max_radius_deg = (2.0 * np.max(dwarf_cat["R50_R"]) / 3600.0) * u.deg
     
-    # Run search_around_sky once for all dwarfs
-    # Correct: search around dwarfs
+    print(f"Running search_around_sky (max radius = {max_radius_deg:.4f})... this may take a while")
     idx_zpix, idx_dwarf, sep2d, _ = dwarf_coords.search_around_sky(zpix_coords, seplimit=max_radius_deg)
+    print(f"  search_around_sky done — {len(idx_dwarf)} candidate pairs found")
 
     print(np.max(idx_dwarf), np.max(idx_zpix))
     
-    # --- per-dwarf radius in degrees ---
     dwarf_radii = (2.0 * dwarf_cat["R50_R"] / 3600.0) * u.deg
     
-    # --- vectorized masks ---
+    print("Applying vectorized masks (radius, redshift, self-match)...")
     mask_radius = sep2d < dwarf_radii[idx_dwarf]
     mask_z      = np.abs(zpix_iron["Z"][idx_zpix] - dwarf_cat["Z"][idx_dwarf]) < 250 / 300000
     mask_not_self = zpix_iron["TARGETID"][idx_zpix] != dwarf_cat["TARGETID"][idx_dwarf]
     
-    # combine masks
     mask = mask_radius & mask_z & mask_not_self
+    print(f"  {np.sum(mask)} pairs survived all masks")
     
-    # keep only matched indices
     idx_dwarf_matched = idx_dwarf[mask]
     idx_zpix_matched  = idx_zpix[mask]
     
-    # --- group matches by dwarf index using np.unique + np.split ---
     if idx_dwarf_matched.size == 0:
         results = [np.array([], dtype=int) for _ in range(len(dwarf_cat))]
     else:
-        # sort by dwarf index so grouping works
         order = np.argsort(idx_dwarf_matched)
         idx_dwarf_sorted = idx_dwarf_matched[order]
         idx_zpix_sorted  = idx_zpix_matched[order]
     
-        # unique dwarfs and how many matches each
         unique_dwarfs, counts = np.unique(idx_dwarf_sorted, return_counts=True)
     
-        # split zpix indices for each dwarf
         split_at = np.cumsum(counts)[:-1]
         groups = np.split(idx_zpix_sorted, split_at)
     
-        # prepare final results array, same order as dwarf_cat
         results = [np.array([], dtype=int) for _ in range(len(dwarf_cat))]
-        for uidx, grp in zip(unique_dwarfs, groups):
+        for uidx, grp in tqdm(zip(unique_dwarfs, groups), total=len(unique_dwarfs), desc="Assigning associated TARGETIDs"):
             results[uidx] = np.array(zpix_iron["TARGETID"][grp], dtype=int)
     
-    # # now `results[i]` corresponds to `dwarf_cat[i]` and contains the associated TARGETIDs
     dwarf_cat["ASSOCIATED_TARGETIDS"] = results
+
+    if cache_path:
+        print(f"Saving associated TARGETIDs cache to {cache_path}")
+        with open(cache_path, "wb") as f:
+            pickle.dump(results, f)
 
     return dwarf_cat
 
@@ -116,7 +124,7 @@ def get_dwarf_primary(dwarf_cat):
 
     primary_ids = np.full(len(dwarf_cat), -1, dtype=np.int64)
 
-    for i, row in enumerate(dwarf_cat):
+    for i, row in tqdm(enumerate(dwarf_cat), total=len(dwarf_cat), desc="Finding dwarf primaries"):
         tids = [row["TARGETID"]]
         tids.extend(row["ASSOCIATED_TARGETIDS"])
 
