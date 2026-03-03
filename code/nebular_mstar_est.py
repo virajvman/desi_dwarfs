@@ -6,8 +6,91 @@ photometry for each bin.
 """
 
 import numpy as np
+import h5py
 from astropy.table import Table, hstack
-from elg_explore import load_spectra, write_stacked_spectra
+from astropy.io import fits
+
+
+def load_spectra(h5_file):
+    """Load de-redshifted spectra from HDF5 file."""
+    print(f"Reading file = {h5_file}")
+    with h5py.File(h5_file, "r") as f:
+        data = {
+            "targetid": f["TARGETID"][:],
+            "z": f["Z"][:],
+            "wave_rest": f["WAVE_REST"][:],
+            "flux": f["FLUX"][:],
+            "flux_ivar": f["FLUX_IVAR"][:]
+        }
+    return data
+
+
+def write_stacked_spectra(
+    outfile, wave, flux, ivar,
+    resolution=None, stackids=None, stack_redshift=None,
+    table_column_dict={}, table_format_dict={},
+):
+    """Save stacked spectra to a FITS file compatible with FastSpecFit stackfit."""
+    flux = np.atleast_2d(flux)
+    ivar = np.atleast_2d(ivar)
+    nobj, _ = flux.shape
+
+    if stackids is None:
+        stackids = np.arange(nobj)
+    if stack_redshift is None:
+        stack_redshift = np.zeros(nobj)
+    if np.isscalar(stack_redshift):
+        stack_redshift = np.full(nobj, stack_redshift)
+
+    hdulist = []
+
+    hdr = fits.Header()
+    hdr["COMMENT"] = "Stacked spectra for FastSpecFit stackfit"
+    hdulist.append(fits.PrimaryHDU(header=hdr))
+
+    hduflux = fits.ImageHDU(flux.astype("f4"))
+    hduflux.header["EXTNAME"] = "FLUX"
+    hdulist.append(hduflux)
+
+    hduivar = fits.ImageHDU(ivar.astype("f4"))
+    hduivar.header["EXTNAME"] = "IVAR"
+    hdulist.append(hduivar)
+
+    hduwave = fits.ImageHDU(wave.astype("f8"))
+    hduwave.header["EXTNAME"] = "WAVE"
+    hduwave.header["BUNIT"] = "Angstrom"
+    hduwave.header["AIRORVAC"] = ("vac", "vacuum wavelengths")
+    hdulist.append(hduwave)
+
+    if resolution is not None and not np.all(resolution is None):
+        hdures = fits.ImageHDU(resolution.astype("f4"))
+        hdures.header["EXTNAME"] = "RES"
+        hdulist.append(hdures)
+
+    c1 = fits.Column(name="STACKID", array=stackids, format="K")
+    c2 = fits.Column(name="Z", array=stack_redshift, format="D")
+    columns = [c1, c2]
+    for key in table_column_dict.keys():
+        if table_format_dict[key][0] == "P":
+            columns.append(fits.Column(
+                name=key,
+                array=np.array(table_column_dict[key], dtype="object"),
+                format=table_format_dict[key],
+            ))
+        else:
+            columns.append(fits.Column(
+                name=key,
+                array=table_column_dict[key],
+                format=table_format_dict[key],
+            ))
+
+    hdutable = fits.BinTableHDU.from_columns(columns)
+    hdutable.header["EXTNAME"] = "STACKINFO"
+    hdulist.append(hdutable)
+
+    hx = fits.HDUList(hdulist)
+    hx.writeto(outfile, overwrite=True, checksum=True)
+    print(f"Saved {nobj} stacked spectra to {outfile}")
 
 
 CATALOG_PATH = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits"
