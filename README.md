@@ -18,6 +18,20 @@ Explore the DESI Dwarf Galaxy catalog interactively in your browser.
 
 ---
 
+### Data Access
+
+**NERSC** &mdash; The catalog and companion data products are available at the following paths on the NERSC Perlmutter filesystem:
+
+| Product | Path |
+| :------ | :--- |
+| Main Catalog (FITS) | `/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits` |
+| Spectra (HDF5) | `/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/data/desi_dr1_dwarf_catalog_spectra.h5` |
+| Image Cutouts (HDF5) | `/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/desi_dr1_dwarf_catalog_images.h5` |
+
+<!-- TODO: add Zenodo / public download links here -->
+
+---
+
 <details>
 <summary><h3>Catalog Data Model</h3></summary>
 
@@ -50,6 +64,7 @@ Core identifiers, coordinates, redshifts, stellar masses, photometry, and qualit
 | `DEC_TARGET` | float64 | deg | Declination from target catalog |
 | `DESINAME` | str | | DESI object name |
 | `LUMI_DIST_MPC` | float32 | Mpc | Fiducial luminosity distance |
+| `DIST_SOURCE` | str | | Source of the luminosity distance. One of: `NED_ZIND`, `VIRGO_SBF`, `VIRGO_EVCC`, `CF3_NAM`, `V_CMB` |
 | `LOG_MSTAR_SAGA` | float32 | $\log(M_\odot)$ | Log stellar mass using `LUMI_DIST_MPC` and the SAGA *gr*-based approximation |
 | `LOG_MSTAR_M24` | float32 | $\log(M_\odot)$ | Log stellar mass using `LUMI_DIST_MPC` and de los Reyes et al. 2024 *gr*-based approximation |
 | `MAG_G` | float32 | mag | *g*-band magnitude (MW extinction corrected). Same as Tractor photometry, except for galaxies reprocessed after being identified as likely shredded |
@@ -248,6 +263,15 @@ Spectral measurements from FastSpecFit: spectral indices, emission-line fluxes, 
 | `HALPHA_BOXFLUX_IVAR` | float32 | 1e+34 cm⁴ s²/erg² | Inverse variance of `HALPHA_BOXFLUX` |
 | `HALPHA_EW` | float32 | Angstrom | Rest-frame equivalent width of H-alpha |
 | `HALPHA_EW_IVAR` | float32 | 1/Angstrom² | Inverse variance of `HALPHA_EW` |
+| `FLUX_SYNTH_G` | float32 | nanomaggy | *g*-band flux (in the PHOTSYS photometric system) synthesized from the observed spectrum |
+| `FLUX_SYNTH_R` | float32 | nanomaggy | Like `FLUX_SYNTH_G` but for the *r*-band |
+| `FLUX_SYNTH_Z` | float32 | nanomaggy | Like `FLUX_SYNTH_G` but for the *z*-band |
+| `FLUX_SYNTH_SPECMODEL_G` | float32 | nanomaggy | *g*-band flux (in the PHOTSYS photometric system) synthesized from the best-fitting spectroscopic model |
+| `FLUX_SYNTH_SPECMODEL_R` | float32 | nanomaggy | Like `FLUX_SYNTH_SPECMODEL_G` but in the *r*-band |
+| `FLUX_SYNTH_SPECMODEL_Z` | float32 | nanomaggy | Like `FLUX_SYNTH_SPECMODEL_G` but in the *z*-band |
+| `FLUX_SYNTH_PHOTMODEL_G` | float32 | nanomaggy | *g*-band flux (in the PHOTSYS photometric system) synthesized from the best-fitting photometric continuum model |
+| `FLUX_SYNTH_PHOTMODEL_R` | float32 | nanomaggy | Like `FLUX_SYNTH_PHOTMODEL_G` but in the *r*-band |
+| `FLUX_SYNTH_PHOTMODEL_Z` | float32 | nanomaggy | Like `FLUX_SYNTH_PHOTMODEL_G` but in the *z*-band |
 
 </details>
 
@@ -371,9 +395,16 @@ Image-based self-supervised learning (SSL) UMAP coordinates and similarity searc
 
 <br>
 
-We provide 152 x 152 pixel image cutouts for all galaxies in the catalog with *z*-band magnitudes *z* < 20. The image cutouts are stored in an HDF5 (`.h5`) file available at this link. Each image cutout can be matched to a row in the catalog using the `TARGETID` column. Example code demonstrating how to read the HDF5 file and visualize the image cutouts is provided in the tutorials.
+We provide 152 x 152 pixel *grz* image cutouts for all galaxies in the catalog with *z*-band magnitude < 20. The cutouts are stored in an HDF5 (`.h5`) file with the following datasets:
 
-For sources identified as shredded, the image cutouts have been recentered on the reconstructed parent galaxy center. The 2048-dimensional representations derived from the self-supervised learning (SSL) model for these image cutouts are available at the same link.
+| Dataset | Shape | Type | Description |
+| :------ | :---- | :--- | :---------- |
+| `targetid` | (N,) | int64 | DESI TARGET ID (matches `TARGETID` in the catalog) |
+| `images` | (N, 3, 152, 152) | float32 | Image cutouts in *g, r, z* bands (channels-first) |
+
+For sources identified as shredded, the image cutouts have been recentered on the reconstructed parent galaxy center. Example code demonstrating how to read the HDF5 file and visualize the image cutouts is provided in the tutorials.
+
+**NERSC path:** `$PSCRATCH/catalog_dr1_dwarfs/ssl_shred_data/desi_dr1_dwarf_catalog_images.h5`
 
 </details>
 
@@ -384,7 +415,19 @@ For sources identified as shredded, the image cutouts have been recentered on th
 
 <br>
 
-We provide all available DESI spectra for objects in this catalog. The spectra are stored in an HDF5 (`.h5`) file. Each spectrum can be matched to a row in the catalog using the `TARGETID` column. Example code demonstrating how to read the HDF5 file and visualize the spectra is provided in the tutorials.
+We provide camera-coadded (*b+r+z*) DESI spectra for all objects in the catalog. The spectra are stored in an HDF5 (`.h5`) file with the following datasets:
+
+| Dataset | Shape | Type | Description |
+| :------ | :---- | :--- | :---------- |
+| `TARGETID` | (N,) | int64 | DESI TARGET ID (matches `TARGETID` in the catalog) |
+| `Z` | (N,) | float32 | Redrock redshift |
+| `WAVE` | (N_wave,) | float32 | Shared wavelength grid in Angstroms |
+| `FLUX` | (N, N_wave) | float32 | Flux density in units of 10<sup>&minus;17</sup> erg s<sup>&minus;1</sup> cm<sup>&minus;2</sup> &Aring;<sup>&minus;1</sup> |
+| `FLUX_IVAR` | (N, N_wave) | float32 | Inverse variance of `FLUX` |
+
+Example code demonstrating how to read the HDF5 file and visualize the spectra is provided in the tutorials.
+
+**NERSC path:** `$PSCRATCH/catalog_dr1_dwarfs/iron_spectra/spectra_files/data/desi_dr1_dwarf_catalog_spectra.h5`
 
 </details>
 

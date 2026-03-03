@@ -94,6 +94,11 @@ main_datamodel = {
         "blank_value": np.nan,
         "dtype": "float32"
     },
+    "DIST_SOURCE": {
+        "unit": None,
+        "description": "Source of the luminosity distance. One of: NED_ZIND, VIRGO_SBF, VIRGO_EVCC, CF3_NAM, V_CMB.",
+        "dtype": "str"
+    },
     "LOG_MSTAR_SAGA": {
         "unit": logM_sun,
         "description": "Log stellar mass (in Msol) using the LUMI_DIST_MPC luminosity distance and SAGA gr-based approximation",
@@ -1416,6 +1421,51 @@ fastspec_hdu_datamodel["HALPHA_EW_IVAR"] = {
     "dtype": "float32"
 }
 
+fastspec_hdu_datamodel["FLUX_SYNTH_G"] = {
+    "unit": "nanomaggy",
+    "description": "g-band flux (in the PHOTSYS photometric system) synthesized from the observed spectrum.",
+    "dtype": "float32"
+}
+fastspec_hdu_datamodel["FLUX_SYNTH_R"] = {
+    "unit": "nanomaggy",
+    "description": "Like FLUX_SYNTH_G but for the r-band.",
+    "dtype": "float32"
+}
+fastspec_hdu_datamodel["FLUX_SYNTH_Z"] = {
+    "unit": "nanomaggy",
+    "description": "Like FLUX_SYNTH_G but for the z-band.",
+    "dtype": "float32"
+}
+fastspec_hdu_datamodel["FLUX_SYNTH_SPECMODEL_G"] = {
+    "unit": "nanomaggy",
+    "description": "g-band flux (in the PHOTSYS photometric system) synthesized from the best-fitting spectroscopic model.",
+    "dtype": "float32"
+}
+fastspec_hdu_datamodel["FLUX_SYNTH_SPECMODEL_R"] = {
+    "unit": "nanomaggy",
+    "description": "Like FLUX_SYNTH_SPECMODEL_G but in the r-band.",
+    "dtype": "float32"
+}
+fastspec_hdu_datamodel["FLUX_SYNTH_SPECMODEL_Z"] = {
+    "unit": "nanomaggy",
+    "description": "Like FLUX_SYNTH_SPECMODEL_G but in the z-band.",
+    "dtype": "float32"
+}
+fastspec_hdu_datamodel["FLUX_SYNTH_PHOTMODEL_G"] = {
+    "unit": "nanomaggy",
+    "description": "g-band flux (in the PHOTSYS photometric system) synthesized from the best-fitting photometric continuum model.",
+    "dtype": "float32"
+}
+fastspec_hdu_datamodel["FLUX_SYNTH_PHOTMODEL_R"] = {
+    "unit": "nanomaggy",
+    "description": "Like FLUX_SYNTH_PHOTMODEL_G but in the r-band.",
+    "dtype": "float32"
+}
+fastspec_hdu_datamodel["FLUX_SYNTH_PHOTMODEL_Z"] = {
+    "unit": "nanomaggy",
+    "description": "Like FLUX_SYNTH_PHOTMODEL_G but in the z-band.",
+    "dtype": "float32"
+}
 
 
     # "DN4000_MODEL_IVAR": {

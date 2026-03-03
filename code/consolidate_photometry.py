@@ -9,6 +9,7 @@ from shred_photometry_maskbits import cog_mag_converge, cog_nan_mask, cog_curve_
 from io import BytesIO
 from shred_photometry_maskbits import create_shred_maskbits_from_dict, print_maskbit_statistics, flag_weird_spectra
 import os
+import shutil
 import glob
 from tqdm import trange
 import h5py
@@ -18,6 +19,7 @@ from desi_lowz_funcs import get_sga_norm_dists_FAST
 from construct_dwarf_galaxy_catalogs import bright_star_filter
 
 from get_associated_fibers import find_associated_tgids, get_dwarf_primary
+from independent_distances import update_distance_catalog
 
 def combine_arrays(no_iso, w_iso, mask):
     '''
@@ -1539,45 +1541,236 @@ def add_wrong_redrock_maskbit(cat_path, main_datamodel, bit=16):
 
 def incorporate_updated_distances(main_cat_path):
 
-    main_hdu,_, _, _ = update_distance_catalog(main_cat_path, keep_lumi_dist_orig=False)
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LogNorm
 
-    #with the updated distance in LUMI_DIST_MPC, we will remeasure the stellar mass!!
+    main_hdu, _, _, _ = update_distance_catalog(main_cat_path, keep_lumi_dist_orig=False)
+
+    # With the updated distance in LUMI_DIST_MPC, remeasure the stellar mass
     gr_arr = np.array(main_hdu["MAG_G"]) - np.array(main_hdu["MAG_R"])
     mag_r_arr = np.array(main_hdu["MAG_R"])
     mag_g_arr = np.array(main_hdu["MAG_G"])
     zcmb_arr = np.array(main_hdu["Z_CMB"])
+    dist_arr = np.array(main_hdu["LUMI_DIST_MPC"])
 
-    logm_saga = get_stellar_mass(gr_arr, mag_r_arr, zcmb_arr,  d_in_mpc = dist_arr, input_zred=False)
+    logm_saga = get_stellar_mass(gr_arr, mag_r_arr, zcmb_arr, d_in_mpc=dist_arr, input_zred=False)
+    logm_m24 = get_stellar_mass_mia(gr_arr, mag_g_arr, zcmb_arr, d_in_mpc=dist_arr, input_zred=False)
 
-    logm_m24 = get_stellar_mass_mia(gr_arr, mag_g_arr ,zcmb_arr, d_in_mpc = dist_arr, input_zred=False)
-
-    #make a quick plot doing a comparison
-    plt.figure(figsize = (5,5))
-    plt.hist2d( main_hdu["LOG_MSTAR_M24"], logm_m24, range= ((6,9.25),(6,9.25)), bins=50,norm=LogNorm()  )
-    plt.xlabel("MSTAR M24 OLD",fontsize = 12)
-    plt.ylabel("MSTAR M24 NEW",fontsize=12)
-    plt.xlim([6,9.25])
-    plt.ylim([6,9.25])
+    # Quick comparison plot
+    plt.figure(figsize=(5, 5))
+    plt.hist2d(main_hdu["LOG_MSTAR_M24"], logm_m24, range=((6, 9.25), (6, 9.25)), bins=50, norm=LogNorm())
+    plt.xlabel("MSTAR M24 OLD", fontsize=12)
+    plt.ylabel("MSTAR M24 NEW", fontsize=12)
+    plt.xlim([6, 9.25])
+    plt.ylim([6, 9.25])
     plt.savefig("global/homes/v/virajvm/DESI2_LOWZ/quenched_fracs_nbs/paper_plots/mstar_dist_update_comp.png")
     plt.close()
 
-    #print some statistics on how many objects have more than 0.25 dex shift in mstar
+    # Statistics on stellar mass shifts
+    old_logm_m24 = np.array(main_hdu["LOG_MSTAR_M24"])
+    delta_mstar = np.abs(logm_m24 - old_logm_m24)
+    n_shifted = np.sum(delta_mstar > 0.25)
+    print(f"Objects with > 0.25 dex shift in LOG_MSTAR_M24: {n_shifted}/{len(logm_m24)}")
+    print(f"  Median |delta|: {np.median(delta_mstar):.4f} dex")
+    print(f"  Max    |delta|: {np.max(delta_mstar):.4f} dex")
 
-    #update the stellar mass columns
+    # Update the stellar mass columns
     main_hdu["LOG_MSTAR_SAGA"] = logm_saga
     main_hdu["LOG_MSTAR_M24"] = logm_m24
-    
-    #create a mask for objects that are no longer below 9.25 based on LOG_MSTAR_M24
+
+    # Mask for objects that are no longer below the dwarf mass cut
     not_dwarf_mask = (logm_m24 > 9.25)
+    dwarf_mask = ~not_dwarf_mask
+
+    n_removed = np.sum(not_dwarf_mask)
+    print(f"Removing {n_removed} objects with LOG_MSTAR_M24 > 9.25 after distance update")
+
+    # Save the TARGETIDs of removed objects
+    removed_tgids = np.array(main_hdu["TARGETID"])[not_dwarf_mask]
+    removed_path = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/temp/removed_targetids.fits"
+    Table({"TARGETID": removed_tgids}).write(removed_path, overwrite=True)
+    print(f"Saved {len(removed_tgids)} removed TARGETIDs to {removed_path}")
+
+    # Filter the updated MAIN table
+    main_hdu_filtered = main_hdu[dwarf_mask]
+    kept_tgids = set(np.array(main_hdu["TARGETID"])[dwarf_mask])
+
+    # REPROCESS_PHOTO has only shreds (not clean+shreds+qso_scnd),
+    # so it has a different row count and must be filtered by TARGETID.
+    diff_row_extensions = {"REPROCESS_PHOTO"}
+
+    # Read the original file to get the exact HDU names and ordering
+    with fits.open(main_cat_path) as orig_hdul:
+        orig_hdu_names = [hdu.name for hdu in orig_hdul]
+        orig_primary_header = orig_hdul[0].header.copy()
+
+    print(f"Original HDU structure: {orig_hdu_names}")
+
+    # Rebuild the HDUList preserving the exact extension order
+    new_hdul = fits.HDUList()
+    new_hdul.append(fits.PrimaryHDU(header=orig_primary_header))
+
+    # Pre-read all extension Tables before we overwrite the file
+    ext_tables = {}
+    for hdu_name in orig_hdu_names:
+        if hdu_name == "PRIMARY":
+            continue
+        ext_tables[hdu_name] = Table.read(main_cat_path, hdu=hdu_name)
+
+    for hdu_name in orig_hdu_names:
+        if hdu_name == "PRIMARY":
+            continue
+
+        if hdu_name == "MAIN":
+            filtered_tab = main_hdu_filtered
+        elif hdu_name in diff_row_extensions:
+            ext_tab = ext_tables[hdu_name]
+            keep = np.isin(np.array(ext_tab["TARGETID"]), np.array(main_hdu["TARGETID"])[dwarf_mask])
+            filtered_tab = ext_tab[keep]
+        else:
+            filtered_tab = ext_tables[hdu_name][dwarf_mask]
+
+        buf = BytesIO()
+        filtered_tab.write(buf, format="fits")
+        buf.seek(0)
+        new_hdu = fits.open(buf)[1]
+        new_hdu.name = hdu_name
+        new_hdu.add_checksum()
+        new_hdul.append(new_hdu)
+
+        print(f"  {hdu_name}: {len(ext_tables[hdu_name])} -> {len(filtered_tab)} rows")
+
+    new_hdul[0].add_checksum()
+    new_hdul.writeto(main_cat_path, overwrite=True)
+    print(f"Saved updated catalog to {main_cat_path} ({len(main_hdu_filtered)} objects)")
+
+    return
+
+
+def _prune_single_h5(h5_path, catalog_tgids, tgid_key, row_datasets, copy_datasets):
+    """
+    Backup an HDF5 file, then rewrite it keeping only rows whose TARGETID
+    appears in *catalog_tgids*.
+
+    Parameters
+    ----------
+    h5_path : str
+        Path to the HDF5 file to prune.
+    catalog_tgids : np.ndarray
+        1-D array of TARGETIDs that should be kept.
+    tgid_key : str
+        Name of the TARGETID dataset inside the HDF5 (e.g. "TARGETID" or "targetid").
+    row_datasets : list[str]
+        Dataset names that are indexed along axis-0 by object and must be filtered.
+    copy_datasets : list[str]
+        Dataset names that are shared / not row-indexed and should be copied unchanged.
+    """
+    from desi_lowz_funcs import print_stage
+
+    basename = os.path.basename(h5_path)
+    print_stage(f"Pruning {basename}")
+
+    # --- 1. Backup --------------------------------------------------------
+    backup_path = h5_path.replace(".h5", "_OG.h5")
+    if os.path.exists(backup_path):
+        print(f"  Backup already exists at {backup_path} — skipping copy")
+    else:
+        shutil.copy2(h5_path, backup_path)
+        print(f"  Backup saved to {backup_path}")
+
+    # --- 2. Read TARGETIDs and compute keep mask --------------------------
+    with h5py.File(h5_path, "r") as f:
+        h5_tgids = f[tgid_key][:]
     
-    #then use that mask to update all rows in the catalog and save the updated multi-extension catalog at same location!
+    keep_mask = np.isin(h5_tgids, catalog_tgids)
+    n_before = len(h5_tgids)
+    n_keep = int(keep_mask.sum())
+    n_remove = n_before - n_keep
+    print(f"  {basename}: {n_before} objects -> keeping {n_keep}, removing {n_remove}")
 
-    #save the targetids to be removed so we can remove them from the other data products we have avaialbel!
+    if n_remove == 0:
+        print(f"  Nothing to remove from {basename}")
+        return
+
+    # --- 3. Write pruned file to a temp path, then swap -------------------
+    tmp_path = h5_path + ".tmp.h5"
+
+    with h5py.File(h5_path, "r") as fin, h5py.File(tmp_path, "w") as fout:
+        for ds_name in row_datasets:
+            data = fin[ds_name][:]
+            filtered = data[keep_mask]
+
+            create_kwargs = {"dtype": filtered.dtype}
+
+            orig_ds = fin[ds_name]
+            if orig_ds.compression is not None:
+                create_kwargs["compression"] = orig_ds.compression
+                if orig_ds.compression_opts is not None:
+                    create_kwargs["compression_opts"] = orig_ds.compression_opts
+            if orig_ds.chunks is not None:
+                orig_chunks = orig_ds.chunks
+                new_chunks = (min(orig_chunks[0], len(filtered)),) + orig_chunks[1:]
+                create_kwargs["chunks"] = new_chunks
+
+            fout.create_dataset(ds_name, data=filtered, **create_kwargs)
+
+        for ds_name in copy_datasets:
+            data = fin[ds_name][:]
+            fout.create_dataset(ds_name, data=data, dtype=fin[ds_name].dtype)
+
+    os.replace(tmp_path, h5_path)
+    print(f"  Pruned file written to {h5_path}")
+
+    # --- 4. Validate ------------------------------------------------------
+    with h5py.File(h5_path, "r") as f:
+        final_count = f[tgid_key].shape[0]
+    assert final_count == n_keep, (
+        f"Validation failed for {basename}: expected {n_keep} rows, got {final_count}"
+    )
+    print(f"  Validated: {final_count} objects in pruned {basename}")
 
 
-    return 
+def prune_h5_files(main_cat_path, spectra_h5_path, images_h5_path):
+    """
+    After the FITS catalog has been pruned to remove non-dwarfs, propagate
+    those removals into the spectra and images HDF5 files.
 
-    
+    Each H5 file is first backed up to ``<name>_OG.h5`` in the same directory,
+    then rewritten to contain only the rows whose TARGETID still appears in
+    the MAIN HDU of *main_cat_path*.
+    """
+    from desi_lowz_funcs import print_stage
+
+    print_stage("Pruning H5 files to match updated catalog")
+
+    catalog_tgids = np.array(Table.read(main_cat_path, hdu="MAIN")["TARGETID"])
+    print(f"  Catalog contains {len(catalog_tgids)} surviving TARGETIDs")
+
+    # --- Spectra H5 -------------------------------------------------------
+    if os.path.exists(spectra_h5_path):
+        _prune_single_h5(
+            h5_path=spectra_h5_path,
+            catalog_tgids=catalog_tgids,
+            tgid_key="TARGETID",
+            row_datasets=["TARGETID", "Z", "FLUX", "FLUX_IVAR"],
+            copy_datasets=["WAVE"],
+        )
+    else:
+        print(f"  WARNING: spectra H5 not found at {spectra_h5_path}, skipping")
+
+    # --- Images H5 --------------------------------------------------------
+    if os.path.exists(images_h5_path):
+        _prune_single_h5(
+            h5_path=images_h5_path,
+            catalog_tgids=catalog_tgids,
+            tgid_key="targetid",
+            row_datasets=["targetid", "images"],
+            copy_datasets=[],
+        )
+    else:
+        print(f"  WARNING: images H5 not found at {images_h5_path}, skipping")
+
+    print_stage("H5 pruning complete")
 
 
 if __name__ == '__main__':
@@ -1712,7 +1905,13 @@ if __name__ == '__main__':
 
     ##update the distances in the catalog and then remove objects that are not dwarf based on that!!
     incorporate_updated_distances(main_cat_outpath)
-        
+
+    ##propagate the TARGETID removals into the spectra and images H5 files
+    prune_h5_files(
+        main_cat_path=main_cat_outpath,
+        spectra_h5_path="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/data/desi_dr1_dwarf_catalog_spectra.h5",
+        images_h5_path="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/desi_dr1_dwarf_catalog_images.h5",
+    )
 
     
 

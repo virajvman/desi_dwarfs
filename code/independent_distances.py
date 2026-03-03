@@ -298,7 +298,7 @@ def update_distance_catalog(main_cat_path, keep_lumi_dist_orig=False):
 
     # Initialize DIST_SOURCE column with enough characters for longest label
     dist_source_col = np.full(n_total, 'V_CMB', dtype='U10')
-    tot_cat.add_column(dist_source_col, name='DIST_SOURCE', index=lumi_dist_idx)
+    tot_cat.add_column(dist_source_col, name='DIST_SOURCE', index=lumi_dist_idx + 1)
 
     # Store original LUMI_DIST for reference
     tot_cat['LUMI_DIST_ORIG'] = tot_cat['LUMI_DIST_MPC'].copy()
