@@ -1093,7 +1093,7 @@ def get_fastspec_fit_catalog_V3():
 def get_fastspec_fit_catalog_V2(chunk_size = 250000):
     '''
     In this function, we combine the relevant columns and healpix fastspec files (VERSION 2 CATALOG)
-    This function is run before the dwarf catalog is being constructed as it prepares the intermediate file we will be matching to
+    IMPORTANT = This function is run before the dwarf catalog is being constructed as it prepares the intermediate file we will be matching to
     ''' 
 
     main_cat_path = "/global/cfs/cdirs/desi/public/dr1/vac/dr1/fastspecfit/iron/v2.1/catalogs/fastspec-iron.fits"
@@ -1292,7 +1292,7 @@ def create_spectra_hdu(file_path):
     n_objects = len(main_tgids)
 
     # Load HDF5 coefficients
-    h5_path = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_dr1_dwarf_catalog_nnmf_pca.h5"
+    h5_path = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_dr1_dwarf_catalog_nnmf_pca_NEW.h5"
     with h5py.File(h5_path, "r") as f:
         pca_coeffs = f["PCA_COEFFS"][:]       # shape (N, 20)
         nnmf_coeffs = f["NNMF_COEFFS"][:]     # shape (N, 10)
@@ -1319,7 +1319,7 @@ def create_spectra_hdu(file_path):
     norm_facs = 1/scale_facs
     
     # Load UMAP
-    spec_umap_2d = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_dwarfs_umap_nnmf_and_pca_v2.npy")
+    spec_umap_2d = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_dwarfs_umap_nnmf_and_pca_NEW.npy")
 
     # Consistency checks
     n = pca_coeffs.shape[0]
@@ -1586,7 +1586,7 @@ def incorporate_updated_distances(main_cat_path):
     plt.ylabel("MSTAR M24 NEW", fontsize=12)
     plt.xlim([6, 9.25])
     plt.ylim([6, 9.25])
-    plt.savefig("global/homes/v/virajvm/DESI2_LOWZ/quenched_fracs_nbs/paper_plots/mstar_dist_update_comp.png")
+    plt.savefig("/global/homes/v/virajvm/DESI2_LOWZ/quenched_fracs_nbs/paper_plots/mstar_dist_update_comp.png")
     plt.close()
 
     # Statistics on stellar mass shifts
@@ -1803,7 +1803,8 @@ if __name__ == '__main__':
     process_shreds = True
     process_clean = True
     process_qso_scnd = True
-    
+
+    #make sure the get_fastspec_fit_catalog_V2 function is run before hand in case there are any new columns added
     process_fastspec=True
 
     main_cat_outpath = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits"
