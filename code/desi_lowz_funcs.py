@@ -613,30 +613,57 @@ def r_kcorr(gr,z):
     
     return kr
 
-def get_stellar_mass_mia( gr_col, gmag, zred, d_in_mpc=None, input_zred=True):
+
+def get_stellar_mass_mia(gr_col, gmag, zred, d_in_mpc=None, input_zred=True):
     '''
-    we use the 2 color prescriptions here. One from SAGA and the updated one from Mia's paper.
-    Note that Mia's formula is only valid for Mstar < 1e10 though which is okay for us!
+    Vectorized stellar mass estimation using the two-branch prescription 
+    from de los Reyes et al. (2024), Equation 13.
+    
+    Note: this formula is only valid for Mstar < 1e10, which is okay for our sample.
+
+    old relation = # log_mstar = (1.433 * gr_col) + 0.00153 * (Mg**2) - (0.335 * Mg) + 2.072
+    
+    Parameters
+    ----------
+    gr_col : array-like
+        g-r color (extinction-corrected)
+    gmag : array-like
+        Apparent g-band magnitude (extinction-corrected)
+    zred : array-like
+        Spectroscopic redshift
+    d_in_mpc : array-like, optional
+        Luminosity distance in Mpc (used if input_zred=False)
+    input_zred : bool
+        If True, compute distance from zred. If False, use d_in_mpc.
+    
+    Returns
+    -------
+    log_mstar : np.ndarray
+        log10(Mstar / Msun)
     '''
-    #use redshift to convert to absolute magnitude
     from astropy.cosmology import Planck18
 
-    if input_zred:
-        #convert the zred to the luminosity distance 
-        d = Planck18.luminosity_distance(zred)
-        d_in_pc = d.value * 1e6
-        #M = m + 5 - 5*log10(d/pc) - Kcor
-        kg = g_kcorr(gr_col,zred)
-    else:
-        #the input is in distance!
-        d_in_pc = d_in_mpc * 1e6
-        kg = g_kcorr(gr_col,zred)
+    gr_col = np.atleast_1d(np.asarray(gr_col, dtype=float))
+    gmag = np.atleast_1d(np.asarray(gmag, dtype=float))
+    zred = np.atleast_1d(np.asarray(zred, dtype=float))
 
-    Mg = gmag + 5 - 5*np.log10(d_in_pc) - kg
-    
-    log_mstar = (1.433 * gr_col) + 0.00153 * (Mg**2) - (0.335 * Mg) + 2.072
-    
+    if input_zred:
+        d_in_pc = Planck18.luminosity_distance(zred).value * 1e6
+    else:
+        d_in_pc = np.atleast_1d(np.asarray(d_in_mpc, dtype=float)) * 1e6
+
+    kg = g_kcorr(gr_col, zred)
+    Mg = gmag + 5 - 5 * np.log10(d_in_pc) - kg
+
+    log_mstar = np.where(
+        Mg > -18.5,
+        1.986 + 1.315 * gr_col - 0.365 * Mg,
+        1.598 + 1.347 * gr_col - 0.4 * Mg
+    )
+
     return log_mstar
+
+
 
 def get_stellar_mass(gr,rmag,zred,d_in_mpc=None,input_zred=True):
     '''
@@ -662,6 +689,29 @@ def get_stellar_mass(gr,rmag,zred,d_in_mpc=None,input_zred=True):
     M_r = rmag + 5 - 5*np.log10(d_in_pc) - kr
 
     log_star = 1.254 + 1.098*gr - 0.4*M_r
+    
+    return log_star
+
+
+def get_stellar_mass_bell03(gr,rmag,zred,d_in_mpc=None,input_zred=True):
+    '''
+    Computes the stellar mass assuming color-M/L relation from Bell et al. 2003. See Equation 1 in de los reyes et al. 2025 paper.
+    '''
+
+    if input_zred:
+        #convert the zred to the luminosity distance 
+        d = Planck18.luminosity_distance(zred)
+        d_in_pc = d.value * 1e6
+        #M = m + 5 - 5*log10(d/pc) - Kcor
+        kr = r_kcorr(gr,zred)
+    else:
+        #the input is in distance! We ignore the k-correction term for this as we will only use this mode for the smallest dist objects!
+        d_in_pc = d_in_mpc * 1e6
+        kr = r_kcorr(gr,zred)
+        
+    M_r = rmag + 5 - 5*np.log10(d_in_pc) - kr
+
+    log_star = 1.461 + 1.098*gr - 0.4*M_r
     
     return log_star
 

@@ -121,7 +121,7 @@ def load_bgs_bright_catalog(catalog_path=CATALOG_PATH):
     ew = np.array(catalog["HALPHA_EW"])
     ew_ivar = np.array(catalog["HALPHA_EW_IVAR"])
     ew_snr = np.abs(ew) * np.sqrt(np.where(ew_ivar > 0, ew_ivar, 0.0))
-    valid = np.isfinite(ew) & (ew_ivar > 0) & (ew_snr > 3)
+    valid = np.isfinite(ew) & (ew_ivar > 0) & (ew_snr > 3) & (ew > 0)
     catalog = catalog[valid]
 
     print(f"BGS_BRIGHT clean sample with HALPHA_EW SNR > 3: {len(catalog)}")
@@ -314,9 +314,9 @@ def main():
 
     write_stacked_spectra(
         OUTFILE,
-        wave,
-        stacked_flux,
-        stacked_ivar,
+        wave[wave < 9000],
+        stacked_flux[:, wave < 9000],
+        stacked_ivar[:, wave < 9000],
         stackids=stackids,
         stack_redshift=stack_redshift,
         table_column_dict=table_cols,

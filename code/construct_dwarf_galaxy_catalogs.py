@@ -1311,6 +1311,10 @@ if __name__ == '__main__':
                 
                 zred_mask = (zpix_sub_cat_f["Z"] < 0.5)
 
+                print("TODO: UPDATE THIS STELLAR MASS METHOD HERE AND ALSO DISTANCE ESTIMATION")
+                print("ALSO FOLD IN PHOTOMETRY ERRORS WHEN DOING CALIBRATIONS")
+                print("CHECK WHEN DOING DISTANCE ESIMATION IF OUR SOURCE IS WITHIN THEIR HALF LIGHT RADIUS? Maybe")
+
                 #uses r band magnitude
                 #ignoring PV contribution, just estimating from cmb frame redshift
                 mstars_SAGA_VCMB = get_stellar_mass(gr_colors[zred_mask].data, zpix_sub_cat_f["MAG_R"][zred_mask].data ,zpix_sub_cat_f["Z_CMB"][zred_mask].data, d_in_mpc = zpix_sub_cat_f["DIST_MPC_VCMB"][zred_mask].data, input_zred=False )
@@ -1434,9 +1438,6 @@ if __name__ == '__main__':
             print(f"{gal_type}: Objects not in SGA catalog = {len(zpix_sub_cat_no_sga)}")
             print(f"{gal_type}: Fraction with SGA maskbit cut = {len(zpix_sub_cat_w_sga)/len(zpix_sub_total)  }")
 
-            ##NOTE THAT WE HAVE ALREADY APPLIED THE <9.25 CUT FOR TRACTOR SOURCES
-            ##we are not really trying to compare against the 
-
             ## save this catalog. This is catalog with the MASKBIT cut applied! However, note this still could include sources associated with SGA sources
             print("Saving NO SGA file")
             
@@ -1553,14 +1554,6 @@ if __name__ == '__main__':
             desi_cat_sga_reprocess_final.write("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_SGA_matched_dwarfs_REPROCESS.fits", overwrite=True)
 
         
-        #we add a SGA MASKBIT12 file for reference! so we know for future reference
-
-        
-        ##WHY WAS I DOING THIS?? THIS SEEMS LIKE A TYPO, BECAUSE THIS CLEARLY IS A DWARF GALAXY .... and the cutout imaging works??
-        ##39628526738999876 -> this object we want to remove as it is not a dwarf galaxy and has missing imaging 
-        ## and thus the cutout viewer tool breaks there
-        # desi_sga_dwarfs = desi_sga_dwarfs[desi_sga_dwarfs["TARGETID"] != 39628526738999876]
-
     
 # ## According to Ashley Ross, the LSS catalogs contain the tile based redshift which would be slightly different than the healpix
 # ##based redshift. The below file would give us the tile based redshift. 

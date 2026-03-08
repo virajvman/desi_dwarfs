@@ -36,12 +36,14 @@ def compute_r32(fastspec):
 
 
 
-def calc_SFR_Halpha(EW_Halpha, EW_Halpha_ivar, spec_z, spec_z_err, Mr, r_err, EWc=2.5, BD=3.25, BD_err=0.1,_IMF_FACTOR = 0.66):
+def calc_SFR_Halpha(EW_Halpha, EW_Halpha_ivar, spec_z, spec_z_err, Mr, r_err, EWc=0, BD=3.25, BD_err=0.1,_IMF_FACTOR = 0.66):
     """
     Calculate Halpha-based EW SFR
     Bauer+ (2013) https://ui.adsabs.harvard.edu/abs/2013MNRAS.434..209B/abstract
 
     This function does an apeture correction through the Mr term
+
+    we will set EWc = 0, because fastspecfit already accounts for stellar absorption
     """
 
     EW_Halpha_err = 1/np.sqrt(EW_Halpha_ivar)

@@ -1576,6 +1576,8 @@ def incorporate_updated_distances(main_cat_path):
     zcmb_arr = np.array(main_hdu["Z_CMB"])
     dist_arr = np.array(main_hdu["LUMI_DIST_MPC"])
 
+    ##we will remeasure the stellar masses here!! Our fiducial approach are the mia stellar masses
+    
     logm_saga = get_stellar_mass(gr_arr, mag_r_arr, zcmb_arr, d_in_mpc=dist_arr, input_zred=False)
     logm_m24 = get_stellar_mass_mia(gr_arr, mag_g_arr, zcmb_arr, d_in_mpc=dist_arr, input_zred=False)
 

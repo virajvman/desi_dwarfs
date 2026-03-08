@@ -44,7 +44,8 @@ def is_zred_consistent(ref_z, cat, delta_zred=250 / 300000):
 
 
 def find_associated_tgids(dwarf_cat, cache_path="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/associated_tgids_cache.pkl"):
-    if cache_path and os.path.exists(cache_path):
+    overwrite=True
+    if cache_path and os.path.exists(cache_path) and overwrite==False:
         print(f"Loading cached associated TARGETIDs from {cache_path}")
         with open(cache_path, "rb") as f:
             results = pickle.load(f)
