@@ -268,40 +268,57 @@ C_LIGHT_KMS = 2.9979e5   # km/s
 # Redshift velocity threshold for CF3_NAM vs V_CMB
 V_THRESHOLD_KMS = 2850.0  # km/s
 
-def update_distance_catalog(main_cat_path, keep_lumi_dist_orig=False):
+def update_distance_catalog(main_cat_input, keep_lumi_dist_orig=False,
+                            size_col="R50_R", dist_col="LUMI_DIST_MPC"):
     """
     Consolidate distance measurements for the DESI dwarf catalog.
 
     Parameters
     ----------
+    main_cat_input : str or astropy.table.Table
+        Either a file path (reads with hdu="MAIN") or an in-memory Table.
     keep_lumi_dist_orig : bool
-        If True, keep the LUMI_DIST_ORIG column in the output catalog.
+        If True, keep the {dist_col}_ORIG column in the output catalog.
         If False (default), delete it before returning.
+    size_col : str
+        Column name for the angular size (arcsec) used as match radius.
+        Default is "R50_R"; use "SHAPE_R" for tractor half-light radius.
+    dist_col : str
+        Column name for the distance column (Mpc) to read and update.
+        Default is "LUMI_DIST_MPC"; use "DIST_MPC_FIDU" for early-stage catalogs.
 
     Returns
     -------
     tot_cat : astropy.table.Table
-        The catalog with updated LUMI_DIST and DIST_SOURCE columns.
+        The catalog with updated distance and DIST_SOURCE columns.
     """
+    orig_col = f"{dist_col}_ORIG"
+
     # -------------------------------------------------------------------------
     # 1. Load the main DESI dwarf catalog
     # -------------------------------------------------------------------------
     print("=" * 70)
-    print("Loading DESI dwarf catalog...")
-    tot_cat = Table.read(main_cat_path, hdu="MAIN")
+    print(f"Loading DESI dwarf catalog (size_col={size_col}, dist_col={dist_col})...")
+    if isinstance(main_cat_input, str):
+        tot_cat = Table.read(main_cat_input, hdu="MAIN")
+    else:
+        tot_cat = main_cat_input
     n_total = len(tot_cat)
     print(f"  Loaded {n_total} galaxies")
 
-    # Find the position of the LUMI_DIST column so we can insert
-    # DIST_SOURCE right before it
-    lumi_dist_idx = tot_cat.colnames.index('LUMI_DIST_MPC')
+    # Find the position of the distance column so we can insert
+    # DIST_SOURCE right after it
+    dist_idx = tot_cat.colnames.index(dist_col)
 
     # Initialize DIST_SOURCE column with enough characters for longest label
-    dist_source_col = np.full(n_total, 'V_CMB', dtype='U10')
-    tot_cat.add_column(dist_source_col, name='DIST_SOURCE', index=lumi_dist_idx + 1)
+    if 'DIST_SOURCE' not in tot_cat.colnames:
+        dist_source_col = np.full(n_total, 'V_CMB', dtype='U10')
+        tot_cat.add_column(dist_source_col, name='DIST_SOURCE', index=dist_idx + 1)
+    else:
+        tot_cat['DIST_SOURCE'] = np.full(n_total, 'V_CMB', dtype='U10')
 
-    # Store original LUMI_DIST for reference
-    tot_cat['LUMI_DIST_ORIG'] = tot_cat['LUMI_DIST_MPC'].copy()
+    # Store original distance for reference
+    tot_cat[orig_col] = tot_cat[dist_col].copy()
 
     # Build SkyCoord for the main catalog
     cat_coords = SkyCoord(ra=np.array(tot_cat['RA']) * u.deg,
@@ -330,19 +347,19 @@ def update_distance_catalog(main_cat_path, keep_lumi_dist_orig=False):
     ned_coords = SkyCoord(ra=ned_cat['ra'] * u.deg, dec=ned_cat['dec'] * u.deg)
 
     # Cross-match: for each galaxy in our catalog, find nearest NED source
-    # Uses R50_R as match radius; if multiple NED sources fall within R50_R,
+    # Uses size_col as match radius; if multiple NED sources fall within it,
     # match_to_catalog_sky returns the closest one automatically.
     idx_ned, sep_ned, _ = cat_coords.match_to_catalog_sky(ned_coords)
 
-    # Match within R50_R of each galaxy
-    r50_all = np.array(tot_cat['R50_R'], dtype=float)  # arcsec
-    match_mask_ned = sep_ned.arcsec < r50_all
+    # Match within size_col of each galaxy
+    size_all = np.array(tot_cat[size_col], dtype=float)  # arcsec
+    match_mask_ned = sep_ned.arcsec < size_all
 
     n_ned = np.sum(match_mask_ned)
-    print(f"  Matched {n_ned} galaxies within their R50_R of a NED LVS source")
+    print(f"  Matched {n_ned} galaxies within their {size_col} of a NED LVS source")
 
     # Update distances
-    tot_cat['LUMI_DIST_MPC'][match_mask_ned] = ned_cat['ziDist'][idx_ned[match_mask_ned]]
+    tot_cat[dist_col][match_mask_ned] = ned_cat['ziDist'][idx_ned[match_mask_ned]]
     tot_cat['DIST_SOURCE'][match_mask_ned] = 'NED_ZIND'
     assigned[match_mask_ned] = True
 
@@ -371,26 +388,26 @@ def update_distance_catalog(main_cat_path, keep_lumi_dist_orig=False):
                           dec=mei_with_coords['DEC'] * u.deg)
 
     # For unassigned galaxies, cross-match with Mei catalog
-    # Use R50_R (half-light radius) as the match radius for each galaxy
+    # Use size_col as the match radius for each galaxy
     unassigned_idx = np.where(~assigned)[0]
     cat_coords_remaining = SkyCoord(ra=np.array(tot_cat['RA'][unassigned_idx]) * u.deg,
                                     dec=np.array(tot_cat['DEC'][unassigned_idx]) * u.deg)
 
     idx_mei, sep_mei, _ = cat_coords_remaining.match_to_catalog_sky(mei_coords)
 
-    # Match within R50_R of each galaxy (converting R50_R from arcsec to angular sep)
-    r50_values = np.array(tot_cat['R50_R'][unassigned_idx], dtype=float)  # arcsec
-    match_mask_mei = sep_mei.arcsec < r50_values
+    # Match within size_col of each galaxy
+    size_values = np.array(tot_cat[size_col][unassigned_idx], dtype=float)  # arcsec
+    match_mask_mei = sep_mei.arcsec < size_values
 
     n_mei = np.sum(match_mask_mei)
-    print(f"  Matched {n_mei} galaxies within their R50_R of a Mei et al. source")
+    print(f"  Matched {n_mei} galaxies within their {size_col} of a Mei et al. source")
 
     if n_mei > 0:
         # Map back to original catalog indices
         mei_matched_orig_idx = unassigned_idx[match_mask_mei]
         mei_matched_ref_idx = idx_mei[match_mask_mei]
 
-        tot_cat['LUMI_DIST_MPC'][mei_matched_orig_idx] = mei_with_coords['dist_mpc'][mei_matched_ref_idx]
+        tot_cat[dist_col][mei_matched_orig_idx] = mei_with_coords['dist_mpc'][mei_matched_ref_idx]
         tot_cat['DIST_SOURCE'][mei_matched_orig_idx] = 'VIRGO_SBF'
         assigned[mei_matched_orig_idx] = True
 
@@ -416,17 +433,17 @@ def update_distance_catalog(main_cat_path, keep_lumi_dist_orig=False):
 
     idx_evcc, sep_evcc, _ = cat_coords_remaining2.match_to_catalog_sky(evcc_coords)
 
-    # Match within R50_R of each galaxy
-    r50_values2 = np.array(tot_cat['R50_R'][unassigned_idx2], dtype=float)  # arcsec
-    match_mask_evcc = sep_evcc.arcsec < r50_values2
+    # Match within size_col of each galaxy
+    size_values2 = np.array(tot_cat[size_col][unassigned_idx2], dtype=float)  # arcsec
+    match_mask_evcc = sep_evcc.arcsec < size_values2
 
     n_evcc = np.sum(match_mask_evcc)
-    print(f"  Matched {n_evcc} galaxies within their R50_R of an EVCC member")
+    print(f"  Matched {n_evcc} galaxies within their {size_col} of an EVCC member")
 
     if n_evcc > 0:
         evcc_matched_orig_idx = unassigned_idx2[match_mask_evcc]
 
-        tot_cat['LUMI_DIST_MPC'][evcc_matched_orig_idx] = VIRGO_DEFAULT_DIST_MPC
+        tot_cat[dist_col][evcc_matched_orig_idx] = VIRGO_DEFAULT_DIST_MPC
         tot_cat['DIST_SOURCE'][evcc_matched_orig_idx] = 'VIRGO_EVCC'
         assigned[evcc_matched_orig_idx] = True
 
@@ -473,16 +490,16 @@ def update_distance_catalog(main_cat_path, keep_lumi_dist_orig=False):
         if n > 0:
             print(f"  {source:12s}: {n:6d} galaxies")
 
-    n_changed = np.sum(tot_cat['LUMI_DIST_MPC'] != tot_cat['LUMI_DIST_ORIG'])
+    n_changed = np.sum(tot_cat[dist_col] != tot_cat[orig_col])
     print(f"\n  Total galaxies with updated distances: {n_changed}")
     print(f"  Total galaxies unchanged:              {n_total - n_changed}")
 
     # Optionally remove the backup column
     if not keep_lumi_dist_orig:
-        del tot_cat['LUMI_DIST_ORIG']
-        print("  Removed LUMI_DIST_ORIG column")
+        del tot_cat[orig_col]
+        print(f"  Removed {orig_col} column")
     else:
-        print("  Kept LUMI_DIST_ORIG column")
+        print(f"  Kept {orig_col} column")
 
     print("Done!")
     return tot_cat, ned_cat, mei_with_coords, evcc_tab

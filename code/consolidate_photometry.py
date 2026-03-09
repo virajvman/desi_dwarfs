@@ -13,7 +13,7 @@ import shutil
 import glob
 from tqdm import trange
 import h5py
-from desi_lowz_funcs import get_stellar_mass, match_c_to_catalog, match_fastspec_catalog, get_stellar_mass_mia
+from desi_lowz_funcs import match_c_to_catalog, match_fastspec_catalog, get_stellar_mass_mia
 from desi_lowz_funcs import add_sweeps_column
 from desi_lowz_funcs import get_sga_norm_dists_FAST
 from construct_dwarf_galaxy_catalogs import bright_star_filter
@@ -593,13 +593,12 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
         catalog["MAG_TYPE"] = np.full(len(catalog), "TRACTOR_OG", dtype=object)
 
 
-        if "LOGM_SAGA_FIDU" in catalog.keys():
-            catalog.rename_column("LOGM_SAGA_FIDU", "LOG_MSTAR_SAGA")
+        if "LOGM_M24_FIDU" in catalog.keys():
+            catalog.rename_column("LOGM_M24_FIDU", "LOG_MSTAR_M24")
         else:
-            #compute the fiducial stellar mass
             gr_colors = catalog["MAG_G"].data - catalog["MAG_R"].data
-            mstars_SAGA_new = get_stellar_mass(gr_colors, catalog["MAG_R"].data, catalog["Z_CMB"].data ,d_in_mpc = catalog["LUMI_DIST_MPC"].data, input_zred=False )
-            catalog["LOG_MSTAR_SAGA"] = mstars_SAGA_new
+            mstars_M24_new = get_stellar_mass_mia(gr_colors, catalog["MAG_G"].data, catalog["Z_CMB"].data, d_in_mpc=catalog["LUMI_DIST_MPC"].data, input_zred=False)
+            catalog["LOG_MSTAR_M24"] = mstars_M24_new
             
         catalog["PHOTOMETRY_UPDATED"] = np.zeros(len(catalog)).astype(bool)  
 
@@ -634,11 +633,8 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
         #with the finalized photometry, get the stellar masses!!
         gr_colors = catalog["MAG_G"].data - catalog["MAG_R"].data
         
-        mstars_SAGA_new = get_stellar_mass(gr_colors, catalog["MAG_R"].data, catalog["Z_CMB"].data ,d_in_mpc = catalog["LUMI_DIST_MPC"].data, input_zred=False )
-        
-        mstars_M24_new = get_stellar_mass_mia(gr_colors, catalog["MAG_G"].data , catalog["Z_CMB"].data, d_in_mpc = catalog["LUMI_DIST_MPC"].data, input_zred =  False)
+        mstars_M24_new = get_stellar_mass_mia(gr_colors, catalog["MAG_G"].data, catalog["Z_CMB"].data, d_in_mpc=catalog["LUMI_DIST_MPC"].data, input_zred=False)
 
-        catalog["LOG_MSTAR_SAGA"] = mstars_SAGA_new
         catalog["LOG_MSTAR_M24"] = mstars_M24_new
 
 
@@ -1571,14 +1567,12 @@ def incorporate_updated_distances(main_cat_path):
 
     # With the updated distance in LUMI_DIST_MPC, remeasure the stellar mass
     gr_arr = np.array(main_hdu["MAG_G"]) - np.array(main_hdu["MAG_R"])
-    mag_r_arr = np.array(main_hdu["MAG_R"])
     mag_g_arr = np.array(main_hdu["MAG_G"])
     zcmb_arr = np.array(main_hdu["Z_CMB"])
     dist_arr = np.array(main_hdu["LUMI_DIST_MPC"])
 
     ##we will remeasure the stellar masses here!! Our fiducial approach are the mia stellar masses
     
-    logm_saga = get_stellar_mass(gr_arr, mag_r_arr, zcmb_arr, d_in_mpc=dist_arr, input_zred=False)
     logm_m24 = get_stellar_mass_mia(gr_arr, mag_g_arr, zcmb_arr, d_in_mpc=dist_arr, input_zred=False)
 
     # Quick comparison plot
@@ -1600,7 +1594,6 @@ def incorporate_updated_distances(main_cat_path):
     print(f"  Max    |delta|: {np.max(delta_mstar):.4f} dex")
 
     # Update the stellar mass columns
-    main_hdu["LOG_MSTAR_SAGA"] = logm_saga
     main_hdu["LOG_MSTAR_M24"] = logm_m24
 
     # Mask for objects that are no longer below the dwarf mass cut

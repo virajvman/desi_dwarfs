@@ -330,10 +330,10 @@ def make_clean_shreds_catalogs():
     clean_mask_lowz = (lowz_list["PHOTO_REPROCESS"] == 0)
     
     ##CLEAN CATALOG
-    dwarf_mask_bgsb = (bgsb_list["LOGM_SAGA_FIDU"] < 9.25) 
-    dwarf_mask_bgsf = (bgsf_list["LOGM_SAGA_FIDU"] < 9.25) 
-    dwarf_mask_lowz = (lowz_list["LOGM_SAGA_FIDU"] < 9.25) 
-    dwarf_mask_elg = (elg_list["LOGM_SAGA_FIDU"] < 9.25)   
+    dwarf_mask_bgsb = (bgsb_list["LOGM_M24_FIDU"] < 9.25) 
+    dwarf_mask_bgsf = (bgsf_list["LOGM_M24_FIDU"] < 9.25) 
+    dwarf_mask_lowz = (lowz_list["LOGM_M24_FIDU"] < 9.25) 
+    dwarf_mask_elg = (elg_list["LOGM_M24_FIDU"] < 9.25)   
 
     bgsb_clean_dwarfs = bgsb_list[ clean_mask_bgsb  & (dwarf_mask_bgsb) ] 
     bgsf_clean_dwarfs = bgsf_list[ clean_mask_bgsf  & (dwarf_mask_bgsf) ]

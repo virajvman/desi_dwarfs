@@ -34,9 +34,32 @@ from desitarget.sv3 import sv3_targetmask
 from easyquery import Query, QueryMaker
 reduce_compare = QueryMaker.reduce_compare
 
-from desi_lowz_funcs import add_sweeps_column, match_c_to_catalog, calc_normalized_dist, DVcalculator_list, get_stellar_mass
+from desi_lowz_funcs import add_sweeps_column, match_c_to_catalog, calc_normalized_dist, DVcalculator_list, get_stellar_mass_mia
+from independent_distances import update_distance_catalog
 
 c_light = 299792 #in km/s
+
+
+def print_catalog_overlap_diagnostics(path_v2, path_old):
+    '''
+    After saving a V2 catalog, compare with the old catalog and print overlap counts by TARGETID.
+    If path_old does not exist, print a short message and return.
+    '''
+    if not os.path.exists(path_old):
+        print(f"  [diagnostic] Old file not found: {path_old}")
+        return
+    new_t = Table.read(path_v2)
+    old_t = Table.read(path_old)
+    new_ids = set(new_t["TARGETID"].data)
+    old_ids = set(old_t["TARGETID"].data)
+    in_both = len(new_ids & old_ids)
+    in_new_not_old = len(new_ids - old_ids)
+    in_old_not_new = len(old_ids - new_ids)
+    print(f"  [diagnostic] {os.path.basename(path_v2)} vs {os.path.basename(path_old)}:")
+    print(f"    Objects in V2 catalog: {len(new_ids)}")
+    print(f"    In V2 also in old: {in_both} | In V2 not in old: {in_new_not_old}")
+    print(f"    Objects in old catalog: {len(old_ids)}")
+    print(f"    In old also in V2: {in_both} | In old not in V2: {in_old_not_new}")
 
 
 def get_sv_bgs_mask(catalog, bgs_class = "BGS_BRIGHT"):
@@ -595,10 +618,10 @@ def get_lowz_catalogs(zpix):
     zpix = zpix[zpix["PROGRAM"] == "dark"]
 
     #get the lowz survey mask
-    lowz_main_mask = (zpix["SCND_TARGET"] == 2**15) | (zpix["SCND_TARGET"] == 2**16) | (zpix["SCND_TARGET"] == 2**17)
+    lowz_main_mask = ((zpix["SCND_TARGET"] & 2**15) != 0) | ((zpix["SCND_TARGET"] & 2**16) != 0) | ((zpix["SCND_TARGET"] & 2**17) != 0)
     lowz_sv_mask = np.zeros(len(zpix)).astype(bool)
     for svi in range(1,4):
-        svi_mask = (zpix[f"SV{svi}_SCND_TARGET"] == 2**15) | (zpix[f"SV{svi}_SCND_TARGET"] == 2**16) | (zpix[f"SV{svi}_SCND_TARGET"] == 2**17)
+        svi_mask = ((zpix[f"SV{svi}_SCND_TARGET"] & 2**15) != 0) | ((zpix[f"SV{svi}_SCND_TARGET"] & 2**16) != 0) | ((zpix[f"SV{svi}_SCND_TARGET"] & 2**17) != 0)
         lowz_sv_mask |= svi_mask
 
     lowz_gal_mask = lowz_main_mask | lowz_sv_mask
@@ -645,8 +668,12 @@ def get_lowz_catalogs(zpix):
     zpix_trac_lowz_f = vstack([total_targs_match, stargs_nomatch])
 
     ##let us save these
-    save_table(zpix_lowz_f, "/pscratch/sd/v/virajvm/catalog/lowz_dark_zpix_iron.fits")
-    save_table(zpix_trac_lowz_f, "/pscratch/sd/v/virajvm/catalog/lowz_dark_tracphot_iron.fits")
+    lowz_zpix_v2 = "/pscratch/sd/v/virajvm/catalog/lowz_dark_zpix_iron_V2.fits"
+    lowz_trac_v2 = "/pscratch/sd/v/virajvm/catalog/lowz_dark_tracphot_iron_V2.fits"
+    save_table(zpix_lowz_f, lowz_zpix_v2)
+    print_catalog_overlap_diagnostics(lowz_zpix_v2, "/pscratch/sd/v/virajvm/catalog/lowz_dark_zpix_iron.fits")
+    save_table(zpix_trac_lowz_f, lowz_trac_v2)
+    print_catalog_overlap_diagnostics(lowz_trac_v2, "/pscratch/sd/v/virajvm/catalog/lowz_dark_tracphot_iron.fits")
 
     print(f"LOWZ: Number of objects after matching = {len(zpix_lowz_f)}")
     print(f"LOWZ: Number of trac objects after matching = {len(zpix_trac_lowz_f)}")
@@ -854,7 +881,7 @@ def process_sga_VI_catalog():
     '''
 
     #read the original catalogs
-    sga_all_bad = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_sga_bad_trac_bad_VI_NEEDED.fits")
+    sga_all_bad = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_sga_bad_trac_bad_VI_NEEDED_V2.fits")
 
     print("--")
     print(len(sga_all_bad))
@@ -949,11 +976,10 @@ def process_sga_matches(desi_sga_cat, gal_type):
     rmag = desi_matched_sga_good["SGA_R_COG_MAG"].data
     g_r = gmag - rmag
     
-    # logm = get_stellar_mass(np.array(g_r), np.array(rmag), np.array(zreds), input_zred=False)
-    logm = get_stellar_mass(g_r, rmag, desi_matched_sga_good["Z_CMB"].data,  d_in_mpc = desi_matched_sga_good["DIST_MPC_FIDU"].data, input_zred=False)
+    logm = get_stellar_mass_mia(g_r, gmag, desi_matched_sga_good["Z_CMB"].data, d_in_mpc=desi_matched_sga_good["DIST_MPC_FIDU"].data, input_zred=False)
     
     desi_matched_sga_good["SGA_GR"] = g_r
-    desi_matched_sga_good["SGA_LOGM_SAGA"] = logm
+    desi_matched_sga_good["SGA_LOGM_M24"] = logm
 
     print(f"{gal_type}: Total number of SGA good matches = {len(desi_matched_sga_good)}" ) 
     
@@ -962,7 +988,7 @@ def process_sga_matches(desi_sga_cat, gal_type):
     print(f"{gal_type}: Number of robust tractor sources among sga matched catalog = {np.sum(trac_good_dwarf_mask)} / {len(desi_matched_sga_good)}" ) 
 
     #identify sources with photo-reprocess needed and SGA says is a dwarf galaxy
-    trac_shred_dwarf_mask = (desi_matched_sga_good["PHOTO_REPROCESS"] == 1) & (desi_matched_sga_good["SGA_LOGM_SAGA"] < 9.25)
+    trac_shred_dwarf_mask = (desi_matched_sga_good["PHOTO_REPROCESS"] == 1) & (desi_matched_sga_good["SGA_LOGM_M24"] < 9.25)
     print(f"{gal_type}: Number of dwarfs based on SGA from Tractor reprocess = {np.sum(trac_shred_dwarf_mask)} / { np.sum( (desi_matched_sga_good['PHOTO_REPROCESS'] == 1) ) }" ) 
 
     ##we will now constructing the catalog from which we will be doing a comparison with SGA!
@@ -976,7 +1002,10 @@ def process_sga_matches(desi_sga_cat, gal_type):
     #let us call all these to be in one sample!
     desi_sga_dwarfs_good["SAMPLE"] = ["SGA"]*len(desi_sga_dwarfs_good)
     desi_sga_dwarfs_good["PCNN_FRAGMENT"] = np.ones(len(desi_sga_dwarfs_good))
-    desi_sga_dwarfs_good.write(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_{gal_type}_SGA_GOOD_matched_dwarfs.fits",overwrite=True)
+    sga_base = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs"
+    path_sga_good_v2 = f"{sga_base}/iron_{gal_type}_SGA_GOOD_matched_dwarfs_V2.fits"
+    desi_sga_dwarfs_good.write(path_sga_good_v2, overwrite=True)
+    print_catalog_overlap_diagnostics(path_sga_good_v2, f"{sga_base}/iron_{gal_type}_SGA_GOOD_matched_dwarfs.fits")
 
     #### NOW LET US WORK WITH THE OBJECTS IN SGA THAT DO NOT HAVE A SGA G/R PHOTOMETRY. 
     #### for objects that do not have any SGA photo, but robust tractor photo, we still keep them here so we can compare them at the end for ease!!
@@ -999,10 +1028,14 @@ def process_sga_matches(desi_sga_cat, gal_type):
 
     if len(desi_matched_sga_bad_trac_good) > 0:
         desi_matched_sga_bad_trac_good["SAMPLE"] = gal_type #we add sample column just for this as it will combined together with the total clean source catalog
-        desi_matched_sga_bad_trac_good.write(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_{gal_type}_SGA_BAD_TRACTOR_GOOD_matched_dwarfs.fits",overwrite=True)
+        path_sga_bad_trac_good_v2 = f"{sga_base}/iron_{gal_type}_SGA_BAD_TRACTOR_GOOD_matched_dwarfs_V2.fits"
+        desi_matched_sga_bad_trac_good.write(path_sga_bad_trac_good_v2, overwrite=True)
+        print_catalog_overlap_diagnostics(path_sga_bad_trac_good_v2, f"{sga_base}/iron_{gal_type}_SGA_BAD_TRACTOR_GOOD_matched_dwarfs.fits")
     else:
         print("File is zero size!")
-        desi_matched_sga_bad_trac_good.write(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_{gal_type}_SGA_BAD_TRACTOR_GOOD_matched_dwarfs.fits",overwrite=True)
+        path_sga_bad_trac_good_v2 = f"{sga_base}/iron_{gal_type}_SGA_BAD_TRACTOR_GOOD_matched_dwarfs_V2.fits"
+        desi_matched_sga_bad_trac_good.write(path_sga_bad_trac_good_v2, overwrite=True)
+        print_catalog_overlap_diagnostics(path_sga_bad_trac_good_v2, f"{sga_base}/iron_{gal_type}_SGA_BAD_TRACTOR_GOOD_matched_dwarfs.fits")
         
 
 
@@ -1013,7 +1046,8 @@ def process_sga_matches(desi_sga_cat, gal_type):
     
     print(f"{gal_type}: Number reprocess galaxies in SGA, but no SGA photo = {len(desi_matched_sga_bad_trac_bad)} ")
     
-    desi_matched_sga_bad_trac_bad.write(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_{gal_type}_SGA_ALL_BAD.fits",overwrite=True)
+    desi_matched_sga_bad_trac_bad.write(f"{sga_base}/iron_{gal_type}_SGA_ALL_BAD_V2.fits", overwrite=True)
+    print_catalog_overlap_diagnostics(f"{sga_base}/iron_{gal_type}_SGA_ALL_BAD_V2.fits", f"{sga_base}/iron_{gal_type}_SGA_ALL_BAD.fits")
 
     return
    
@@ -1051,7 +1085,7 @@ if __name__ == '__main__':
     rootdir = '/global/u1/v/virajvm/'
     sys.path.append(os.path.join(rootdir, 'DESI2_LOWZ'))
     from desi_lowz_funcs import save_table, get_useful_cat_colms, _n_or_more_gt, _n_or_more_lt, get_remove_flag
-    from desi_lowz_funcs import match_c_to_catalog, get_stellar_mass, get_stellar_mass_mia, calc_normalized_dist
+    from desi_lowz_funcs import match_c_to_catalog, get_stellar_mass_mia, calc_normalized_dist
     from desi_lowz_funcs import get_sweep_filename, save_table, is_target_in_south
 
     process_sga = False
@@ -1059,10 +1093,9 @@ if __name__ == '__main__':
     save_int_catalog = True
 
     zred_cuts = { "BGS_BRIGHT" : 0.4, "BGS_FAINT": 0.4, "LOWZ": 0.4, "ELG":0.5 }
-    #either BGS_BRIGHT, ELG or BGS_FAINT
-    gal_types = ["ELG","LOWZ", "BGS_FAINT", "BGS_BRIGHT"]
-    # gal_types = ["BGS_FAINT"]
-    
+ 
+    gal_types = ["LOWZ", "ELG", "BGS_FAINT", "BGS_BRIGHT"]
+ 
     save_folder = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs"
 
     save_filenames = {"BGS_BRIGHT":  "iron_bgs_bright_filter_zsucc_zrr02_allfracflux.fits", 
@@ -1125,8 +1158,23 @@ if __name__ == '__main__':
         apply_zred_cut = True
         cross_match_w_cigale = False
         get_color_mstar = True
-        #we will remove objects that are within twice the half-light radius of SGA galaxies
-    
+
+        # Compute BGS_BRIGHT/BGS_FAINT overlap for reference
+        _bgs_tgt = zpix_iron["BGS_TARGET"]
+        _bgsb_mask = (_bgs_tgt & bgs_mask["BGS_BRIGHT"]) != 0
+        _bgsb_mask |= get_sv_bgs_mask(zpix_iron, bgs_class="BGS_BRIGHT")
+        _bgsf_mask = (_bgs_tgt & bgs_mask["BGS_FAINT"]) != 0
+        _bgsf_mask |= get_sv_bgs_mask(zpix_iron, bgs_class="BGS_FAINT")
+        _overlap = _bgsb_mask & _bgsf_mask
+        n_bgsb = np.sum(_bgsb_mask)
+        n_bgsf = np.sum(_bgsf_mask)
+        n_overlap = np.sum(_overlap)
+        print(f"BGS_BRIGHT count: {n_bgsb}, BGS_FAINT count: {n_bgsf}")
+        print(f"BGS_BRIGHT & BGS_FAINT overlap: {n_overlap} targets ({100*n_overlap/n_bgsb:.1f}% of BRIGHT, {100*n_overlap/n_bgsf:.1f}% of FAINT)")
+        del _bgs_tgt, _bgsb_mask, _bgsf_mask, _overlap
+
+        lowz_targetids = set()
+
         #looping over all the sub-samples!
         for i,gal_type in enumerate(gal_types):
             zred_cut = zred_cuts[gal_type]
@@ -1297,6 +1345,15 @@ if __name__ == '__main__':
                 ##compute the velocities in different reference frames and the distance columns.
                 ##the fiducial distance column is DIST_MPC_FIDU 
                 zpix_sub_cat_f = get_nam_distances(zpix_sub_cat_f)
+
+                ##update DIST_MPC_FIDU with redshift-independent distances (NED, Virgo SBF, EVCC)
+                ##using SHAPE_R as match radius since R50_R is not available at this stage
+                zpix_sub_cat_f, _, _, _ = update_distance_catalog(
+                    zpix_sub_cat_f,
+                    size_col="SHAPE_R",
+                    dist_col="DIST_MPC_FIDU",
+                    keep_lumi_dist_orig=True
+                )
         
             if cross_match_w_cigale:
                 print("Crossmatching with CIGALE VAC")
@@ -1306,33 +1363,14 @@ if __name__ == '__main__':
             if get_color_mstar:
                 print("Getting optical color-based stellar masses.")
                 
-                ## these color based prescriptions only work for Z < 0.5 galaxies though
                 gr_colors = zpix_sub_cat_f["MAG_G"] - zpix_sub_cat_f["MAG_R"]
                 
                 zred_mask = (zpix_sub_cat_f["Z"] < 0.5)
 
-                print("TODO: UPDATE THIS STELLAR MASS METHOD HERE AND ALSO DISTANCE ESTIMATION")
-                print("ALSO FOLD IN PHOTOMETRY ERRORS WHEN DOING CALIBRATIONS")
-                print("CHECK WHEN DOING DISTANCE ESIMATION IF OUR SOURCE IS WITHIN THEIR HALF LIGHT RADIUS? Maybe")
+                mstars_M24_FIDU = get_stellar_mass_mia(gr_colors[zred_mask].data, zpix_sub_cat_f["MAG_G"][zred_mask].data, zpix_sub_cat_f["Z_CMB"][zred_mask].data, d_in_mpc=zpix_sub_cat_f["DIST_MPC_FIDU"][zred_mask].data, input_zred=False)
 
-                #uses r band magnitude
-                #ignoring PV contribution, just estimating from cmb frame redshift
-                mstars_SAGA_VCMB = get_stellar_mass(gr_colors[zred_mask].data, zpix_sub_cat_f["MAG_R"][zred_mask].data ,zpix_sub_cat_f["Z_CMB"][zred_mask].data, d_in_mpc = zpix_sub_cat_f["DIST_MPC_VCMB"][zred_mask].data, input_zred=False )
-
-                mstars_SAGA_FIDU = get_stellar_mass(gr_colors[zred_mask].data, zpix_sub_cat_f["MAG_R"][zred_mask].data, zpix_sub_cat_f["Z_CMB"][zred_mask].data ,d_in_mpc = zpix_sub_cat_f["DIST_MPC_FIDU"][zred_mask].data, input_zred=False )
-
-                #uses g band magnitude
-                mstars_M24_VCMB = get_stellar_mass_mia(gr_colors[zred_mask].data, zpix_sub_cat_f["MAG_G"][zred_mask].data ,zpix_sub_cat_f["Z_CMB"][zred_mask].data)
-            
-                zpix_sub_cat_f["LOGM_SAGA_VCMB"] = -99*np.ones(len(zpix_sub_cat_f))
-                zpix_sub_cat_f["LOGM_SAGA_FIDU"] = -99*np.ones(len(zpix_sub_cat_f))
-                
-                zpix_sub_cat_f["LOGM_M24_VCMB"] = -99*np.ones(len(zpix_sub_cat_f))
-        
-                #add the stellar masses
-                zpix_sub_cat_f["LOGM_M24_VCMB"][zred_mask] = mstars_M24_VCMB
-                zpix_sub_cat_f["LOGM_SAGA_FIDU"][zred_mask] = mstars_SAGA_FIDU
-                zpix_sub_cat_f["LOGM_SAGA_VCMB"][zred_mask] = mstars_SAGA_VCMB
+                zpix_sub_cat_f["LOGM_M24_FIDU"] = -99*np.ones(len(zpix_sub_cat_f))
+                zpix_sub_cat_f["LOGM_M24_FIDU"][zred_mask] = mstars_M24_FIDU
 
             ## for the final catalog, add info on the sweep file!
             zpix_sub_cat_f = add_sweeps_column(zpix_sub_cat_f)
@@ -1345,8 +1383,22 @@ if __name__ == '__main__':
             zpix_sub_cat_f = zpix_sub_cat_f[nobs_mask]
             print(f"{gal_type}: Fraction remaining after NOBS cut = { np.sum(nobs_mask)/len(nobs_mask) }")
 
+            if gal_type == "LOWZ":
+                lowz_targetids = set(zpix_sub_cat_f["TARGETID"].data)
+                print(f"LOWZ: {len(lowz_targetids)} unique TARGETIDs stored for de-duplication")
+
+            if gal_type != "LOWZ" and len(lowz_targetids) > 0:
+                not_in_lowz = ~np.isin(zpix_sub_cat_f["TARGETID"].data, list(lowz_targetids))
+                n_overlap = np.sum(~not_in_lowz)
+                if n_overlap > 0:
+                    print(f"{gal_type}: Removing {n_overlap} targets already in LOWZ catalog")
+                    zpix_sub_cat_f = zpix_sub_cat_f[not_in_lowz]
+
             print("Saving the intermediated step!!")
-            save_table(zpix_sub_cat_f,  save_folder + "/" + save_filename.replace(".fits","_INT.fits"),comment="")
+            path_int_v2 = save_folder + "/" + save_filename.replace(".fits","_INT_V2.fits")
+            path_int_old = save_folder + "/" + save_filename.replace(".fits","_INT.fits")
+            save_table(zpix_sub_cat_f, path_int_v2, comment="")
+            print_catalog_overlap_diagnostics(path_int_v2, path_int_old)
 
             
     if False:
@@ -1360,7 +1412,7 @@ if __name__ == '__main__':
             print(f"{gal_type}: Number of all sources = {len(zpix_sub_cat_f)}")
 
             #filtering by stellar mass as we do not need higher stellar mass objects!
-            zpix_sub_cat_f = zpix_sub_cat_f[ (zpix_sub_cat_f["LOGM_SAGA_FIDU"] < 9.25) ]
+            zpix_sub_cat_f = zpix_sub_cat_f[ (zpix_sub_cat_f["LOGM_M24_FIDU"] < 9.25) ]
 
             print(f"{gal_type}: Number of all sources with 9.25 stellar mass cut = {len(zpix_sub_cat_f)}")
 
@@ -1441,7 +1493,10 @@ if __name__ == '__main__':
             ## save this catalog. This is catalog with the MASKBIT cut applied! However, note this still could include sources associated with SGA sources
             print("Saving NO SGA file")
             
-            save_table(zpix_sub_cat_no_sga,  save_folder + "/" + save_filename,comment="")
+            path_no_sga_v2 = save_folder + "/" + save_filename.replace(".fits","_V2.fits")
+            path_no_sga_old = save_folder + "/" + save_filename
+            save_table(zpix_sub_cat_no_sga, path_no_sga_v2, comment="")
+            print_catalog_overlap_diagnostics(path_no_sga_v2, path_no_sga_old)
 
             #save the with SGA catalog too
             print("Saving WITH SGA file")
@@ -1450,13 +1505,16 @@ if __name__ == '__main__':
             print(f"{gal_type}: In SGA and need reprocessing = {len(zpix_sub_cat_w_sga[zpix_sub_cat_w_sga['PHOTO_REPROCESS'] == 1])}")
             
             #for the SGA ones we save all teh ones for reference, also not that many
-            save_table(zpix_sub_cat_w_sga,  save_folder + "/" + save_filename.replace(".fits","_W_SGA.fits"),comment="")
+            path_w_sga_v2 = save_folder + "/" + save_filename.replace(".fits","_W_SGA_V2.fits")
+            path_w_sga_old = save_folder + "/" + save_filename.replace(".fits","_W_SGA.fits")
+            save_table(zpix_sub_cat_w_sga, path_w_sga_v2, comment="")
+            print_catalog_overlap_diagnostics(path_w_sga_v2, path_w_sga_old)
                 
         ##add the image size pix column
     
         for sample_i in gal_types:
-            file_1 = save_folder + "/" + save_filenames[sample_i]
-            file_2 = save_folder + "/" + save_filenames[sample_i].replace(".fits","_W_SGA.fits")
+            file_1 = save_folder + "/" + save_filenames[sample_i].replace(".fits","_V2.fits")
+            file_2 = save_folder + "/" + save_filenames[sample_i].replace(".fits","_W_SGA_V2.fits")
     
             print(file_1)
             print(file_2)
@@ -1470,13 +1528,15 @@ if __name__ == '__main__':
             
             #save the file now!
             save_table(zpix_cat_1,  file_1,comment="")
+            print_catalog_overlap_diagnostics(file_1, save_folder + "/" + save_filenames[sample_i])
             save_table(zpix_cat_2,  file_2,comment="")
+            print_catalog_overlap_diagnostics(file_2, save_folder + "/" + save_filenames[sample_i].replace(".fits","_W_SGA.fits"))
 
     if process_sga:
         ##by construction, the LOWZ and ELG samples do not overlap with the SGA catalog :) 
 
-        bgsb_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_bgs_bright_filter_zsucc_zrr02_allfracflux_W_SGA.fits")
-        bgsf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_bgs_faint_filter_zsucc_zrr03_allfracflux_W_SGA.fits")
+        bgsb_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_bgs_bright_filter_zsucc_zrr02_allfracflux_W_SGA_V2.fits")
+        bgsf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_bgs_faint_filter_zsucc_zrr03_allfracflux_W_SGA_V2.fits")
 
         bgsb_cat["SAMPLE_DESI"] = ["BGS_BRIGHT"] * len(bgsb_cat)
         bgsf_cat["SAMPLE_DESI"] = ["BGS_FAINT"] * len(bgsf_cat)
@@ -1493,28 +1553,33 @@ if __name__ == '__main__':
 
 
         ##combine the catalogs to get the catalogs on which we will be running our pipeline!
+        sga_base = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs"
 
         #first we combine the catalogs that have SGA-photometry
-        bgsb_cat_sga_good = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_BGS_BRIGHT_SGA_GOOD_matched_dwarfs.fits")
-        bgsf_cat_sga_good = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_BGS_FAINT_SGA_GOOD_matched_dwarfs.fits")
+        bgsb_cat_sga_good = Table.read(f"{sga_base}/iron_BGS_BRIGHT_SGA_GOOD_matched_dwarfs_V2.fits")
+        bgsf_cat_sga_good = Table.read(f"{sga_base}/iron_BGS_FAINT_SGA_GOOD_matched_dwarfs_V2.fits")
         desi_cat_sga_good = vstack([ bgsb_cat_sga_good, bgsf_cat_sga_good ])
         print(f"Total number in DESI catalog (across robust+reprocess) that have SGA photo and candidate dwarf = {len(desi_cat_sga_good)}")
-        desi_cat_sga_good.write("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_SGA_GOOD_matched_dwarfs.fits", overwrite=True)
+        path_desi_sga_good_v2 = f"{sga_base}/iron_desi_SGA_GOOD_matched_dwarfs_V2.fits"
+        desi_cat_sga_good.write(path_desi_sga_good_v2, overwrite=True)
+        print_catalog_overlap_diagnostics(path_desi_sga_good_v2, f"{sga_base}/iron_desi_SGA_GOOD_matched_dwarfs.fits")
 
         #combine the ones we need to VI
-        bgsb_cat_sga_bad_trac_bad = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_BGS_BRIGHT_SGA_ALL_BAD.fits")
-        bgsf_cat_sga_bad_trac_bad = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_BGS_FAINT_SGA_ALL_BAD.fits")
+        bgsb_cat_sga_bad_trac_bad = Table.read(f"{sga_base}/iron_BGS_BRIGHT_SGA_ALL_BAD_V2.fits")
+        bgsf_cat_sga_bad_trac_bad = Table.read(f"{sga_base}/iron_BGS_FAINT_SGA_ALL_BAD_V2.fits")
         desi_cat_sga_bad_trac_bad = vstack([ bgsb_cat_sga_bad_trac_bad, bgsf_cat_sga_bad_trac_bad ])
 
         print(f"DESI SGA_BAD_TRAC_BAD N = {len(desi_cat_sga_bad_trac_bad)}")
 
         #save this file now!!
-        desi_cat_sga_bad_trac_bad.write("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_sga_bad_trac_bad_VI_NEEDED.fits", overwrite=True)
+        path_vi_needed_v2 = f"{sga_base}/iron_desi_sga_bad_trac_bad_VI_NEEDED_V2.fits"
+        desi_cat_sga_bad_trac_bad.write(path_vi_needed_v2, overwrite=True)
+        print_catalog_overlap_diagnostics(path_vi_needed_v2, f"{sga_base}/iron_desi_sga_bad_trac_bad_VI_NEEDED.fits")
         
     
         #combine the ones we need to send over to robust photometry catalog!!
-        bgsb_cat_sga_bad_trac_good = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_BGS_BRIGHT_SGA_BAD_TRACTOR_GOOD_matched_dwarfs.fits")
-        bgsf_cat_sga_bad_trac_good = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_BGS_FAINT_SGA_BAD_TRACTOR_GOOD_matched_dwarfs.fits")
+        bgsb_cat_sga_bad_trac_good = Table.read(f"{sga_base}/iron_BGS_BRIGHT_SGA_BAD_TRACTOR_GOOD_matched_dwarfs_V2.fits")
+        bgsf_cat_sga_bad_trac_good = Table.read(f"{sga_base}/iron_BGS_FAINT_SGA_BAD_TRACTOR_GOOD_matched_dwarfs_V2.fits")
         desi_cat_sga_bad_trac_good = vstack([ bgsb_cat_sga_bad_trac_good, bgsf_cat_sga_bad_trac_good ])
         
         # remove_targetids = np.array([39633113705355525, 39627760049588529]) #this was based on a quick VI as only 52 sources in total
@@ -1530,7 +1595,9 @@ if __name__ == '__main__':
 
         #save this. We will merge this later with the total clean catalog sources! We will not run reprocessing on this as not needed. Cannot compare with SGA as well. 
         #and we are already doing validation of robust tractor sources.
-        desi_cat_sga_bad_trac_good.write("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_sga_bad_trac_good_dwarfs_CLEAN.fits", overwrite=True)
+        path_clean_v2 = f"{sga_base}/iron_desi_sga_bad_trac_good_dwarfs_CLEAN_V2.fits"
+        desi_cat_sga_bad_trac_good.write(path_clean_v2, overwrite=True)
+        print_catalog_overlap_diagnostics(path_clean_v2, f"{sga_base}/iron_desi_sga_bad_trac_good_dwarfs_CLEAN.fits")
     
         ##process the VI'ed bad SGA catalogs!!
         if True:
@@ -1540,18 +1607,22 @@ if __name__ == '__main__':
             cat_sga_bad_trac_bad_do_reprocess["SAMPLE"] =  ["SGA"]*len(cat_sga_bad_trac_bad_do_reprocess)
            
             #this will be combined with the desi_sga catalog that we will reprocessing!! This will be done in the dwarf_photo_pipeline paper
-            cat_sga_bad_trac_bad_do_reprocess.write("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_sga_bad_trac_bad_REPROCESS.fits", overwrite=True)
+            path_reprocess_v2 = f"{sga_base}/iron_desi_sga_bad_trac_bad_REPROCESS_V2.fits"
+            cat_sga_bad_trac_bad_do_reprocess.write(path_reprocess_v2, overwrite=True)
+            print_catalog_overlap_diagnostics(path_reprocess_v2, f"{sga_base}/iron_desi_sga_bad_trac_bad_REPROCESS.fits")
 
             ##we then add this reprocess column with the SGA catalog above as those all the SGA sources we will reprocess!
 
-            desi_cat_sga_good = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_SGA_GOOD_matched_dwarfs.fits")
+            desi_cat_sga_good = Table.read(f"{sga_base}/iron_desi_SGA_GOOD_matched_dwarfs_V2.fits")
 
             desi_cat_sga_reprocess_final = vstack([ desi_cat_sga_good, cat_sga_bad_trac_bad_do_reprocess])
 
             print(f"Total number of SGA sources that we will reprocess = {len(desi_cat_sga_reprocess_final)}")
 
             #save this catalog
-            desi_cat_sga_reprocess_final.write("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_SGA_matched_dwarfs_REPROCESS.fits", overwrite=True)
+            path_sga_reprocess_final_v2 = f"{sga_base}/iron_desi_SGA_matched_dwarfs_REPROCESS_V2.fits"
+            desi_cat_sga_reprocess_final.write(path_sga_reprocess_final_v2, overwrite=True)
+            print_catalog_overlap_diagnostics(path_sga_reprocess_final_v2, f"{sga_base}/iron_desi_SGA_matched_dwarfs_REPROCESS.fits")
 
         
     
