@@ -499,3 +499,275 @@ def compute_photometry_catalog(catalog,
         print(msg)
 
     return result
+
+
+# ======================================================================
+# Nebular emission correction helpers
+# ======================================================================
+
+def _build_ew_relation(ew, delta_mag, n_bins=25, ew_lo=7.0, ew_hi=1500.0,
+                       min_count=5):
+    """Build a piecewise-linear lookup between HALPHA_EW and delta_mag.
+
+    Parameters
+    ----------
+    ew, delta_mag : 1-D arrays (same length, high-SNR subsample only)
+    n_bins : int
+        Number of log-spaced bin edges.
+    ew_lo, ew_hi : float
+        EW range for the bin edges.
+    min_count : int
+        Minimum number of sources in a bin to keep it.
+
+    Returns
+    -------
+    dict with keys 'bin_cents', 'log10_bin_cents', 'median', 'scatter_1sig'.
+    Bins with fewer than *min_count* sources are dropped.
+    """
+    x_bins = np.logspace(np.log10(ew_lo), np.log10(ew_hi), n_bins)
+    bin_cents = 0.5 * (x_bins[1:] + x_bins[:-1])
+
+    medians = np.full(len(bin_cents), np.nan)
+    scatter = np.full(len(bin_cents), np.nan)
+
+    for i in range(len(x_bins) - 1):
+        in_bin = (ew > x_bins[i]) & (ew <= x_bins[i + 1]) & np.isfinite(delta_mag)
+        if np.sum(in_bin) >= min_count:
+            vals = delta_mag[in_bin]
+            medians[i] = np.nanmedian(vals)
+            scatter[i] = (np.nanpercentile(vals, 84)
+                          - np.nanpercentile(vals, 16)) / 2.0
+
+    good = np.isfinite(medians) & np.isfinite(scatter)
+    return {
+        "bin_cents":       bin_cents[good],
+        "log10_bin_cents": np.log10(bin_cents[good]),
+        "median":          medians[good],
+        "scatter_1sig":    scatter[good],
+    }
+
+
+def apply_neb_correction_with_ew_relation(
+    halpha_ew, halpha_ew_ivar,
+    delta_mag_g_direct, delta_mag_r_direct,
+    delta_mag_g_err_direct, delta_mag_r_err_direct,
+    snr_threshold=5.0, ew_max_extrap=1000.0,
+    n_bins=25, ew_bin_lo=7.0, ew_bin_hi=1500.0,
+):
+    """Apply three-tier nebular emission correction to broadband photometry.
+
+    Tier 1 -- high SNR  (EW_SNR > *snr_threshold* **and** EW > 0):
+        Use the directly measured delta_mag from fastspec model photometry.
+    Tier 2 -- low SNR   (EW_SNR <= *snr_threshold* **and** EW > 0):
+        Piecewise-linear interpolation of the median relation built from
+        the high-SNR subsample.  The 1-sigma scatter of that relation is
+        stored as the error.  EW is clamped to [min_bin_center, *ew_max_extrap*].
+    Tier 3 -- negative EW  (EW <= 0):
+        No correction (delta_mag = 0, error = 0).
+
+    All delta_mag values are capped at >= 0 (corrections can only make
+    sources fainter).
+
+    Returns
+    -------
+    delta_mag_g, delta_mag_r, delta_mag_g_err, delta_mag_r_err : 1-D arrays
+    relation_info : dict
+        Contains 'g' and 'r' sub-dicts from ``_build_ew_relation`` plus
+        'train_mask' boolean array for the high-SNR training set.
+    """
+    ew   = np.asarray(halpha_ew, dtype=float)
+    ivar = np.asarray(halpha_ew_ivar, dtype=float)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        snr = ew * np.sqrt(np.maximum(ivar, 0.0))
+
+    # Cap direct delta_mags at zero
+    dmg = np.where(np.isfinite(delta_mag_g_direct),
+                   np.maximum(np.asarray(delta_mag_g_direct, dtype=float), 0.0),
+                   np.nan)
+    dmr = np.where(np.isfinite(delta_mag_r_direct),
+                   np.maximum(np.asarray(delta_mag_r_direct, dtype=float), 0.0),
+                   np.nan)
+
+    # ---- masks ----
+    high_snr = (snr > snr_threshold) & (ew > 0)
+    low_snr  = ~high_snr & (ew > 0)
+
+    # ---- build median relations from high-SNR subsample ----
+    train_mask = high_snr & np.isfinite(dmg) & np.isfinite(dmr)
+    rel_g = _build_ew_relation(ew[train_mask], dmg[train_mask],
+                               n_bins, ew_bin_lo, ew_bin_hi)
+    rel_r = _build_ew_relation(ew[train_mask], dmr[train_mask],
+                               n_bins, ew_bin_lo, ew_bin_hi)
+
+    # ---- populate output (initialised to zero = Tier 3 default) ----
+    n = len(ew)
+    out_g     = np.zeros(n)
+    out_r     = np.zeros(n)
+    out_g_err = np.zeros(n)
+    out_r_err = np.zeros(n)
+
+    # Tier 1: high SNR -- direct values
+    out_g[high_snr]     = dmg[high_snr]
+    out_r[high_snr]     = dmr[high_snr]
+    out_g_err[high_snr] = np.asarray(delta_mag_g_err_direct, dtype=float)[high_snr]
+    out_r_err[high_snr] = np.asarray(delta_mag_r_err_direct, dtype=float)[high_snr]
+
+    # Tier 2: low SNR -- piecewise-linear interpolation of the relation
+    if np.any(low_snr) and len(rel_g["bin_cents"]) > 1:
+        ew_clamped = np.clip(ew[low_snr], 0, ew_max_extrap)
+        log_ew = np.log10(np.maximum(ew_clamped, 1e-10))
+
+        # left=0  -> EW below lowest bin center gets no correction
+        out_g[low_snr] = np.maximum(
+            np.interp(log_ew, rel_g["log10_bin_cents"], rel_g["median"],
+                      left=0.0), 0.0)
+        out_r[low_snr] = np.maximum(
+            np.interp(log_ew, rel_r["log10_bin_cents"], rel_r["median"],
+                      left=0.0), 0.0)
+        out_g_err[low_snr] = np.maximum(
+            np.interp(log_ew, rel_g["log10_bin_cents"],
+                      rel_g["scatter_1sig"], left=0.0), 0.0)
+        out_r_err[low_snr] = np.maximum(
+            np.interp(log_ew, rel_r["log10_bin_cents"],
+                      rel_r["scatter_1sig"], left=0.0), 0.0)
+
+    # High-SNR sources with NaN model photometry -> propagate NaN
+    nan_mask = high_snr & (~np.isfinite(dmg) | ~np.isfinite(dmr))
+    out_g[nan_mask]     = np.nan
+    out_r[nan_mask]     = np.nan
+    out_g_err[nan_mask] = np.nan
+    out_r_err[nan_mask] = np.nan
+
+    # ---- diagnostics ----
+    n_high = int(np.sum(high_snr))
+    n_low  = int(np.sum(low_snr))
+    n_neg  = int(np.sum(ew <= 0))
+    n_nan  = int(np.sum(nan_mask))
+    print(f"  Nebular correction tiers: {n_high} high-SNR (direct), "
+          f"{n_low} low-SNR (interpolated), {n_neg} EW<=0 (no correction)")
+    if n_nan > 0:
+        print(f"  WARNING: {n_nan} high-SNR sources have NaN model photometry")
+    if len(rel_g["bin_cents"]) > 0:
+        print(f"  Relation EW range: "
+              f"[{rel_g['bin_cents'][0]:.1f}, {rel_g['bin_cents'][-1]:.1f}] "
+              f"Angstrom ({len(rel_g['bin_cents'])} bins)")
+    print(f"  Median delta_mag_g = {np.nanmedian(out_g):.4f}, "
+          f"Median delta_mag_r = {np.nanmedian(out_r):.4f}")
+
+    relation_info = {"g": rel_g, "r": rel_r, "train_mask": train_mask}
+    return out_g, out_r, out_g_err, out_r_err, relation_info
+
+
+def plot_neb_correction_diagnostic(
+    halpha_ew, delta_mag_g, delta_mag_r,
+    halpha_ew_snr, snr_threshold, relation_info,
+    save_path=None, gal_type="",
+):
+    """Three-panel diagnostic plot for the nebular emission correction.
+
+    Shows the high-SNR data distribution (``get_contours`` shaded bands)
+    and overlays the piecewise-linear interpolation curve +/- 1-sigma
+    scatter used for the low-SNR tier.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from desi_lowz_funcs import make_subplots, get_contours
+
+    ew  = np.asarray(halpha_ew, dtype=float)
+    snr = np.asarray(halpha_ew_snr, dtype=float)
+    dmg = np.asarray(delta_mag_g, dtype=float)
+    dmr = np.asarray(delta_mag_r, dtype=float)
+
+    high_snr = (snr > snr_threshold) & (ew > 0) & np.isfinite(dmg) & np.isfinite(dmr)
+
+    fig, ax = make_subplots(ncol=3, nrow=1, return_fig=True)
+    x_bins = np.logspace(np.log10(7), np.log10(1.5e3), 25)
+
+    # ---------- Panel 0: delta_mag_g ----------
+    x0, y0 = ew[high_snr], dmg[high_snr]
+    c0 = get_contours(x0, y0, x_bins, sigs=True)
+    col0 = "cadetblue"
+    ax[0].plot(c0["bin_cents"], c0["median"], color="k", lw=2)
+    ax[0].fill_between(c0["bin_cents"], c0["sig1_low"], c0["sig1_high"],
+                       alpha=0.5, color=col0)
+    ax[0].fill_between(c0["bin_cents"], c0["sig2_low"], c0["sig2_high"],
+                       alpha=0.25, color=col0)
+
+    rel_g = relation_info["g"]
+    if len(rel_g["bin_cents"]) > 0:
+        ax[0].plot(rel_g["bin_cents"], rel_g["median"],
+                   color="orangered", lw=2, ls="--", label="interp median")
+        ax[0].fill_between(
+            rel_g["bin_cents"],
+            np.maximum(rel_g["median"] - rel_g["scatter_1sig"], 0),
+            rel_g["median"] + rel_g["scatter_1sig"],
+            alpha=0.3, color="orangered", label=r"interp $\pm1\sigma$")
+        ax[0].legend(fontsize=8, loc="upper left")
+
+    # ---------- Panel 1: delta_mag_r ----------
+    x1, y1 = ew[high_snr], dmr[high_snr]
+    c1 = get_contours(x1, y1, x_bins, sigs=True)
+    col1 = "firebrick"
+    ax[1].plot(c1["bin_cents"], c1["median"], color="k", lw=2)
+    ax[1].fill_between(c1["bin_cents"], c1["sig1_low"], c1["sig1_high"],
+                       alpha=0.5, color=col1)
+    ax[1].fill_between(c1["bin_cents"], c1["sig2_low"], c1["sig2_high"],
+                       alpha=0.25, color=col1)
+
+    rel_r = relation_info["r"]
+    if len(rel_r["bin_cents"]) > 0:
+        ax[1].plot(rel_r["bin_cents"], rel_r["median"],
+                   color="orangered", lw=2, ls="--")
+        ax[1].fill_between(
+            rel_r["bin_cents"],
+            np.maximum(rel_r["median"] - rel_r["scatter_1sig"], 0),
+            rel_r["median"] + rel_r["scatter_1sig"],
+            alpha=0.3, color="orangered")
+
+    # ---------- Panel 2: delta(g-r) ----------
+    x2 = ew[high_snr]
+    y2 = dmg[high_snr] - dmr[high_snr]
+    c2 = get_contours(x2, y2, x_bins, sigs=True)
+    col2 = "grey"
+    ax[2].plot(c2["bin_cents"], c2["median"], color="k", lw=2)
+    ax[2].fill_between(c2["bin_cents"], c2["sig1_low"], c2["sig1_high"],
+                       alpha=0.5, color=col2)
+    ax[2].fill_between(c2["bin_cents"], c2["sig2_low"], c2["sig2_high"],
+                       alpha=0.25, color=col2)
+
+    if len(rel_g["bin_cents"]) > 0 and len(rel_r["bin_cents"]) > 0:
+        common_lo = max(rel_g["log10_bin_cents"][0],
+                        rel_r["log10_bin_cents"][0])
+        common_hi = min(rel_g["log10_bin_cents"][-1],
+                        rel_r["log10_bin_cents"][-1])
+        common_log_ew = np.linspace(common_lo, common_hi, 50)
+        common_ew = 10**common_log_ew
+        ig = np.interp(common_log_ew, rel_g["log10_bin_cents"],
+                       rel_g["median"])
+        ir = np.interp(common_log_ew, rel_r["log10_bin_cents"],
+                       rel_r["median"])
+        ax[2].plot(common_ew, ig - ir, color="orangered", lw=2, ls="--")
+
+    for axi in ax:
+        axi.set_xlim([10, 1e3])
+        axi.set_xscale("log")
+        axi.set_xlabel(r"H$\alpha$ EW ($\AA$)", fontsize=15)
+
+    ax[0].set_ylim([0, 1])
+    ax[1].set_ylim([0, 1])
+    ax[2].set_ylim([-0.5, 0.5])
+
+    ax[0].set_ylabel(r"$g_{\rm wo/neb}$ - $g_{\rm w/neb}$", fontsize=17.5)
+    ax[1].set_ylabel(r"$r_{\rm wo/neb}$ - $r_{\rm w/neb}$", fontsize=17.5)
+    ax[2].set_ylabel(
+        r"$(g-r)_{\rm wo/neb}$ - $(g-r)_{\rm w/neb}$", fontsize=17.5)
+
+    if gal_type:
+        fig.suptitle(gal_type, fontsize=16, y=1.02)
+
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        print(f"  Saved diagnostic plot: {save_path}")
+    plt.close(fig)

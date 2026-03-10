@@ -1408,7 +1408,9 @@ if __name__ == '__main__':
 
 
     if run_neb_correction:
-        from fastspec_funcs import compute_photometry_catalog
+        from fastspec_funcs import (compute_photometry_catalog,
+                                     apply_neb_correction_with_ew_relation,
+                                     plot_neb_correction_diagnostic)
 
         overwrite = False
 
@@ -1461,31 +1463,38 @@ if __name__ == '__main__':
             assert np.array_equal(samp_i_cat["TARGETID"].data, result_samp_i["TARGETID"].data), \
                 "TARGETID ordering mismatch after reordering!"
 
-            # Delta magnitudes: no_emission minus with_emission (positive = nebular was brightening)
-            delta_mag_g = result_samp_i["g_model_no_emi"].data - result_samp_i["g_model_w_emi"].data
-            delta_mag_r = result_samp_i["r_model_no_emi"].data - result_samp_i["r_model_w_emi"].data
+            # Raw delta magnitudes from model photometry (no_emi - w_emi)
+            delta_mag_g_raw = result_samp_i["g_model_no_emi"].data - result_samp_i["g_model_w_emi"].data
+            delta_mag_r_raw = result_samp_i["r_model_no_emi"].data - result_samp_i["r_model_w_emi"].data
 
-            # Cap at zero: only allow corrections that make sources fainter.
-            # Preserve NaN so objects with failed model photometry propagate to NaN
-            # stellar masses and get removed by the 9.25 cut.
-            delta_mag_g = np.where(np.isfinite(delta_mag_g), np.maximum(delta_mag_g, 0.0), np.nan)
-            delta_mag_r = np.where(np.isfinite(delta_mag_r), np.maximum(delta_mag_r, 0.0), np.nan)
+            halpha_ew = np.asarray(result_samp_i["HALPHA_EW"].data, dtype=float)
+            halpha_ew_ivar = np.asarray(result_samp_i["HALPHA_EW_IVAR"].data, dtype=float)
 
-            n_nan_g = np.sum(~np.isfinite(delta_mag_g))
-            n_nan_r = np.sum(~np.isfinite(delta_mag_r))
-            if n_nan_g > 0 or n_nan_r > 0:
-                print(f"{gal_type}: WARNING: {n_nan_g} NaN in delta_mag_g, {n_nan_r} NaN in delta_mag_r "
-                      f"(will be excluded by mass cut)")
-
-            # Errors from the synthesized absolute-magnitude IVAR (safe division for zero IVAR)
+            # Raw errors from synthesised absolute-magnitude IVAR
             ivar_g = np.array(result_samp_i["ABSMAG01_SYNTH_IVAR_SDSS_G"].data, dtype=float)
             ivar_r = np.array(result_samp_i["ABSMAG01_SYNTH_IVAR_SDSS_R"].data, dtype=float)
             with np.errstate(divide='ignore', invalid='ignore'):
-                delta_mag_g_err = np.where(ivar_g > 0, np.sqrt(1.0 / ivar_g), np.nan)
-                delta_mag_r_err = np.where(ivar_r > 0, np.sqrt(1.0 / ivar_r), np.nan)
+                delta_mag_g_err_raw = np.where(ivar_g > 0, np.sqrt(1.0 / ivar_g), np.nan)
+                delta_mag_r_err_raw = np.where(ivar_r > 0, np.sqrt(1.0 / ivar_r), np.nan)
 
-            print(f"{gal_type}: Median delta_mag_g = {np.nanmedian(delta_mag_g):.4f}, "
-                  f"Median delta_mag_r = {np.nanmedian(delta_mag_r):.4f}")
+            # Three-tier nebular correction (high-SNR direct, low-SNR interpolated, EW<=0 none)
+            print(f"{gal_type}: Applying three-tier nebular correction...")
+            delta_mag_g, delta_mag_r, delta_mag_g_err, delta_mag_r_err, relation_info = \
+                apply_neb_correction_with_ew_relation(
+                    halpha_ew, halpha_ew_ivar,
+                    delta_mag_g_raw, delta_mag_r_raw,
+                    delta_mag_g_err_raw, delta_mag_r_err_raw,
+                )
+
+            # Diagnostic plot
+            with np.errstate(divide="ignore", invalid="ignore"):
+                halpha_ew_snr = halpha_ew * np.sqrt(np.maximum(halpha_ew_ivar, 0.0))
+            diag_plot_path = save_folder + f"/neb_correction_diagnostic_{gal_type}.png"
+            plot_neb_correction_diagnostic(
+                halpha_ew, delta_mag_g, delta_mag_r,
+                halpha_ew_snr, 5.0, relation_info,
+                save_path=diag_plot_path, gal_type=gal_type,
+            )
 
             # Correct photometry: adding positive delta makes new mag fainter (removes nebular contamination)
             # Original MAG_G/MAG_R columns are NOT modified in the catalog
