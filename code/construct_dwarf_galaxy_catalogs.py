@@ -670,10 +670,11 @@ def get_lowz_catalogs(zpix):
     ##let us save these
     lowz_zpix_v2 = "/pscratch/sd/v/virajvm/catalog/lowz_dark_zpix_iron_V2.fits"
     lowz_trac_v2 = "/pscratch/sd/v/virajvm/catalog/lowz_dark_tracphot_iron_V2.fits"
+    
     save_table(zpix_lowz_f, lowz_zpix_v2)
     print_catalog_overlap_diagnostics(lowz_zpix_v2, "/pscratch/sd/v/virajvm/catalog/lowz_dark_zpix_iron.fits")
+    
     save_table(zpix_trac_lowz_f, lowz_trac_v2)
-    print_catalog_overlap_diagnostics(lowz_trac_v2, "/pscratch/sd/v/virajvm/catalog/lowz_dark_tracphot_iron.fits")
 
     print(f"LOWZ: Number of objects after matching = {len(zpix_lowz_f)}")
     print(f"LOWZ: Number of trac objects after matching = {len(zpix_trac_lowz_f)}")
@@ -1092,6 +1093,9 @@ if __name__ == '__main__':
     compute_nam_dists = True
     save_int_catalog = True
 
+    #should the photometry and stellar masses be corrected for nebular emission contamination?
+    run_neb_correction = True
+
     zred_cuts = { "BGS_BRIGHT" : 0.4, "BGS_FAINT": 0.4, "LOWZ": 0.4, "ELG":0.5 }
  
     gal_types = ["LOWZ", "ELG", "BGS_FAINT", "BGS_BRIGHT"]
@@ -1399,6 +1403,52 @@ if __name__ == '__main__':
             path_int_old = save_folder + "/" + save_filename.replace(".fits","_INT.fits")
             save_table(zpix_sub_cat_f, path_int_v2, comment="")
             print_catalog_overlap_diagnostics(path_int_v2, path_int_old)
+
+
+
+    if run_neb_correction:
+
+        for gal_Type in ...:
+        #If true, we one by one loop over the four sample files (using the latest V2 file)
+        #from fastspec_funcs import compute_photometry_catalog and run
+        # Model only (no H5 needed, faster)
+        overwrite=False
+        #check if the output file exists, if it does load that instead and check it matches in TARGETID with samp_i_ct
+        result_samp_i = compute_photometry_catalog(
+            samp_i_cat,
+            compute_data_photometry=False,
+            save_path=f"{save_path}/model_photometry_diffs_{sample}.fits",
+        )
+
+        #make sure tht samp_i_cat is same order as result_samp_i as we will be doing manipulations below
+
+        #this catalog returns a bunch of columns and they are saved in the above file as well
+
+        #we specifically want to save the following columns:
+
+        #this is faint minus bright, so will be a positive number
+        #we will cap these values to a minimum of zero
+        delta_mag_g = result_samp_i["g_model_no_emi"].data - result_samp_i["g_model_w_emi"].data
+        delta_mag_r = result_samp_i["r_model_no_emi"].data - result_samp_i["r_model_w_emi"].data
+
+        #and then
+        delta_mag_g_err = np.sqrt(1/result_samp_i["ABSMAG01_SYNTH_IVAR_SDSS_G"])
+        delta_mag_r_err = np.sqrt(1/result_samp_i["ABSMAG01_SYNTH_IVAR_SDSS_R"])
+
+        #and we then correct the photometry for these quantities
+        mag_g_new = MAG_G + delta_mag_g #delta_mag_g is +ve and so we are making new mag fainter as remoing nebular contamintion
+        mag_r_new = MAG_R + delta_mag_r #delta_mag_g is +ve and so we are making new mag fainter as remoing nebular contamintion
+
+        #nd then using the LUMI_DIST Z_CMB and updted photometry here, we recompute the stellar mass and then reapply the 9.25 cut
+
+        #print statistics on how many objects were removed with this updated stellar mass estimte and then re-applying cut!
+
+        #we then re do the diagnostic tests with the old int file
+        #we will then save a new catalog file with this cutdown catlaog called _INT_V2_NEBCORR.fits or something
+        #note in this new catalog save the new columns delta_mag_g, delta_mag_r, etc ...
+
+        #we will just save these corrections and not change the MAG_G etc. columns in catalog as we need them in their originl format as is
+
 
             
     if False:
