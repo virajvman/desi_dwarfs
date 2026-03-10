@@ -1091,7 +1091,7 @@ if __name__ == '__main__':
 
     process_sga = False
     compute_nam_dists = True
-    save_int_catalog = True
+    save_int_catalog = False
 
     #should the photometry and stellar masses be corrected for nebular emission contamination?
     run_neb_correction = True
