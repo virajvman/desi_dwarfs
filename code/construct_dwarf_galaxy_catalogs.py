@@ -1095,6 +1095,7 @@ if __name__ == '__main__':
 
     #should the photometry and stellar masses be corrected for nebular emission contamination?
     run_neb_correction = True
+    ncore_neb = 4
 
     zred_cuts = { "BGS_BRIGHT" : 0.4, "BGS_FAINT": 0.4, "LOWZ": 0.4, "ELG":0.5 }
  
@@ -1407,50 +1408,138 @@ if __name__ == '__main__':
 
 
     if run_neb_correction:
+        from fastspec_funcs import compute_photometry_catalog
 
-        for gal_Type in ...:
-        #If true, we one by one loop over the four sample files (using the latest V2 file)
-        #from fastspec_funcs import compute_photometry_catalog and run
-        # Model only (no H5 needed, faster)
-        overwrite=False
-        #check if the output file exists, if it does load that instead and check it matches in TARGETID with samp_i_ct
-        result_samp_i = compute_photometry_catalog(
-            samp_i_cat,
-            compute_data_photometry=False,
-            save_path=f"{save_path}/model_photometry_diffs_{sample}.fits",
-        )
+        overwrite = False
 
-        #make sure tht samp_i_cat is same order as result_samp_i as we will be doing manipulations below
+        for gal_type in gal_types:
+            save_filename = save_filenames[gal_type]
 
-        #this catalog returns a bunch of columns and they are saved in the above file as well
+            int_v2_path = save_folder + "/" + save_filename.replace(".fits", "_INT_V2.fits")
+            print(f"\n{'='*60}")
+            print(f"Nebular emission correction for {gal_type}")
+            print(f"Reading {int_v2_path}")
 
-        #we specifically want to save the following columns:
+            samp_i_cat_full = Table.read(int_v2_path)
+            print(f"{gal_type}: Number of sources in INT_V2 catalog = {len(samp_i_cat_full)}")
 
-        #this is faint minus bright, so will be a positive number
-        #we will cap these values to a minimum of zero
-        delta_mag_g = result_samp_i["g_model_no_emi"].data - result_samp_i["g_model_w_emi"].data
-        delta_mag_r = result_samp_i["r_model_no_emi"].data - result_samp_i["r_model_w_emi"].data
+            # Light pre-filter: only process objects with LOGM_M24_FIDU < 9.5.
+            # The 0.25 dex margin above the final 9.25 cut accommodates objects whose
+            # mass will decrease after nebular correction and should enter the catalog.
+            precut_mask = (samp_i_cat_full["LOGM_M24_FIDU"] < 9.5) & (samp_i_cat_full["LOGM_M24_FIDU"] > -90)
+            samp_i_cat = samp_i_cat_full[precut_mask]
+            print(f"{gal_type}: After LOGM_M24_FIDU < 9.5 pre-filter = {len(samp_i_cat)} "
+                  f"(removed {np.sum(~precut_mask)})")
 
-        #and then
-        delta_mag_g_err = np.sqrt(1/result_samp_i["ABSMAG01_SYNTH_IVAR_SDSS_G"])
-        delta_mag_r_err = np.sqrt(1/result_samp_i["ABSMAG01_SYNTH_IVAR_SDSS_R"])
+            neb_photo_path = save_folder + f"/model_photometry_diffs_{gal_type}.fits"
 
-        #and we then correct the photometry for these quantities
-        mag_g_new = MAG_G + delta_mag_g #delta_mag_g is +ve and so we are making new mag fainter as remoing nebular contamintion
-        mag_r_new = MAG_R + delta_mag_r #delta_mag_g is +ve and so we are making new mag fainter as remoing nebular contamintion
+            if os.path.exists(neb_photo_path) and not overwrite:
+                print(f"Loading existing nebular photometry from {neb_photo_path}")
+                result_samp_i = Table.read(neb_photo_path)
+                cat_tids = set(samp_i_cat["TARGETID"].data)
+                res_tids = set(result_samp_i["TARGETID"].data)
+                if cat_tids != res_tids:
+                    print("WARNING: TARGETIDs mismatch between catalog and cached result. Recomputing...")
+                    result_samp_i = compute_photometry_catalog(
+                        samp_i_cat,
+                        compute_data_photometry=False,
+                        save_path=neb_photo_path,
+                        ncore=ncore_neb,
+                    )
+            else:
+                result_samp_i = compute_photometry_catalog(
+                    samp_i_cat,
+                    compute_data_photometry=False,
+                    save_path=neb_photo_path,
+                    ncore=ncore_neb,
+                )
 
-        #nd then using the LUMI_DIST Z_CMB and updted photometry here, we recompute the stellar mass and then reapply the 9.25 cut
+            # Reorder result to match samp_i_cat row ordering
+            result_tid_to_idx = {tid: idx for idx, tid in enumerate(result_samp_i["TARGETID"].data)}
+            reorder_idx = np.array([result_tid_to_idx[tid] for tid in samp_i_cat["TARGETID"].data])
+            result_samp_i = result_samp_i[reorder_idx]
+            assert np.array_equal(samp_i_cat["TARGETID"].data, result_samp_i["TARGETID"].data), \
+                "TARGETID ordering mismatch after reordering!"
 
-        #print statistics on how many objects were removed with this updated stellar mass estimte and then re-applying cut!
+            # Delta magnitudes: no_emission minus with_emission (positive = nebular was brightening)
+            delta_mag_g = result_samp_i["g_model_no_emi"].data - result_samp_i["g_model_w_emi"].data
+            delta_mag_r = result_samp_i["r_model_no_emi"].data - result_samp_i["r_model_w_emi"].data
 
-        #we then re do the diagnostic tests with the old int file
-        #we will then save a new catalog file with this cutdown catlaog called _INT_V2_NEBCORR.fits or something
-        #note in this new catalog save the new columns delta_mag_g, delta_mag_r, etc ...
+            # Cap at zero: only allow corrections that make sources fainter.
+            # Preserve NaN so objects with failed model photometry propagate to NaN
+            # stellar masses and get removed by the 9.25 cut.
+            delta_mag_g = np.where(np.isfinite(delta_mag_g), np.maximum(delta_mag_g, 0.0), np.nan)
+            delta_mag_r = np.where(np.isfinite(delta_mag_r), np.maximum(delta_mag_r, 0.0), np.nan)
 
-        #we will just save these corrections and not change the MAG_G etc. columns in catalog as we need them in their originl format as is
+            n_nan_g = np.sum(~np.isfinite(delta_mag_g))
+            n_nan_r = np.sum(~np.isfinite(delta_mag_r))
+            if n_nan_g > 0 or n_nan_r > 0:
+                print(f"{gal_type}: WARNING: {n_nan_g} NaN in delta_mag_g, {n_nan_r} NaN in delta_mag_r "
+                      f"(will be excluded by mass cut)")
 
+            # Errors from the synthesized absolute-magnitude IVAR (safe division for zero IVAR)
+            ivar_g = np.array(result_samp_i["ABSMAG01_SYNTH_IVAR_SDSS_G"].data, dtype=float)
+            ivar_r = np.array(result_samp_i["ABSMAG01_SYNTH_IVAR_SDSS_R"].data, dtype=float)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                delta_mag_g_err = np.where(ivar_g > 0, np.sqrt(1.0 / ivar_g), np.nan)
+                delta_mag_r_err = np.where(ivar_r > 0, np.sqrt(1.0 / ivar_r), np.nan)
 
-            
+            print(f"{gal_type}: Median delta_mag_g = {np.nanmedian(delta_mag_g):.4f}, "
+                  f"Median delta_mag_r = {np.nanmedian(delta_mag_r):.4f}")
+
+            # Correct photometry: adding positive delta makes new mag fainter (removes nebular contamination)
+            # Original MAG_G/MAG_R columns are NOT modified in the catalog
+            mag_g_new = samp_i_cat["MAG_G"].data + delta_mag_g
+            mag_r_new = samp_i_cat["MAG_R"].data + delta_mag_r
+
+            # Recompute stellar mass with nebular-corrected photometry
+            gr_colors_new = mag_g_new - mag_r_new
+            zred_mask = (samp_i_cat["Z"].data < 0.5)
+
+            logm_neb_corr = -99.0 * np.ones(len(samp_i_cat))
+            mstars_new = get_stellar_mass_mia(
+                gr_colors_new[zred_mask],
+                mag_g_new[zred_mask],
+                samp_i_cat["Z_CMB"][zred_mask].data,
+                d_in_mpc=samp_i_cat["DIST_MPC_FIDU"][zred_mask].data,
+                input_zred=False,
+            )
+            logm_neb_corr[zred_mask] = mstars_new
+
+            # Compare old vs new stellar mass cut
+            logm_old = samp_i_cat["LOGM_M24_FIDU"].data
+            valid_old = logm_old > -90
+            valid_new = logm_neb_corr > -90
+
+            n_old_pass = np.sum(logm_old[valid_old] < 9.25)
+            n_new_pass = np.sum(logm_neb_corr[valid_new] < 9.25)
+            print(f"{gal_type}: Objects with log(M*) < 9.25 using OLD photometry: {n_old_pass}")
+            print(f"{gal_type}: Objects with log(M*) < 9.25 using NEW (neb-corrected) photometry: {n_new_pass}")
+            print(f"{gal_type}: Additional objects removed by neb-corrected stellar mass: {n_old_pass - n_new_pass}")
+
+            # Apply 9.25 stellar mass cut with the nebular-corrected masses
+            keep_mask = (logm_neb_corr < 9.25) & (logm_neb_corr > -90)
+            n_before = len(samp_i_cat)
+            samp_i_cat_cut = samp_i_cat[keep_mask]
+
+            print(f"{gal_type}: N before neb-corr mass cut = {n_before}, "
+                  f"N after = {len(samp_i_cat_cut)}, removed = {n_before - len(samp_i_cat_cut)}")
+
+            # Attach correction and diagnostic columns (do NOT overwrite MAG_G / MAG_R)
+            samp_i_cat_cut["DELTA_MAG_G_NEB"] = delta_mag_g[keep_mask]
+            samp_i_cat_cut["DELTA_MAG_R_NEB"] = delta_mag_r[keep_mask]
+            samp_i_cat_cut["DELTA_MAG_G_NEB_ERR"] = delta_mag_g_err[keep_mask]
+            samp_i_cat_cut["DELTA_MAG_R_NEB_ERR"] = delta_mag_r_err[keep_mask]
+            samp_i_cat_cut["LOGM_M24_FIDU_NEBCORR"] = logm_neb_corr[keep_mask]
+            samp_i_cat_cut["HALPHA_EW"] = result_samp_i["HALPHA_EW"].data[keep_mask]
+            samp_i_cat_cut["HALPHA_EW_IVAR"] = result_samp_i["HALPHA_EW_IVAR"].data[keep_mask]
+
+            # Save the nebular-corrected catalog
+            path_nebcorr = save_folder + "/" + save_filename.replace(".fits", "_INT_V2_NEBCORR.fits")
+            path_int_old = save_folder + "/" + save_filename.replace(".fits", "_INT.fits")
+            save_table(samp_i_cat_cut, path_nebcorr, comment="")
+            print_catalog_overlap_diagnostics(path_nebcorr, path_int_old)
+
     if False:
         
         for i,gal_type in enumerate(gal_types):

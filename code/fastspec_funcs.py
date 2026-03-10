@@ -102,6 +102,7 @@ from astropy.table import Table
 import speclite.filters
 from astropy import units as u
 import h5py
+import multiprocessing as mp
 
 # Load filters once at module level
 DECAM_G = speclite.filters.load_filters('decamDR1noatm-g')
@@ -136,12 +137,103 @@ def measure_photo_batch(wave_arr, flux_2d):
     return mag_g, mag_r
 
 
+def _process_single_file(args):
+    """
+    Process one fastspecfit FITS file for model-only photometry.
+    Used as a multiprocessing worker by compute_photometry_catalog.
+
+    Parameters
+    ----------
+    args : tuple
+        (upath, cat_indices, targetids_for_file, batch_size)
+
+    Returns
+    -------
+    dict or None
+        Dict with 'cat_indices' and photometry/absmag arrays, or None on failure.
+    """
+    upath, cat_indices, targetids_for_file, batch_size = args
+
+    try:
+        iron_vac = fits.open(upath, memmap=True)
+    except Exception:
+        return None
+
+    try:
+        header = iron_vac["MODELS"].header
+        wavelength = (header["CRVAL1"]
+                      + (np.arange(header["NAXIS1"]) - header["CRPIX1"]) * header["CDELT1"])
+        model_data = iron_vac["MODELS"].data
+
+        specphot_data = iron_vac["SPECPHOT"].data
+        fastspec_data = iron_vac["FASTSPEC"].data
+        tgids_file = specphot_data["TARGETID"]
+        tgid_to_fits_row = {t: i for i, t in enumerate(tgids_file)}
+
+        valid_cat = []
+        valid_fits_rows = []
+        for ci_local, ci in enumerate(cat_indices):
+            row = tgid_to_fits_row.get(targetids_for_file[ci_local])
+            if row is not None:
+                valid_cat.append(ci)
+                valid_fits_rows.append(row)
+
+        if len(valid_cat) == 0:
+            return None
+
+        valid_cat = np.array(valid_cat)
+        valid_fits_rows = np.array(valid_fits_rows)
+        n_valid = len(valid_cat)
+
+        result = {
+            "cat_indices":   valid_cat,
+            "absmag_g":      np.array(specphot_data["ABSMAG01_SYNTH_SDSS_G"][valid_fits_rows], dtype=float),
+            "absmag_r":      np.array(specphot_data["ABSMAG01_SYNTH_SDSS_R"][valid_fits_rows], dtype=float),
+            "absmag_ivar_g": np.array(specphot_data["ABSMAG01_SYNTH_IVAR_SDSS_G"][valid_fits_rows], dtype=float),
+            "absmag_ivar_r": np.array(specphot_data["ABSMAG01_SYNTH_IVAR_SDSS_R"][valid_fits_rows], dtype=float),
+            "halpha_ew":      np.array(fastspec_data["HALPHA_EW"][valid_fits_rows], dtype=float),
+            "halpha_ew_ivar": np.array(fastspec_data["HALPHA_EW_IVAR"][valid_fits_rows], dtype=float),
+        }
+
+        continuum = model_data[valid_fits_rows, 0, :]
+        emission  = model_data[valid_fits_rows, 2, :]
+
+        g_no_emi = np.full(n_valid, np.nan)
+        r_no_emi = np.full(n_valid, np.nan)
+        g_w_emi  = np.full(n_valid, np.nan)
+        r_w_emi  = np.full(n_valid, np.nan)
+
+        for flux_2d, g_arr, r_arr in [
+            (continuum,            g_no_emi, r_no_emi),
+            (continuum + emission, g_w_emi,  r_w_emi),
+        ]:
+            for start in range(0, n_valid, batch_size):
+                end = min(start + batch_size, n_valid)
+                try:
+                    mg, mr = measure_photo_batch(wavelength, flux_2d[start:end])
+                    g_arr[start:end] = mg
+                    r_arr[start:end] = mr
+                except Exception:
+                    pass
+
+        result["g_model_no_emi"] = g_no_emi
+        result["r_model_no_emi"] = r_no_emi
+        result["g_model_w_emi"]  = g_w_emi
+        result["r_model_w_emi"]  = r_w_emi
+
+    finally:
+        iron_vac.close()
+
+    return result
+
+
 def compute_photometry_catalog(catalog,
                                spectra_h5_path=None,
                                compute_data_photometry=True,
                                base_dir="/global/cfs/cdirs/desi/public/dr1/vac/dr1/fastspecfit/iron/v3.0/healpix",
                                save_path=None,
                                batch_size=500,
+                               ncore=1,
                                verbose=True):
     """
     Loop over all objects in a DESI catalog, extract fastspecfit models,
@@ -165,6 +257,9 @@ def compute_photometry_catalog(catalog,
         If provided, write the output table to this path (FITS format).
     batch_size : int
         Number of spectra per batch for speclite.
+    ncore : int
+        Number of parallel workers. Only used when compute_data_photometry=False.
+        Falls back to serial if compute_data_photometry=True.
     verbose : bool
         Print progress updates.
 
@@ -173,9 +268,12 @@ def compute_photometry_catalog(catalog,
     result : astropy Table
     """
 
-    #TODO: make this code parallelize as we will have a lot of objects and need to be faster
-    #just make sure the TARGETID has same order at end as input
-    
+    use_parallel = (ncore > 1) and (not compute_data_photometry)
+    if ncore > 1 and compute_data_photometry:
+        if verbose:
+            print("WARNING: Parallel mode not supported with compute_data_photometry=True. "
+                  "Falling back to serial.")
+
     n_objects = len(catalog)
     targetids = np.array(catalog["TARGETID"])
 
@@ -198,19 +296,19 @@ def compute_photometry_catalog(catalog,
             print(f"  Loaded {len(h5_targetid)} spectra, wave shape {h5_wave.shape}")
 
     # ---- Output arrays ----
-    # Model photometry (always computed)
     g_model_no_emi = np.full(n_objects, np.nan)
     r_model_no_emi = np.full(n_objects, np.nan)
     g_model_w_emi  = np.full(n_objects, np.nan)
     r_model_w_emi  = np.full(n_objects, np.nan)
 
-    # Absolute magnitudes from SPECPHOT (always extracted)
     absmag_g       = np.full(n_objects, np.nan)
     absmag_r       = np.full(n_objects, np.nan)
     absmag_ivar_g  = np.full(n_objects, np.nan)
     absmag_ivar_r  = np.full(n_objects, np.nan)
 
-    # Data photometry (only if requested)
+    halpha_ew      = np.full(n_objects, np.nan)
+    halpha_ew_ivar = np.full(n_objects, np.nan)
+
     if compute_data_photometry:
         g_data_no_emi = np.full(n_objects, np.nan)
         r_data_no_emi = np.full(n_objects, np.nan)
@@ -224,105 +322,144 @@ def compute_photometry_catalog(catalog,
         for i in range(n_objects)
     ])
     unique_paths = np.unique(paths)
+    n_files = len(unique_paths)
 
     if verbose:
-        print(f"Total objects: {n_objects}, unique FITS files: {len(unique_paths)}")
+        print(f"Total objects: {n_objects}, unique FITS files: {n_files}")
 
-    for file_idx, upath in enumerate(unique_paths):
-        cat_indices = np.where(paths == upath)[0]
+    # ==================================================================
+    # PARALLEL PATH: model-only photometry across multiple cores
+    # ==================================================================
+    if use_parallel:
+        work_items = []
+        for upath in unique_paths:
+            ci = np.where(paths == upath)[0]
+            work_items.append((upath, ci, targetids[ci], batch_size))
 
-        try:
-            iron_vac = fits.open(upath, memmap=True)
-        except Exception as e:
-            if verbose:
-                print(f"  SKIP file {upath}: {e}")
-            continue
+        if verbose:
+            print(f"Processing {n_files} files with {ncore} cores ...")
 
-        try:
-            # Use extension names for version-agnostic access
-            header = iron_vac["MODELS"].header
-            wavelength = (header["CRVAL1"]
-                          + (np.arange(header["NAXIS1"]) - header["CRPIX1"]) * header["CDELT1"])
-            model_data = iron_vac["MODELS"].data
+        files_done = 0
+        with mp.Pool(ncore) as pool:
+            for file_result in pool.imap_unordered(_process_single_file, work_items):
+                files_done += 1
+                if file_result is None:
+                    continue
+                idx = file_result["cat_indices"]
+                g_model_no_emi[idx] = file_result["g_model_no_emi"]
+                r_model_no_emi[idx] = file_result["r_model_no_emi"]
+                g_model_w_emi[idx]  = file_result["g_model_w_emi"]
+                r_model_w_emi[idx]  = file_result["r_model_w_emi"]
+                absmag_g[idx]       = file_result["absmag_g"]
+                absmag_r[idx]       = file_result["absmag_r"]
+                absmag_ivar_g[idx]  = file_result["absmag_ivar_g"]
+                absmag_ivar_r[idx]  = file_result["absmag_ivar_r"]
+                halpha_ew[idx]      = file_result["halpha_ew"]
+                halpha_ew_ivar[idx] = file_result["halpha_ew_ivar"]
+                if verbose and files_done % 50 == 0:
+                    print(f"  Processed {files_done}/{n_files} files")
 
-            specphot_data = iron_vac["SPECPHOT"].data
-            tgids_file = specphot_data["TARGETID"]
-            tgid_to_fits_row = {t: i for i, t in enumerate(tgids_file)}
+        if verbose:
+            print(f"  Processed {files_done}/{n_files} files (done)")
 
-            # Match catalog objects to FITS rows
-            valid_cat = []
-            valid_fits_rows = []
-            for ci in cat_indices:
-                row = tgid_to_fits_row.get(targetids[ci])
-                if row is not None:
-                    valid_cat.append(ci)
-                    valid_fits_rows.append(row)
-                elif verbose:
-                    print(f"  WARNING: TARGETID {targetids[ci]} not in {upath}")
+    # ==================================================================
+    # SERIAL PATH: original loop (supports data photometry)
+    # ==================================================================
+    else:
+        for file_idx, upath in enumerate(unique_paths):
+            cat_indices = np.where(paths == upath)[0]
 
-            if len(valid_cat) == 0:
+            try:
+                iron_vac = fits.open(upath, memmap=True)
+            except Exception as e:
+                if verbose:
+                    print(f"  SKIP file {upath}: {e}")
                 continue
 
-            valid_cat = np.array(valid_cat)
-            valid_fits_rows = np.array(valid_fits_rows)
+            try:
+                header = iron_vac["MODELS"].header
+                wavelength = (header["CRVAL1"]
+                              + (np.arange(header["NAXIS1"]) - header["CRPIX1"]) * header["CDELT1"])
+                model_data = iron_vac["MODELS"].data
 
-            # ---- Extract absolute magnitudes from SPECPHOT ----
-            absmag_g[valid_cat]      = specphot_data["ABSMAG01_SYNTH_SDSS_G"][valid_fits_rows]
-            absmag_r[valid_cat]      = specphot_data["ABSMAG01_SYNTH_SDSS_R"][valid_fits_rows]
-            absmag_ivar_g[valid_cat] = specphot_data["ABSMAG01_SYNTH_IVAR_SDSS_G"][valid_fits_rows]
-            absmag_ivar_r[valid_cat] = specphot_data["ABSMAG01_SYNTH_IVAR_SDSS_R"][valid_fits_rows]
+                specphot_data = iron_vac["SPECPHOT"].data
+                fastspec_data = iron_vac["FASTSPEC"].data
+                tgids_file = specphot_data["TARGETID"]
+                tgid_to_fits_row = {t: i for i, t in enumerate(tgids_file)}
 
-            # ---- Model photometry ----
-            continuum = model_data[valid_fits_rows, 0, :]
-            emission  = model_data[valid_fits_rows, 2, :]
+                valid_cat = []
+                valid_fits_rows = []
+                for ci in cat_indices:
+                    row = tgid_to_fits_row.get(targetids[ci])
+                    if row is not None:
+                        valid_cat.append(ci)
+                        valid_fits_rows.append(row)
+                    elif verbose:
+                        print(f"  WARNING: TARGETID {targetids[ci]} not in {upath}")
 
-            model_variants = {
-                "model_no_emi": (continuum,            g_model_no_emi, r_model_no_emi),
-                "model_w_emi":  (continuum + emission, g_model_w_emi,  r_model_w_emi),
-            }
-            for vname, (flux_2d, g_out, r_out) in model_variants.items():
-                for start in range(0, len(valid_cat), batch_size):
-                    end = min(start + batch_size, len(valid_cat))
-                    try:
-                        mg, mr = measure_photo_batch(wavelength, flux_2d[start:end])
-                        g_out[valid_cat[start:end]] = mg
-                        r_out[valid_cat[start:end]] = mr
-                    except Exception as e:
-                        if verbose:
-                            print(f"  Photometry error ({vname}, batch {start}-{end}): {e}")
+                if len(valid_cat) == 0:
+                    continue
 
-            # ---- Data photometry ----
-            if compute_data_photometry:
-                h5_rows = np.array([h5_tgid_to_row.get(targetids[ci], -1) for ci in valid_cat])
-                has_h5 = h5_rows >= 0
+                valid_cat = np.array(valid_cat)
+                valid_fits_rows = np.array(valid_fits_rows)
 
-                if np.any(has_h5):
-                    sub_cat = valid_cat[has_h5]
-                    sub_h5 = h5_rows[has_h5]
-                    sub_emission = emission[has_h5]
+                absmag_g[valid_cat]      = specphot_data["ABSMAG01_SYNTH_SDSS_G"][valid_fits_rows]
+                absmag_r[valid_cat]      = specphot_data["ABSMAG01_SYNTH_SDSS_R"][valid_fits_rows]
+                absmag_ivar_g[valid_cat] = specphot_data["ABSMAG01_SYNTH_IVAR_SDSS_G"][valid_fits_rows]
+                absmag_ivar_r[valid_cat] = specphot_data["ABSMAG01_SYNTH_IVAR_SDSS_R"][valid_fits_rows]
 
-                    obs_flux = h5_flux[sub_h5]
+                halpha_ew[valid_cat]      = fastspec_data["HALPHA_EW"][valid_fits_rows]
+                halpha_ew_ivar[valid_cat] = fastspec_data["HALPHA_EW_IVAR"][valid_fits_rows]
 
-                    data_variants = {
-                        "data_no_emi": (obs_flux - sub_emission, g_data_no_emi, r_data_no_emi),
-                        "data_w_emi":  (obs_flux,                g_data_w_emi,  r_data_w_emi),
-                    }
-                    for vname, (flux_2d, g_out, r_out) in data_variants.items():
-                        for start in range(0, len(sub_cat), batch_size):
-                            end = min(start + batch_size, len(sub_cat))
-                            try:
-                                mg, mr = measure_photo_batch(h5_wave, flux_2d[start:end])
-                                g_out[sub_cat[start:end]] = mg
-                                r_out[sub_cat[start:end]] = mr
-                            except Exception as e:
-                                if verbose:
-                                    print(f"  Photometry error ({vname}, batch {start}-{end}): {e}")
+                continuum = model_data[valid_fits_rows, 0, :]
+                emission  = model_data[valid_fits_rows, 2, :]
 
-        finally:
-            iron_vac.close()
+                model_variants = {
+                    "model_no_emi": (continuum,            g_model_no_emi, r_model_no_emi),
+                    "model_w_emi":  (continuum + emission, g_model_w_emi,  r_model_w_emi),
+                }
+                for vname, (flux_2d, g_out, r_out) in model_variants.items():
+                    for start in range(0, len(valid_cat), batch_size):
+                        end = min(start + batch_size, len(valid_cat))
+                        try:
+                            mg, mr = measure_photo_batch(wavelength, flux_2d[start:end])
+                            g_out[valid_cat[start:end]] = mg
+                            r_out[valid_cat[start:end]] = mr
+                        except Exception as e:
+                            if verbose:
+                                print(f"  Photometry error ({vname}, batch {start}-{end}): {e}")
 
-        if verbose and (file_idx + 1) % 50 == 0:
-            print(f"  Processed {file_idx + 1}/{len(unique_paths)} files")
+                if compute_data_photometry:
+                    h5_rows = np.array([h5_tgid_to_row.get(targetids[ci], -1) for ci in valid_cat])
+                    has_h5 = h5_rows >= 0
+
+                    if np.any(has_h5):
+                        sub_cat = valid_cat[has_h5]
+                        sub_h5 = h5_rows[has_h5]
+                        sub_emission = emission[has_h5]
+
+                        obs_flux = h5_flux[sub_h5]
+
+                        data_variants = {
+                            "data_no_emi": (obs_flux - sub_emission, g_data_no_emi, r_data_no_emi),
+                            "data_w_emi":  (obs_flux,                g_data_w_emi,  r_data_w_emi),
+                        }
+                        for vname, (flux_2d, g_out, r_out) in data_variants.items():
+                            for start in range(0, len(sub_cat), batch_size):
+                                end = min(start + batch_size, len(sub_cat))
+                                try:
+                                    mg, mr = measure_photo_batch(h5_wave, flux_2d[start:end])
+                                    g_out[sub_cat[start:end]] = mg
+                                    r_out[sub_cat[start:end]] = mr
+                                except Exception as e:
+                                    if verbose:
+                                        print(f"  Photometry error ({vname}, batch {start}-{end}): {e}")
+
+            finally:
+                iron_vac.close()
+
+            if verbose and (file_idx + 1) % 50 == 0:
+                print(f"  Processed {file_idx + 1}/{n_files} files")
 
     # ---- Build output table ----
     columns = {
@@ -335,6 +472,8 @@ def compute_photometry_catalog(catalog,
         "ABSMAG01_SYNTH_SDSS_R":      absmag_r,
         "ABSMAG01_SYNTH_IVAR_SDSS_G": absmag_ivar_g,
         "ABSMAG01_SYNTH_IVAR_SDSS_R": absmag_ivar_r,
+        "HALPHA_EW":                   halpha_ew,
+        "HALPHA_EW_IVAR":             halpha_ew_ivar,
     }
     if compute_data_photometry:
         columns["g_data_no_emi"] = g_data_no_emi
@@ -360,5 +499,3 @@ def compute_photometry_catalog(catalog,
         print(msg)
 
     return result
-
-    
