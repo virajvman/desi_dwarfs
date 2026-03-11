@@ -621,8 +621,6 @@ def get_stellar_mass_mia(gr_col, gmag, zred, d_in_mpc=None, input_zred=True):
     
     Note: this formula is only valid for Mstar < 1e10, which is okay for our sample.
 
-    old relation = # log_mstar = (1.433 * gr_col) + 0.00153 * (Mg**2) - (0.335 * Mg) + 2.072
-    
     Parameters
     ----------
     gr_col : array-like
