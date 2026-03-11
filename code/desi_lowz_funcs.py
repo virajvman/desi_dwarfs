@@ -579,6 +579,26 @@ def g_kcorr(gr,z):
     return kg
 
 
+def g_kcorr_deriv_gr(gr, z):
+    '''
+    Derivative of g-band k-correction (Chilingarian et al. 2010) with respect to g-r color.
+    Used for error propagation in stellar mass estimates.
+    '''
+    # d/d(gr) of each term in g_kcorr polynomial (coeff_ij has factor z^i * gr^j)
+    d_coeff_11 = 3.97338 * (z**1) * (gr**0)
+    d_coeff_12 = 2 * 0.774394 * (z**1) * (gr**1)
+    d_coeff_13 = 3 * (-1.09389) * (z**1) * (gr**2)
+    d_coeff_21 = -8.04213 * (z**2) * (gr**0)
+    d_coeff_22 = 2 * 11.0321 * (z**2) * (gr**1)
+    d_coeff_23 = 3 * 0.781176 * (z**2) * (gr**2)
+    d_coeff_31 = -31.1241 * (z**3) * (gr**0)
+    d_coeff_32 = 2 * (-17.5553) * (z**3) * (gr**1)
+    d_coeff_41 = 71.5801 * (z**4) * (gr**0)
+    dkg_dgr = (d_coeff_11 + d_coeff_12 + d_coeff_13 + d_coeff_21 + d_coeff_22 + d_coeff_23
+               + d_coeff_31 + d_coeff_32 + d_coeff_41)
+    return dkg_dgr
+
+
 def r_kcorr(gr,z):
     '''
     This function returns the k correction for SDSS r band 
@@ -614,7 +634,7 @@ def r_kcorr(gr,z):
     return kr
 
 
-def get_stellar_mass_mia(gr_col, gmag, zred, d_in_mpc=None, input_zred=True):
+def get_stellar_mass_mia(gr_col, gmag, zred, d_in_mpc=None, input_zred=True, mag_g_err=None, mag_r_err=None):
     '''
     Vectorized stellar mass estimation using the two-branch prescription 
     from de los Reyes et al. (2024), Equation 13.
@@ -633,11 +653,17 @@ def get_stellar_mass_mia(gr_col, gmag, zred, d_in_mpc=None, input_zred=True):
         Luminosity distance in Mpc (used if input_zred=False)
     input_zred : bool
         If True, compute distance from zred. If False, use d_in_mpc.
+    mag_g_err : array-like, optional
+        Uncertainty in g-band magnitude. If provided with mag_r_err, returns log_mstar_err.
+    mag_r_err : array-like, optional
+        Uncertainty in r-band magnitude. If provided with mag_g_err, returns log_mstar_err.
     
     Returns
     -------
     log_mstar : np.ndarray
         log10(Mstar / Msun)
+    log_mstar_err : np.ndarray, optional
+        Uncertainty in log10(Mstar / Msun). Only returned when mag_g_err and mag_r_err are provided.
     '''
     from astropy.cosmology import Planck18
 
@@ -658,6 +684,21 @@ def get_stellar_mass_mia(gr_col, gmag, zred, d_in_mpc=None, input_zred=True):
         1.986 + 1.315 * gr_col - 0.365 * Mg,
         1.598 + 1.347 * gr_col - 0.4 * Mg
     )
+
+    return_err = (mag_g_err is not None and mag_r_err is not None)
+    if return_err:
+        mag_g_err = np.atleast_1d(np.asarray(mag_g_err, dtype=float))
+        mag_r_err = np.atleast_1d(np.asarray(mag_r_err, dtype=float))
+        dkg_dgr = g_kcorr_deriv_gr(gr_col, zred)
+        # Propagate w.r.t. independent variables (gmag, rmag).
+        # log_mstar = a + b*(g-r) + c*(g + const - kg(g-r, z))
+        # where gr = gmag - rmag, so gmag and gr are correlated.
+        b_coeff = np.where(Mg > -18.5, 1.315, 1.347)
+        c_coeff = np.where(Mg > -18.5, -0.365, -0.4)
+        dlogm_dg = b_coeff + c_coeff * (1.0 - dkg_dgr)
+        dlogm_dr = -b_coeff + c_coeff * dkg_dgr
+        log_mstar_err = np.sqrt((dlogm_dg * mag_g_err)**2 + (dlogm_dr * mag_r_err)**2)
+        return log_mstar, log_mstar_err
 
     return log_mstar
 

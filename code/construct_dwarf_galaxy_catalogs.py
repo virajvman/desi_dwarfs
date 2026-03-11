@@ -34,7 +34,7 @@ from desitarget.sv3 import sv3_targetmask
 from easyquery import Query, QueryMaker
 reduce_compare = QueryMaker.reduce_compare
 
-from desi_lowz_funcs import add_sweeps_column, match_c_to_catalog, calc_normalized_dist, DVcalculator_list, get_stellar_mass_mia
+from desi_lowz_funcs import add_sweeps_column, match_c_to_catalog, calc_normalized_dist, DVcalculator_list, get_stellar_mass_mia, g_kcorr
 from independent_distances import update_distance_catalog
 
 c_light = 299792 #in km/s
@@ -877,8 +877,15 @@ def read_VI_flags(filename, match_cat):
 
 def process_sga_VI_catalog():
     '''
-    In this function, we process the VI'ed SGA galaxies. Currently we are only doing this for sources that are reprocess needed Tractor and no SGA photometry.
-    These sources will then be added to the SGA processing column as we want to be able to compare/discuss them later in the photo paper! 
+    Process the VI'ed SGA galaxies (reprocess-needed Tractor, no SGA photometry).
+    These are added to the SGA processing column for the photo paper.
+
+    Prerequisites:
+    - iron_desi_sga_bad_trac_bad_VI_NEEDED_V2.fits must exist (written earlier when process_sga=True).
+    - VI file: one line per source in that catalog, matchable by (RA, DEC).
+      Format: tab- or space-separated:  RA  DEC  true|false
+      - "false" = include in reprocess list (VI confirmed dwarf).
+      - "true"  = exclude from reprocess (VI rejected).
     '''
 
     #read the original catalogs
@@ -888,9 +895,17 @@ def process_sga_VI_catalog():
     print(len(sga_all_bad))
     print("--")
 
-    #these all VI done for Mstar < 9.25 sources
-    sga_all_bad_VI_path = "/global/homes/v/virajvm/DESI2_LOWZ/desi_dwarfs/data/sga_all_bad_VI.txt"
+    # VI file: repo data/sga_all_bad_VI.txt (RA, DEC, true/false per source)
+    _code_dir = os.path.dirname(os.path.abspath(__file__))
+    _repo_data = os.path.join(os.path.dirname(_code_dir), "data", "sga_all_bad_VI.txt")
+    sga_all_bad_VI_path = os.path.abspath(_repo_data)
 
+    if not os.path.exists(sga_all_bad_VI_path):
+        raise FileNotFoundError(
+            f"VI file not found: {sga_all_bad_VI_path}\n"
+            "Create it with one line per source in iron_desi_sga_bad_trac_bad_VI_NEEDED_V2.fits:\n"
+            "  Column 1: RA, Column 2: DEC, Column 3: 'true' (exclude) or 'false' (include for reprocess)."
+        )
     cat_all_bad, _ = read_VI_flags(sga_all_bad_VI_path, match_cat = sga_all_bad)
     
     if len(sga_all_bad) != len(cat_all_bad):
@@ -1501,19 +1516,31 @@ if __name__ == '__main__':
             mag_g_new = samp_i_cat["MAG_G"].data + delta_mag_g
             mag_r_new = samp_i_cat["MAG_R"].data + delta_mag_r
 
+            # Combined magnitude errors: tractor photometry + nebular correction, in quadrature
+            if "MAG_G_ERR" in samp_i_cat.colnames and "MAG_R_ERR" in samp_i_cat.colnames:
+                mag_g_err_tot = np.sqrt(samp_i_cat["MAG_G_ERR"].data**2 + delta_mag_g_err**2)
+                mag_r_err_tot = np.sqrt(samp_i_cat["MAG_R_ERR"].data**2 + delta_mag_r_err**2)
+            else:
+                mag_g_err_tot = delta_mag_g_err.copy()
+                mag_r_err_tot = delta_mag_r_err.copy()
+
             # Recompute stellar mass with nebular-corrected photometry
             gr_colors_new = mag_g_new - mag_r_new
             zred_mask = (samp_i_cat["Z"].data < 0.5)
 
             logm_neb_corr = -99.0 * np.ones(len(samp_i_cat))
-            mstars_new = get_stellar_mass_mia(
+            logm_neb_corr_err = np.nan * np.ones(len(samp_i_cat))
+            mstars_new, mstars_new_err = get_stellar_mass_mia(
                 gr_colors_new[zred_mask],
                 mag_g_new[zred_mask],
                 samp_i_cat["Z_CMB"][zred_mask].data,
                 d_in_mpc=samp_i_cat["DIST_MPC_FIDU"][zred_mask].data,
                 input_zred=False,
+                mag_g_err=mag_g_err_tot[zred_mask],
+                mag_r_err=mag_r_err_tot[zred_mask],
             )
             logm_neb_corr[zred_mask] = mstars_new
+            logm_neb_corr_err[zred_mask] = mstars_new_err
 
             # Compare old vs new stellar mass cut
             logm_old = samp_i_cat["LOGM_M24_FIDU"].data
@@ -1540,8 +1567,26 @@ if __name__ == '__main__':
             samp_i_cat_cut["DELTA_MAG_G_NEB_ERR"] = delta_mag_g_err[keep_mask]
             samp_i_cat_cut["DELTA_MAG_R_NEB_ERR"] = delta_mag_r_err[keep_mask]
             samp_i_cat_cut["LOGM_M24_FIDU_NEBCORR"] = logm_neb_corr[keep_mask]
+            samp_i_cat_cut["LOGM_M24_FIDU_NEBCORR_ERR"] = logm_neb_corr_err[keep_mask]
             samp_i_cat_cut["HALPHA_EW"] = result_samp_i["HALPHA_EW"].data[keep_mask]
             samp_i_cat_cut["HALPHA_EW_IVAR"] = result_samp_i["HALPHA_EW_IVAR"].data[keep_mask]
+
+            # Summary: fraction and count with absolute g-band mag brighter than -18.5 (nebular-corrected)
+            mag_g_corr = samp_i_cat_cut["MAG_G"].data + samp_i_cat_cut["DELTA_MAG_G_NEB"].data
+            mag_r_corr = samp_i_cat_cut["MAG_R"].data + samp_i_cat_cut["DELTA_MAG_R_NEB"].data
+            gr_col_corr = mag_g_corr - mag_r_corr
+            zred_cut = np.asarray(samp_i_cat_cut["Z_CMB"].data, dtype=float)
+            d_in_pc = np.asarray(samp_i_cat_cut["DIST_MPC_FIDU"].data, dtype=float) * 1e6
+            valid_mg = (d_in_pc > 0) & np.isfinite(d_in_pc) & np.isfinite(mag_g_corr)
+            kg = g_kcorr(gr_col_corr, zred_cut)
+            Mg = mag_g_corr + 5 - 5 * np.log10(d_in_pc) - kg
+            n_tot = np.sum(valid_mg)
+            n_bright = np.sum(valid_mg & (Mg < -18.5))
+            if n_tot > 0:
+                print(f"{gal_type}: Objects with Mg < -18.5 (nebular-corrected): N = {n_bright}, "
+                      f"fraction = {n_bright / n_tot:.4f} (total with valid distance = {n_tot})")
+            else:
+                print(f"{gal_type}: No objects with valid distance for Mg summary.")
 
             # Save the nebular-corrected catalog
             path_nebcorr = save_folder + "/" + save_filename.replace(".fits", "_INT_V2_NEBCORR.fits")
@@ -1549,20 +1594,15 @@ if __name__ == '__main__':
             save_table(samp_i_cat_cut, path_nebcorr, comment="")
             print_catalog_overlap_diagnostics(path_nebcorr, path_int_old)
 
-    if False:
+    if True:
         
         for i,gal_type in enumerate(gal_types):
             save_filename = save_filenames[gal_type]
             
-            print("Reading the intermediated step!")
-            zpix_sub_cat_f = Table.read(save_folder + "/" + save_filename.replace(".fits","_INT.fits"))
+            print("Reading the nebular-corrected intermediate step!")
+            zpix_sub_cat_f = Table.read(save_folder + "/" + save_filename.replace(".fits", "_INT_V2_NEBCORR.fits"))
 
-            print(f"{gal_type}: Number of all sources = {len(zpix_sub_cat_f)}")
-
-            #filtering by stellar mass as we do not need higher stellar mass objects!
-            zpix_sub_cat_f = zpix_sub_cat_f[ (zpix_sub_cat_f["LOGM_M24_FIDU"] < 9.25) ]
-
-            print(f"{gal_type}: Number of all sources with 9.25 stellar mass cut = {len(zpix_sub_cat_f)}")
+            print(f"{gal_type}: Number of all sources (9.25 stellar mass cut already applied above) = {len(zpix_sub_cat_f)}")
 
             ##identify the subset of sources whose photometry needs to be reprocessed!!
             ##this includes first spliting into low fracflux and high fracflux cat
@@ -1641,7 +1681,7 @@ if __name__ == '__main__':
             ## save this catalog. This is catalog with the MASKBIT cut applied! However, note this still could include sources associated with SGA sources
             print("Saving NO SGA file")
             
-            path_no_sga_v2 = save_folder + "/" + save_filename.replace(".fits","_V2.fits")
+            path_no_sga_v2 = save_folder + "/" + save_filename.replace(".fits", "_V2_NEBCORR.fits")
             path_no_sga_old = save_folder + "/" + save_filename
             save_table(zpix_sub_cat_no_sga, path_no_sga_v2, comment="")
             print_catalog_overlap_diagnostics(path_no_sga_v2, path_no_sga_old)
@@ -1653,16 +1693,16 @@ if __name__ == '__main__':
             print(f"{gal_type}: In SGA and need reprocessing = {len(zpix_sub_cat_w_sga[zpix_sub_cat_w_sga['PHOTO_REPROCESS'] == 1])}")
             
             #for the SGA ones we save all teh ones for reference, also not that many
-            path_w_sga_v2 = save_folder + "/" + save_filename.replace(".fits","_W_SGA_V2.fits")
-            path_w_sga_old = save_folder + "/" + save_filename.replace(".fits","_W_SGA.fits")
+            path_w_sga_v2 = save_folder + "/" + save_filename.replace(".fits", "_W_SGA_V2_NEBCORR.fits")
+            path_w_sga_old = save_folder + "/" + save_filename.replace(".fits", "_W_SGA.fits")
             save_table(zpix_sub_cat_w_sga, path_w_sga_v2, comment="")
             print_catalog_overlap_diagnostics(path_w_sga_v2, path_w_sga_old)
                 
         ##add the image size pix column
     
         for sample_i in gal_types:
-            file_1 = save_folder + "/" + save_filenames[sample_i].replace(".fits","_V2.fits")
-            file_2 = save_folder + "/" + save_filenames[sample_i].replace(".fits","_W_SGA_V2.fits")
+            file_1 = save_folder + "/" + save_filenames[sample_i].replace(".fits", "_V2_NEBCORR.fits")
+            file_2 = save_folder + "/" + save_filenames[sample_i].replace(".fits", "_W_SGA_V2_NEBCORR.fits")
     
             print(file_1)
             print(file_2)
@@ -1674,17 +1714,15 @@ if __name__ == '__main__':
             zpix_cat_1["IMAGE_SIZE_PIX"] = get_image_size(zpix_cat_1["Z"].data,return_arcmin=False)
             zpix_cat_2["IMAGE_SIZE_PIX"] = get_image_size(zpix_cat_2["Z"].data,return_arcmin=False)
             
-            #save the file now!
-            save_table(zpix_cat_1,  file_1,comment="")
-            print_catalog_overlap_diagnostics(file_1, save_folder + "/" + save_filenames[sample_i])
-            save_table(zpix_cat_2,  file_2,comment="")
-            print_catalog_overlap_diagnostics(file_2, save_folder + "/" + save_filenames[sample_i].replace(".fits","_W_SGA.fits"))
+            # Overwrite same files with IMAGE_SIZE_PIX added (no row changes; diagnostics already run above)
+            save_table(zpix_cat_1, file_1, comment="")
+            save_table(zpix_cat_2, file_2, comment="")
 
     if process_sga:
         ##by construction, the LOWZ and ELG samples do not overlap with the SGA catalog :) 
 
-        bgsb_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_bgs_bright_filter_zsucc_zrr02_allfracflux_W_SGA_V2.fits")
-        bgsf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_bgs_faint_filter_zsucc_zrr03_allfracflux_W_SGA_V2.fits")
+        bgsb_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_bgs_bright_filter_zsucc_zrr02_allfracflux_W_SGA_V2_NEBCORR.fits")
+        bgsf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_bgs_faint_filter_zsucc_zrr03_allfracflux_W_SGA_V2_NEBCORR.fits")
 
         bgsb_cat["SAMPLE_DESI"] = ["BGS_BRIGHT"] * len(bgsb_cat)
         bgsf_cat["SAMPLE_DESI"] = ["BGS_FAINT"] * len(bgsf_cat)
@@ -1732,9 +1770,7 @@ if __name__ == '__main__':
         
         # remove_targetids = np.array([39633113705355525, 39627760049588529]) #this was based on a quick VI as only 52 sources in total
         remove_targetids = np.array([39627760049588529]) #this was based on a quick VI as only 52 sources in total
-        
-#WE ONLY HAVE ONE VIA 
-        
+          
         print(f"DESI SGA_BAD_TRAC_GOOD N = {len(desi_cat_sga_bad_trac_good)}")
         # Keep rows whose TARGETID is NOT in remove_targetids
         mask = ~np.isin(desi_cat_sga_bad_trac_good["TARGETID"], remove_targetids)
@@ -1748,7 +1784,7 @@ if __name__ == '__main__':
         print_catalog_overlap_diagnostics(path_clean_v2, f"{sga_base}/iron_desi_sga_bad_trac_good_dwarfs_CLEAN.fits")
     
         ##process the VI'ed bad SGA catalogs!!
-        if True:
+        if False:
             print("Processing the VI catalogs")
 
             cat_sga_bad_trac_bad_do_reprocess = process_sga_VI_catalog()
