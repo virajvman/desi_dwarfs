@@ -1119,7 +1119,7 @@ if __name__ == '__main__':
 
     #should the photometry and stellar masses be corrected for nebular emission contamination?
     run_neb_correction = True
-    ncore_neb = 10
+    ncore_neb = 16
 
     zred_cuts = { "BGS_BRIGHT" : 0.4, "BGS_FAINT": 0.4, "LOWZ": 0.4, "ELG":0.5 }
  
