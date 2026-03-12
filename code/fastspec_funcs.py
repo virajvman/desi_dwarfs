@@ -335,7 +335,7 @@ def compute_photometry_catalog(catalog,
                                base_dir="/global/cfs/cdirs/desi/public/dr1/vac/dr1/fastspecfit/iron/v3.0/healpix",
                                save_path=None,
                                batch_size=500,
-                               ncore=1,
+                               ncore=8,
                                verbose=True):
     """
     Loop over all objects in a DESI catalog, extract fastspecfit models,
@@ -654,7 +654,7 @@ def compute_photometry_catalog(catalog,
 # ======================================================================
 
 def apply_photometric_corrections(cat, model_phot_table,
-                                  snr_threshold=5.0,
+                                  snr_threshold=3.0,
                                   ew_max_extrap=1000.0,
                                   n_bins=25, ew_bin_lo=7.0, ew_bin_hi=1500.0):
     """Apply the full photometric correction chain for both g and r bands.
@@ -862,7 +862,7 @@ def apply_neb_correction_with_ew_relation(
     halpha_ew, halpha_ew_ivar,
     delta_mag_g_direct, delta_mag_r_direct,
     delta_mag_g_err_direct, delta_mag_r_err_direct,
-    snr_threshold=5.0, ew_max_extrap=1000.0,
+    snr_threshold=3.0, ew_max_extrap=1000.0,
     n_bins=25, ew_bin_lo=7.0, ew_bin_hi=1500.0,
 ):
     """Apply three-tier nebular emission correction to broadband photometry.

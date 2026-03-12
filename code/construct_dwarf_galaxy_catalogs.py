@@ -1110,11 +1110,11 @@ if __name__ == '__main__':
 
     #should the photometry and stellar masses be corrected for nebular emission contamination?
     run_neb_correction = True
-    ncore_neb = 4
+    ncore_neb = 10
 
     zred_cuts = { "BGS_BRIGHT" : 0.4, "BGS_FAINT": 0.4, "LOWZ": 0.4, "ELG":0.5 }
  
-    gal_types = ["LOWZ", "ELG", "BGS_FAINT", "BGS_BRIGHT"]
+    gal_types = ["LOWZ", "BGS_FAINT", "BGS_BRIGHT", "ELG"]
  
     save_folder = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs"
 
@@ -1426,7 +1426,7 @@ if __name__ == '__main__':
                                      apply_neb_correction_with_ew_relation,
                                      plot_neb_correction_diagnostic)
 
-        overwrite = False
+        overwrite = True
 
         for gal_type in gal_types:
             save_filename = save_filenames[gal_type]
@@ -1481,7 +1481,7 @@ if __name__ == '__main__':
             # Apply the full photometric correction chain:
             # BASS->DECam (if north) -> nebular removal -> DECam->SDSS -> k-correction
             print(f"{gal_type}: Applying full photometric correction chain...")
-            corrections = apply_photometric_corrections(samp_i_cat, result_samp_i)
+            corrections = apply_photometric_corrections(samp_i_cat, result_samp_i, snr_threshold=3.0)
 
             mag_g_final = corrections["mag_g_sdss_z0"]
             mag_r_final = corrections["mag_r_sdss_z0"]
@@ -1491,6 +1491,17 @@ if __name__ == '__main__':
             relation_info = corrections["relation_info"]
             halpha_ew = corrections["halpha_ew"]
             halpha_ew_ivar = corrections["halpha_ew_ivar"]
+
+            TODO: confirm behavior for objects with ew < 3, make it such that no neb correction is applied
+            TODO: think about other proxies in addition to HALPHA_EW, like FHBETA_CONT and FHALPHA_CONTSNR etc. , 
+            #I think the above is best proxy, do tests on how good it is! what are the cases where continuum is detected, but EW is low snr?
+            #are those just objects with weak emission lines
+            TODO: confirm that we do not use smooth continuum.
+            TODO: cross-check filter transform nd k correction!
+            TODO: save the FIBERMAG_G/R/Z and coudl use that to probe color gradients ... like make a plot of difference in color as function of stellar mass ... we could make this plot for objects where we are not on an obvious HII region or something ...
+            # TODO: think a bit mroe about how perture correctiosn for shredded sources will be done ... 
+            #in fastpsecfit, the aperture corrections are derived using flux_r/fiberflux_r ... think more about how we can do this ...
+            #but the fiberflux_r is synthesized from the model ... not the tractor fiber mag ...
 
             # Diagnostic plot for the nebular correction step
             with np.errstate(divide="ignore", invalid="ignore"):
@@ -1578,7 +1589,7 @@ if __name__ == '__main__':
             save_table(samp_i_cat_cut, path_nebcorr, comment="")
             print_catalog_overlap_diagnostics(path_nebcorr, path_int_old)
 
-    if True:
+    if False:
         
         for i,gal_type in enumerate(gal_types):
             save_filename = save_filenames[gal_type]
