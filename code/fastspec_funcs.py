@@ -258,15 +258,13 @@ def _process_single_file(args):
             "halpha_ew_ivar": np.array(fastspec_data["HALPHA_EW_IVAR"][valid_fits_rows], dtype=float),
         }
         try:
-            result["fhbeta_cont"] = np.array(specphot_data["FHBETA_CONT"][valid_fits_rows], dtype=float)
-            result["fhbeta_cont_ivar"] = np.array(specphot_data["FHBETA_CONT_IVAR"][valid_fits_rows], dtype=float)
-            result["fhalpha_cont"] = np.array(specphot_data["FHALPHA_CONT"][valid_fits_rows], dtype=float)
-            result["fhalpha_cont_ivar"] = np.array(specphot_data["FHALPHA_CONT_IVAR"][valid_fits_rows], dtype=float)
+            result["snr_r"] = np.array(fastspec_data["SNR_R"][valid_fits_rows], dtype=float)
+            result["snr_b"] = np.array(fastspec_data["SNR_B"][valid_fits_rows], dtype=float)
+            result["snr_z"] = np.array(fastspec_data["SNR_Z"][valid_fits_rows], dtype=float)
         except (KeyError, TypeError):
-            result["fhbeta_cont"] = np.full(n_valid, np.nan, dtype=float)
-            result["fhbeta_cont_ivar"] = np.full(n_valid, np.nan, dtype=float)
-            result["fhalpha_cont"] = np.full(n_valid, np.nan, dtype=float)
-            result["fhalpha_cont_ivar"] = np.full(n_valid, np.nan, dtype=float)
+            result["snr_r"] = np.full(n_valid, np.nan, dtype=float)
+            result["snr_b"] = np.full(n_valid, np.nan, dtype=float)
+            result["snr_z"] = np.full(n_valid, np.nan, dtype=float)
 
         continuum = model_data[valid_fits_rows, 0, :]
         emission  = model_data[valid_fits_rows, 2, :]
@@ -434,10 +432,9 @@ def compute_photometry_catalog(catalog,
     halpha_ew      = np.full(n_objects, np.nan)
     halpha_ew_ivar = np.full(n_objects, np.nan)
 
-    fhbeta_cont      = np.full(n_objects, np.nan)
-    fhbeta_cont_ivar = np.full(n_objects, np.nan)
-    fhalpha_cont      = np.full(n_objects, np.nan)
-    fhalpha_cont_ivar = np.full(n_objects, np.nan)
+    snr_r = np.full(n_objects, np.nan)
+    snr_b = np.full(n_objects, np.nan)
+    snr_z = np.full(n_objects, np.nan)
 
     if compute_data_photometry:
         g_data_no_emi = np.full(n_objects, np.nan)
@@ -492,10 +489,9 @@ def compute_photometry_catalog(catalog,
                 absmag_ivar_r[idx]  = file_result["absmag_ivar_r"]
                 halpha_ew[idx]      = file_result["halpha_ew"]
                 halpha_ew_ivar[idx] = file_result["halpha_ew_ivar"]
-                fhbeta_cont[idx]      = file_result["fhbeta_cont"]
-                fhbeta_cont_ivar[idx] = file_result["fhbeta_cont_ivar"]
-                fhalpha_cont[idx]      = file_result["fhalpha_cont"]
-                fhalpha_cont_ivar[idx] = file_result["fhalpha_cont_ivar"]
+                snr_r[idx] = file_result["snr_r"]
+                snr_b[idx] = file_result["snr_b"]
+                snr_z[idx] = file_result["snr_z"]
                 if verbose and files_done % 50 == 0:
                     print(f"  Processed {files_done}/{n_files} files")
 
@@ -552,10 +548,9 @@ def compute_photometry_catalog(catalog,
                 halpha_ew_ivar[valid_cat] = fastspec_data["HALPHA_EW_IVAR"][valid_fits_rows]
 
                 try:
-                    fhbeta_cont[valid_cat]      = specphot_data["FHBETA_CONT"][valid_fits_rows]
-                    fhbeta_cont_ivar[valid_cat]  = specphot_data["FHBETA_CONT_IVAR"][valid_fits_rows]
-                    fhalpha_cont[valid_cat]      = specphot_data["FHALPHA_CONT"][valid_fits_rows]
-                    fhalpha_cont_ivar[valid_cat] = specphot_data["FHALPHA_CONT_IVAR"][valid_fits_rows]
+                    snr_r[valid_cat] = fastspec_data["SNR_R"][valid_fits_rows]
+                    snr_b[valid_cat] = fastspec_data["SNR_B"][valid_fits_rows]
+                    snr_z[valid_cat] = fastspec_data["SNR_Z"][valid_fits_rows]
                 except (KeyError, TypeError):
                     pass
 
@@ -649,10 +644,9 @@ def compute_photometry_catalog(catalog,
         "ABSMAG01_SYNTH_IVAR_SDSS_R": absmag_ivar_r,
         "HALPHA_EW":                   halpha_ew,
         "HALPHA_EW_IVAR":             halpha_ew_ivar,
-        "FHBETA_CONT":                 fhbeta_cont,
-        "FHBETA_CONT_IVAR":            fhbeta_cont_ivar,
-        "FHALPHA_CONT":                fhalpha_cont,
-        "FHALPHA_CONT_IVAR":           fhalpha_cont_ivar,
+        "SNR_R":                       snr_r,
+        "SNR_B":                       snr_b,
+        "SNR_Z":                       snr_z,
     }
     if compute_data_photometry:
         columns["g_data_no_emi"] = g_data_no_emi
@@ -685,7 +679,7 @@ def compute_photometry_catalog(catalog,
 # ======================================================================
 
 def apply_photometric_corrections(cat, model_phot_table,
-                                  snr_threshold=3.0,
+                                  snr_threshold=2.0,
                                   ew_max_extrap=1000.0,
                                   n_bins=25, ew_bin_lo=7.0, ew_bin_hi=1500.0,
                                   low_snr_ew_interp=False):
@@ -696,7 +690,7 @@ def apply_photometric_corrections(cat, model_phot_table,
 
     Correction steps (applied in this order):
         1. BASS -> DECam  (only where is_south=0; measured on w_emi model)
-        2. Nebular emission removal in DECam (continuum-SNR gated)
+        2. Nebular emission removal in DECam (pixel-SNR gated)
         3. DECam -> SDSS  (measured on continuum-only model)
         4. k-correction: SDSS z_obs -> SDSS z=0 (measured on continuum-only model)
 
@@ -707,16 +701,15 @@ def apply_photometric_corrections(cat, model_phot_table,
         is_south (1=DECam, 0=BASS).
     model_phot_table : astropy Table
         Output of compute_photometry_catalog, with columns for DECam/BASS/SDSS
-        model photometry, HALPHA_EW / HALPHA_EW_IVAR, and FHBETA_CONT,
-        FHBETA_CONT_IVAR, FHALPHA_CONT, FHALPHA_CONT_IVAR (continuum flux).
-        Nebular correction is gated by continuum SNR (FHBETA or FHALPHA above
-        snr_threshold) and EW > 0.
+        model photometry, HALPHA_EW / HALPHA_EW_IVAR, and SNR_R, SNR_B, SNR_Z
+        (median pixel SNR per spectral channel). Nebular correction is gated
+        when at least one channel SNR exceeds snr_threshold and EW > 0.
     snr_threshold : float
-        SNR threshold for the nebular correction (continuum flux SNR).
+        SNR threshold for the nebular correction (median pixel SNR).
     ew_max_extrap, n_bins, ew_bin_lo, ew_bin_hi : float/int
         Parameters forwarded to apply_neb_correction_with_ew_relation.
     low_snr_ew_interp : bool, optional
-        If False (fiducial), all objects with high continuum SNR get the
+        If False (fiducial), all objects with high pixel SNR get the
         direct nebular correction (model fractional flux emi+cont vs cont),
         including those with low EW SNR. If True, only high EW SNR get
         direct; low EW SNR get piecewise-linear interpolation of the
@@ -731,7 +724,7 @@ def apply_photometric_corrections(cat, model_phot_table,
         - mag_g_sdss_z0, mag_r_sdss_z0  (final corrected apparent mags)
         - mag_g_sdss_z0_err, mag_r_sdss_z0_err
         - relation_info  (from the nebular fit)
-        - high_continuum_snr  (bool array; True = high continuum SNR, correction
+        - high_pixel_snr  (bool array; True = high pixel SNR, correction
           applied; False = no correction, flagged)
     """
     n = len(cat)
@@ -754,7 +747,7 @@ def apply_photometric_corrections(cat, model_phot_table,
     mag_r_working[north_mask] += delta_bass2decam_r[north_mask]
 
     # ------------------------------------------------------------------
-    # Step 2: Nebular emission correction (three-tier, DECam system)
+    # Step 2: Nebular emission correction (pixel-SNR gated, DECam system)
     # ------------------------------------------------------------------
     delta_neb_g_raw = (model_phot_table["g_model_no_emi"].data
                        - model_phot_table["g_model_w_emi"].data)
@@ -764,15 +757,9 @@ def apply_photometric_corrections(cat, model_phot_table,
     halpha_ew = np.asarray(model_phot_table["HALPHA_EW"].data, dtype=float)
     halpha_ew_ivar = np.asarray(model_phot_table["HALPHA_EW_IVAR"].data, dtype=float)
 
-    with np.errstate(divide="ignore", invalid="ignore"):
-        fhbeta_cont_snr = (
-            np.asarray(model_phot_table["FHBETA_CONT"].data, dtype=float)
-            * np.sqrt(np.maximum(np.asarray(model_phot_table["FHBETA_CONT_IVAR"].data, dtype=float), 0.0))
-        )
-        fhalpha_cont_snr = (
-            np.asarray(model_phot_table["FHALPHA_CONT"].data, dtype=float)
-            * np.sqrt(np.maximum(np.asarray(model_phot_table["FHALPHA_CONT_IVAR"].data, dtype=float), 0.0))
-        )
+    snr_r = np.asarray(model_phot_table["SNR_R"].data, dtype=float)
+    snr_b = np.asarray(model_phot_table["SNR_B"].data, dtype=float)
+    snr_z = np.asarray(model_phot_table["SNR_Z"].data, dtype=float)
 
     ivar_g = np.array(model_phot_table["ABSMAG01_SYNTH_IVAR_SDSS_G"].data, dtype=float)
     ivar_r = np.array(model_phot_table["ABSMAG01_SYNTH_IVAR_SDSS_R"].data, dtype=float)
@@ -780,12 +767,12 @@ def apply_photometric_corrections(cat, model_phot_table,
         delta_neb_g_err_raw = np.where(ivar_g > 0, np.sqrt(1.0 / ivar_g), np.nan)
         delta_neb_r_err_raw = np.where(ivar_r > 0, np.sqrt(1.0 / ivar_r), np.nan)
 
-    delta_neb_g, delta_neb_r, delta_neb_g_err, delta_neb_r_err, relation_info, high_continuum_snr = \
+    delta_neb_g, delta_neb_r, delta_neb_g_err, delta_neb_r_err, relation_info, high_pixel_snr = \
         apply_neb_correction_with_ew_relation(
             halpha_ew, halpha_ew_ivar,
             delta_neb_g_raw, delta_neb_r_raw,
             delta_neb_g_err_raw, delta_neb_r_err_raw,
-            fhbeta_cont_snr, fhalpha_cont_snr,
+            snr_r, snr_b, snr_z,
             snr_threshold=snr_threshold,
             ew_max_extrap=ew_max_extrap,
             n_bins=n_bins, ew_bin_lo=ew_bin_lo, ew_bin_hi=ew_bin_hi,
@@ -864,7 +851,7 @@ def apply_photometric_corrections(cat, model_phot_table,
         "relation_info": relation_info,
         "halpha_ew": halpha_ew,
         "halpha_ew_ivar": halpha_ew_ivar,
-        "high_continuum_snr": high_continuum_snr,
+        "high_pixel_snr": high_pixel_snr,
     }
 
 
@@ -918,20 +905,19 @@ def apply_neb_correction_with_ew_relation(
     halpha_ew, halpha_ew_ivar,
     delta_mag_g_direct, delta_mag_r_direct,
     delta_mag_g_err_direct, delta_mag_r_err_direct,
-    fhbeta_cont_snr, fhalpha_cont_snr,
-    snr_threshold=3.0, ew_max_extrap=1000.0,
+    snr_r, snr_b, snr_z,
+    snr_threshold=2.0, ew_max_extrap=1000.0,
     n_bins=25, ew_bin_lo=7.0, ew_bin_hi=1500.0,
     low_snr_ew_interp=False,
 ):
-    """Apply nebular emission correction to broadband photometry (continuum-SNR gated).
+    """Apply nebular emission correction to broadband photometry (pixel-SNR gated).
 
-    Nebular correction is applied only when EW > 0 and continuum SNR is above
-    *snr_threshold* (FHBETA_CONT_SNR or FHALPHA_CONT_SNR). If continuum SNR
-    threshold is not met or EW <= 0, no correction is applied (delta = 0, err = 0).
-    The returned *high_continuum_snr* flags objects that meet the continuum SNR
-    threshold.
+    Nebular correction is applied only when EW > 0 and at least one of the
+    three spectral channel SNRs (SNR_R, SNR_B, SNR_Z) exceeds *snr_threshold*.
+    If not met or EW <= 0, no correction is applied (delta = 0, err = 0).
+    The returned *high_pixel_snr* flags objects that meet this gate.
 
-    Within the gated set (EW > 0 and high continuum SNR), the correction is
+    Within the gated set (EW > 0 and high pixel SNR), the correction is
     based on the direct delta from model photometry (fractional flux in
     emi+cont vs cont). If *low_snr_ew_interp* is False (fiducial), all such
     objects get this direct correction regardless of EW SNR. If True, only
@@ -944,19 +930,22 @@ def apply_neb_correction_with_ew_relation(
     relation_info : dict
         Contains 'g' and 'r' sub-dicts from ``_build_ew_relation`` plus
         'train_mask' boolean array for the high-SNR training set.
-    high_continuum_snr : 1-D bool array
-        True where continuum SNR is above threshold (FHBETA or FHALPHA).
+    high_pixel_snr : 1-D bool array
+        True where at least one channel SNR exceeds the threshold.
     """
-    ew   = np.asarray(halpha_ew, dtype=float)
-    fhbeta_snr = np.asarray(fhbeta_cont_snr, dtype=float)
-    fhalpha_snr = np.asarray(fhalpha_cont_snr, dtype=float)
+    ew = np.asarray(halpha_ew, dtype=float)
+    snr_r_arr = np.asarray(snr_r, dtype=float)
+    snr_b_arr = np.asarray(snr_b, dtype=float)
+    snr_z_arr = np.asarray(snr_z, dtype=float)
 
-    # High continuum SNR: either line above threshold
-    high_continuum_snr = (
-        (np.isfinite(fhbeta_snr) & (fhbeta_snr > snr_threshold))
-        | (np.isfinite(fhalpha_snr) & (fhalpha_snr > snr_threshold))
+    # Gate: at least one spectral channel has pixel SNR above threshold
+    any_high_snr = (
+        (np.isfinite(snr_r_arr) & (snr_r_arr > snr_threshold))
+        | (np.isfinite(snr_b_arr) & (snr_b_arr > snr_threshold))
+        | (np.isfinite(snr_z_arr) & (snr_z_arr > snr_threshold))
     )
-    apply_any_neb = (ew > 0) & high_continuum_snr
+    high_pixel_snr = any_high_snr
+    apply_any_neb = (ew > 0) & high_pixel_snr
 
     # Tier 1 = high EW SNR within the gated set; Tier 2 = low EW SNR, EW > 0, still gated
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -1013,7 +1002,7 @@ def apply_neb_correction_with_ew_relation(
                           rel_r["scatter_1sig"], left=0.0), 0.0)
         nan_mask = high_snr & (~np.isfinite(dmg) | ~np.isfinite(dmr))
     else:
-        # Fiducial: all high continuum SNR get direct correction (fractional flux emi+cont vs cont)
+        # Fiducial: all high pixel SNR get direct correction (fractional flux emi+cont vs cont)
         out_g[apply_any_neb]     = dmg[apply_any_neb]
         out_r[apply_any_neb]     = dmr[apply_any_neb]
         out_g_err[apply_any_neb] = err_g_direct[apply_any_neb]
@@ -1024,7 +1013,7 @@ def apply_neb_correction_with_ew_relation(
     out_g_err[nan_mask] = np.nan
     out_r_err[nan_mask] = np.nan
 
-    # Gate: no nebular correction where continuum SNR not met or EW <= 0
+    # Gate: no nebular correction where pixel SNR not met or EW <= 0
     out_g[~apply_any_neb]     = 0.0
     out_r[~apply_any_neb]     = 0.0
     out_g_err[~apply_any_neb] = 0.0
@@ -1035,16 +1024,16 @@ def apply_neb_correction_with_ew_relation(
     n_high = int(np.sum(high_snr))
     n_low  = int(np.sum(low_snr))
     n_neg  = int(np.sum(ew <= 0))
-    n_no_cont = int(np.sum((ew > 0) & ~high_continuum_snr))
+    n_low_pix_snr = int(np.sum((ew > 0) & ~high_pixel_snr))
     n_nan  = int(np.sum(nan_mask))
     if low_snr_ew_interp:
         print(f"  Nebular correction: {n_high} high-EW-SNR (direct), "
               f"{n_low} low-EW-SNR (interpolated), {n_neg} EW<=0 (no correction), "
-              f"{n_no_cont} EW>0 but low continuum SNR (no correction)")
+              f"{n_low_pix_snr} EW>0 but low pixel SNR (no correction)")
     else:
-        print(f"  Nebular correction: {n_apply} high continuum SNR (all direct), "
+        print(f"  Nebular correction: {n_apply} high pixel SNR (all direct), "
               f"{n_neg} EW<=0 (no correction), "
-              f"{n_no_cont} EW>0 but low continuum SNR (no correction)")
+              f"{n_low_pix_snr} EW>0 but low pixel SNR (no correction)")
     if n_nan > 0:
         print(f"  WARNING: {n_nan} sources have NaN model photometry")
     if len(rel_g["bin_cents"]) > 0:
@@ -1055,7 +1044,7 @@ def apply_neb_correction_with_ew_relation(
           f"Median delta_mag_r = {np.nanmedian(out_r):.4f}")
 
     relation_info = {"g": rel_g, "r": rel_r, "train_mask": train_mask}
-    return out_g, out_r, out_g_err, out_r_err, relation_info, high_continuum_snr
+    return out_g, out_r, out_g_err, out_r_err, relation_info, high_pixel_snr
 
 
 def plot_neb_correction_diagnostic(

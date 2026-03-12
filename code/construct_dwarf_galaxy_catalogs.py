@@ -1578,11 +1578,10 @@ if __name__ == '__main__':
             samp_i_cat_cut["LOGM_M24_FIDU_CORR_ERR"] = logm_corr_err[keep_mask]
             samp_i_cat_cut["HALPHA_EW"] = halpha_ew[keep_mask]
             samp_i_cat_cut["HALPHA_EW_IVAR"] = halpha_ew_ivar[keep_mask]
-            samp_i_cat_cut["HIGH_CONTINUUM_SNR"] = corrections["high_continuum_snr"][keep_mask]
-            samp_i_cat_cut["FHBETA_CONT"] = result_samp_i["FHBETA_CONT"].data[keep_mask]
-            samp_i_cat_cut["FHBETA_CONT_IVAR"] = result_samp_i["FHBETA_CONT_IVAR"].data[keep_mask]
-            samp_i_cat_cut["FHALPHA_CONT"] = result_samp_i["FHALPHA_CONT"].data[keep_mask]
-            samp_i_cat_cut["FHALPHA_CONT_IVAR"] = result_samp_i["FHALPHA_CONT_IVAR"].data[keep_mask]
+            samp_i_cat_cut["HIGH_PIXEL_SNR"] = corrections["high_pixel_snr"][keep_mask]
+            samp_i_cat_cut["SNR_R"] = result_samp_i["SNR_R"].data[keep_mask]
+            samp_i_cat_cut["SNR_B"] = result_samp_i["SNR_B"].data[keep_mask]
+            samp_i_cat_cut["SNR_Z"] = result_samp_i["SNR_Z"].data[keep_mask]
 
             # Summary: absolute g-band mag using fully corrected SDSS z=0 photometry
             d_in_pc = np.asarray(samp_i_cat_cut["DIST_MPC_FIDU"].data, dtype=float) * 1e6
