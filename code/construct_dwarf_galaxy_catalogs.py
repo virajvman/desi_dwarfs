@@ -333,10 +333,17 @@ def get_final_catalogs(zpix_cat, zpix_trac, sample_name):
     if sample_name == "LOWZ":
         zpix_cat["FIBERMAG_R"] = 22.5 - 2.5*np.log10(zpix_trac["FIBERFLUX_R"].data)
         zpix_cat["FIBERFLUX_R"] = zpix_trac["FIBERFLUX_R"].data
-        
+        zpix_cat["FIBERMAG_G"] = 22.5 - 2.5*np.log10(zpix_trac["FIBERFLUX_G"].data)
+        zpix_cat["FIBERFLUX_G"] = zpix_trac["FIBERFLUX_G"].data
+        zpix_cat["FIBERMAG_Z"] = 22.5 - 2.5*np.log10(zpix_trac["FIBERFLUX_Z"].data)
+        zpix_cat["FIBERFLUX_Z"] = zpix_trac["FIBERFLUX_Z"].data
     else:
         zpix_cat["FIBERMAG_R"] = 22.5 - 2.5*np.log10(zpix_cat["FIBERFLUX_R"].data)
         zpix_cat["FIBERFLUX_R"] = zpix_cat["FIBERFLUX_R"].data
+        zpix_cat["FIBERMAG_G"] = 22.5 - 2.5*np.log10(zpix_trac["FIBERFLUX_G"].data)
+        zpix_cat["FIBERFLUX_G"] = zpix_trac["FIBERFLUX_G"].data
+        zpix_cat["FIBERMAG_Z"] = 22.5 - 2.5*np.log10(zpix_trac["FIBERFLUX_Z"].data)
+        zpix_cat["FIBERFLUX_Z"] = zpix_trac["FIBERFLUX_Z"].data
         
     
     #confirm that the two fiber flux match!
@@ -395,6 +402,8 @@ def get_final_catalogs(zpix_cat, zpix_trac, sample_name):
 
     zpix_cat["PHI"] = all_phi
     zpix_cat["FIBERMAG_R"] = 22.5 - 2.5*np.log10(zpix_cat["FIBERFLUX_R"])
+    zpix_cat["FIBERMAG_G"] = 22.5 - 2.5*np.log10(zpix_cat["FIBERFLUX_G"])
+    zpix_cat["FIBERMAG_Z"] = 22.5 - 2.5*np.log10(zpix_cat["FIBERFLUX_Z"])
 
     zpix_cat["MASKBITS"] = zpix_trac["MASKBITS"]
 
@@ -1492,13 +1501,12 @@ if __name__ == '__main__':
             halpha_ew = corrections["halpha_ew"]
             halpha_ew_ivar = corrections["halpha_ew_ivar"]
 
-            TODO: confirm behavior for objects with ew < 3, make it such that no neb correction is applied
-            TODO: think about other proxies in addition to HALPHA_EW, like FHBETA_CONT and FHALPHA_CONTSNR etc. , 
-            #I think the above is best proxy, do tests on how good it is! what are the cases where continuum is detected, but EW is low snr?
-            #are those just objects with weak emission lines
-            TODO: confirm that we do not use smooth continuum.
-            TODO: cross-check filter transform nd k correction!
-            TODO: save the FIBERMAG_G/R/Z and coudl use that to probe color gradients ... like make a plot of difference in color as function of stellar mass ... we could make this plot for objects where we are not on an obvious HII region or something ...
+            # TODO: confirm behavior for objects with ew < 3, make it such that no neb correction is applied
+            # TODO: think about other proxies in addition to HALPHA_EW, like FHBETA_CONT and FHALPHA_CONTSNR etc. , 
+            # #I think the above is best proxy, do tests on how good it is! what are the cases where continuum is detected, but EW is low snr?
+            # #are those just objects with weak emission lines
+            # TODO: cross-check filter transform nd k correction!
+            # TODO: save the FIBERMAG_G/R/Z and coudl use that to probe color gradients ... like make a plot of difference in color as function of stellar mass ... we could make this plot for objects where we are not on an obvious HII region or something ...
             # TODO: think a bit mroe about how perture correctiosn for shredded sources will be done ... 
             #in fastpsecfit, the aperture corrections are derived using flux_r/fiberflux_r ... think more about how we can do this ...
             #but the fiberflux_r is synthesized from the model ... not the tractor fiber mag ...
@@ -1570,6 +1578,11 @@ if __name__ == '__main__':
             samp_i_cat_cut["LOGM_M24_FIDU_CORR_ERR"] = logm_corr_err[keep_mask]
             samp_i_cat_cut["HALPHA_EW"] = halpha_ew[keep_mask]
             samp_i_cat_cut["HALPHA_EW_IVAR"] = halpha_ew_ivar[keep_mask]
+            samp_i_cat_cut["HIGH_CONTINUUM_SNR"] = corrections["high_continuum_snr"][keep_mask]
+            samp_i_cat_cut["FHBETA_CONT"] = result_samp_i["FHBETA_CONT"].data[keep_mask]
+            samp_i_cat_cut["FHBETA_CONT_IVAR"] = result_samp_i["FHBETA_CONT_IVAR"].data[keep_mask]
+            samp_i_cat_cut["FHALPHA_CONT"] = result_samp_i["FHALPHA_CONT"].data[keep_mask]
+            samp_i_cat_cut["FHALPHA_CONT_IVAR"] = result_samp_i["FHALPHA_CONT_IVAR"].data[keep_mask]
 
             # Summary: absolute g-band mag using fully corrected SDSS z=0 photometry
             d_in_pc = np.asarray(samp_i_cat_cut["DIST_MPC_FIDU"].data, dtype=float) * 1e6
