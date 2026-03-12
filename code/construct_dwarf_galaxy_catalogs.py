@@ -1200,8 +1200,6 @@ if __name__ == '__main__':
             zred_cut = zred_cuts[gal_type]
             save_filename = save_filenames[gal_type]
 
-            # TODO: SOMETHING WEIRD HAPPENIG WITH FIBERMAGS IN LOWZ CATALOG, THEY ARE ALL ZERO ... 
-            
             if gal_type == "LOWZ":
                 #read in the lowz redshift and tractor phot catalogs
                 zpix_sub_cat,zpix_trac = get_lowz_catalogs(zpix_iron)
@@ -1424,6 +1422,7 @@ if __name__ == '__main__':
 
     if run_neb_correction:
         from fastspec_funcs import (compute_photometry_catalog,
+                                     apply_photometric_corrections,
                                      apply_neb_correction_with_ew_relation,
                                      plot_neb_correction_diagnostic)
 
@@ -1479,123 +1478,101 @@ if __name__ == '__main__':
                 "TARGETID ordering mismatch after reordering!"
 
 
-            TODO: write a function here that takes in the catalog above, and applies the corrections to get 
-            sdss z=0 photometry with no emission line contribution for all galaxies. We can just call that function!
+            # Apply the full photometric correction chain:
+            # BASS->DECam (if north) -> nebular removal -> DECam->SDSS -> k-correction
+            print(f"{gal_type}: Applying full photometric correction chain...")
+            corrections = apply_photometric_corrections(samp_i_cat, result_samp_i)
 
+            mag_g_final = corrections["mag_g_sdss_z0"]
+            mag_r_final = corrections["mag_r_sdss_z0"]
+            mag_g_err_final = corrections["mag_g_sdss_z0_err"]
+            mag_r_err_final = corrections["mag_r_sdss_z0_err"]
+            gr_final = mag_g_final - mag_r_final
+            relation_info = corrections["relation_info"]
+            halpha_ew = corrections["halpha_ew"]
+            halpha_ew_ivar = corrections["halpha_ew_ivar"]
 
-            TODO: and then we will use sdss z=0 corrected continuum only photometry to derive the stellar masses!
-        
-            # Raw delta magnitudes from model photometry (no_emi - w_emi)
-            delta_mag_g_raw = result_samp_i["g_model_no_emi"].data - result_samp_i["g_model_w_emi"].data
-            delta_mag_r_raw = result_samp_i["r_model_no_emi"].data - result_samp_i["r_model_w_emi"].data
-
-            halpha_ew = np.asarray(result_samp_i["HALPHA_EW"].data, dtype=float)
-            halpha_ew_ivar = np.asarray(result_samp_i["HALPHA_EW_IVAR"].data, dtype=float)
-
-            # Raw errors from synthesised absolute-magnitude IVAR
-            ivar_g = np.array(result_samp_i["ABSMAG01_SYNTH_IVAR_SDSS_G"].data, dtype=float)
-            ivar_r = np.array(result_samp_i["ABSMAG01_SYNTH_IVAR_SDSS_R"].data, dtype=float)
-            with np.errstate(divide='ignore', invalid='ignore'):
-                delta_mag_g_err_raw = np.where(ivar_g > 0, np.sqrt(1.0 / ivar_g), np.nan)
-                delta_mag_r_err_raw = np.where(ivar_r > 0, np.sqrt(1.0 / ivar_r), np.nan)
-
-            # Three-tier nebular correction (high-SNR direct, low-SNR interpolated, EW<=0 none)
-            print(f"{gal_type}: Applying three-tier nebular correction...")
-            delta_mag_g, delta_mag_r, delta_mag_g_err, delta_mag_r_err, relation_info = \
-                apply_neb_correction_with_ew_relation(
-                    halpha_ew, halpha_ew_ivar,
-                    delta_mag_g_raw, delta_mag_r_raw,
-                    delta_mag_g_err_raw, delta_mag_r_err_raw,
-                )
-
-            # Diagnostic plot
+            # Diagnostic plot for the nebular correction step
             with np.errstate(divide="ignore", invalid="ignore"):
                 halpha_ew_snr = halpha_ew * np.sqrt(np.maximum(halpha_ew_ivar, 0.0))
             diag_plot_path = save_folder + f"/neb_correction_diagnostic_{gal_type}.png"
             plot_neb_correction_diagnostic(
-                halpha_ew, delta_mag_g, delta_mag_r,
+                halpha_ew, corrections["delta_neb_g"], corrections["delta_neb_r"],
                 halpha_ew_snr, 5.0, relation_info,
                 save_path=diag_plot_path, gal_type=gal_type,
             )
 
-            # Correct photometry: adding positive delta makes new mag fainter (removes nebular contamination)
-            # Original MAG_G/MAG_R columns are NOT modified in the catalog
-            mag_g_new = samp_i_cat["MAG_G"].data + delta_mag_g
-            mag_r_new = samp_i_cat["MAG_R"].data + delta_mag_r
-
-            # Combined magnitude errors: tractor photometry + nebular correction, in quadrature
-            if "MAG_G_ERR" in samp_i_cat.colnames and "MAG_R_ERR" in samp_i_cat.colnames:
-                mag_g_err_tot = np.sqrt(samp_i_cat["MAG_G_ERR"].data**2 + delta_mag_g_err**2)
-                mag_r_err_tot = np.sqrt(samp_i_cat["MAG_R_ERR"].data**2 + delta_mag_r_err**2)
-            else:
-                mag_g_err_tot = delta_mag_g_err.copy()
-                mag_r_err_tot = delta_mag_r_err.copy()
-
-            # Recompute stellar mass with nebular-corrected photometry
-            gr_colors_new = mag_g_new - mag_r_new
+            # Compute stellar mass using SDSS z=0 continuum-only photometry.
+            # Pass zred=0 so the polynomial k-correction inside get_stellar_mass_mia
+            # evaluates to zero (model-derived k-correction is already applied).
             zred_mask = (samp_i_cat["Z"].data < 0.5)
 
-            logm_neb_corr = -99.0 * np.ones(len(samp_i_cat))
-            logm_neb_corr_err = np.nan * np.ones(len(samp_i_cat))
+            logm_corr = -99.0 * np.ones(len(samp_i_cat))
+            logm_corr_err = np.nan * np.ones(len(samp_i_cat))
             mstars_new, mstars_new_err = get_stellar_mass_mia(
-                gr_colors_new[zred_mask],
-                mag_g_new[zred_mask],
-                samp_i_cat["Z_CMB"][zred_mask].data,
+                gr_final[zred_mask],
+                mag_g_final[zred_mask],
+                zred=np.zeros(np.sum(zred_mask)),
                 d_in_mpc=samp_i_cat["DIST_MPC_FIDU"][zred_mask].data,
                 input_zred=False,
-                mag_g_err=mag_g_err_tot[zred_mask],
-                mag_r_err=mag_r_err_tot[zred_mask],
+                mag_g_err=mag_g_err_final[zred_mask],
+                mag_r_err=mag_r_err_final[zred_mask],
             )
-            logm_neb_corr[zred_mask] = mstars_new
-            logm_neb_corr_err[zred_mask] = mstars_new_err
+            logm_corr[zred_mask] = mstars_new
+            logm_corr_err[zred_mask] = mstars_new_err
 
             # Compare old vs new stellar mass cut
             logm_old = samp_i_cat["LOGM_M24_FIDU"].data
             valid_old = logm_old > -90
-            valid_new = logm_neb_corr > -90
+            valid_new = logm_corr > -90
 
             n_old_pass = np.sum(logm_old[valid_old] < 9.25)
-            n_new_pass = np.sum(logm_neb_corr[valid_new] < 9.25)
+            n_new_pass = np.sum(logm_corr[valid_new] < 9.25)
             print(f"{gal_type}: Objects with log(M*) < 9.25 using OLD photometry: {n_old_pass}")
-            print(f"{gal_type}: Objects with log(M*) < 9.25 using NEW (neb-corrected) photometry: {n_new_pass}")
-            print(f"{gal_type}: Additional objects removed by neb-corrected stellar mass: {n_old_pass - n_new_pass}")
+            print(f"{gal_type}: Objects with log(M*) < 9.25 using NEW (fully corrected) photometry: {n_new_pass}")
+            print(f"{gal_type}: Additional objects removed by corrected stellar mass: {n_old_pass - n_new_pass}")
 
-            # Apply 9.25 stellar mass cut with the nebular-corrected masses
-            keep_mask = (logm_neb_corr < 9.25) & (logm_neb_corr > -90)
+            # Apply 9.25 stellar mass cut with the corrected masses
+            keep_mask = (logm_corr < 9.25) & (logm_corr > -90)
             n_before = len(samp_i_cat)
             samp_i_cat_cut = samp_i_cat[keep_mask]
 
-            print(f"{gal_type}: N before neb-corr mass cut = {n_before}, "
+            print(f"{gal_type}: N before corrected mass cut = {n_before}, "
                   f"N after = {len(samp_i_cat_cut)}, removed = {n_before - len(samp_i_cat_cut)}")
 
-            # Attach correction and diagnostic columns (do NOT overwrite MAG_G / MAG_R)
-            samp_i_cat_cut["DELTA_MAG_G_NEB"] = delta_mag_g[keep_mask]
-            samp_i_cat_cut["DELTA_MAG_R_NEB"] = delta_mag_r[keep_mask]
-            samp_i_cat_cut["DELTA_MAG_G_NEB_ERR"] = delta_mag_g_err[keep_mask]
-            samp_i_cat_cut["DELTA_MAG_R_NEB_ERR"] = delta_mag_r_err[keep_mask]
-            samp_i_cat_cut["LOGM_M24_FIDU_NEBCORR"] = logm_neb_corr[keep_mask]
-            samp_i_cat_cut["LOGM_M24_FIDU_NEBCORR_ERR"] = logm_neb_corr_err[keep_mask]
-            samp_i_cat_cut["HALPHA_EW"] = result_samp_i["HALPHA_EW"].data[keep_mask]
-            samp_i_cat_cut["HALPHA_EW_IVAR"] = result_samp_i["HALPHA_EW_IVAR"].data[keep_mask]
+            # Attach all correction columns (do NOT overwrite MAG_G / MAG_R)
+            samp_i_cat_cut["DELTA_MAG_G_BASS2DECAM"] = corrections["delta_bass2decam_g"][keep_mask]
+            samp_i_cat_cut["DELTA_MAG_R_BASS2DECAM"] = corrections["delta_bass2decam_r"][keep_mask]
+            samp_i_cat_cut["DELTA_MAG_G_NEB"] = corrections["delta_neb_g"][keep_mask]
+            samp_i_cat_cut["DELTA_MAG_R_NEB"] = corrections["delta_neb_r"][keep_mask]
+            samp_i_cat_cut["DELTA_MAG_G_NEB_ERR"] = corrections["delta_neb_g_err"][keep_mask]
+            samp_i_cat_cut["DELTA_MAG_R_NEB_ERR"] = corrections["delta_neb_r_err"][keep_mask]
+            samp_i_cat_cut["DELTA_MAG_G_DECAM2SDSS"] = corrections["delta_decam2sdss_g"][keep_mask]
+            samp_i_cat_cut["DELTA_MAG_R_DECAM2SDSS"] = corrections["delta_decam2sdss_r"][keep_mask]
+            samp_i_cat_cut["DELTA_MAG_G_KCORR"] = corrections["delta_kcorr_g"][keep_mask]
+            samp_i_cat_cut["DELTA_MAG_R_KCORR"] = corrections["delta_kcorr_r"][keep_mask]
+            samp_i_cat_cut["MAG_G_SDSS_Z0"] = mag_g_final[keep_mask]
+            samp_i_cat_cut["MAG_R_SDSS_Z0"] = mag_r_final[keep_mask]
+            samp_i_cat_cut["MAG_G_SDSS_Z0_ERR"] = mag_g_err_final[keep_mask]
+            samp_i_cat_cut["MAG_R_SDSS_Z0_ERR"] = mag_r_err_final[keep_mask]
+            samp_i_cat_cut["LOGM_M24_FIDU_CORR"] = logm_corr[keep_mask]
+            samp_i_cat_cut["LOGM_M24_FIDU_CORR_ERR"] = logm_corr_err[keep_mask]
+            samp_i_cat_cut["HALPHA_EW"] = halpha_ew[keep_mask]
+            samp_i_cat_cut["HALPHA_EW_IVAR"] = halpha_ew_ivar[keep_mask]
 
-            # Summary: fraction and count with absolute g-band mag brighter than -18.5 (nebular-corrected)
-            mag_g_corr = samp_i_cat_cut["MAG_G"].data + samp_i_cat_cut["DELTA_MAG_G_NEB"].data
-            mag_r_corr = samp_i_cat_cut["MAG_R"].data + samp_i_cat_cut["DELTA_MAG_R_NEB"].data
-            gr_col_corr = mag_g_corr - mag_r_corr
-            zred_cut = np.asarray(samp_i_cat_cut["Z_CMB"].data, dtype=float)
+            # Summary: absolute g-band mag using fully corrected SDSS z=0 photometry
             d_in_pc = np.asarray(samp_i_cat_cut["DIST_MPC_FIDU"].data, dtype=float) * 1e6
-            valid_mg = (d_in_pc > 0) & np.isfinite(d_in_pc) & np.isfinite(mag_g_corr)
-            kg = g_kcorr(gr_col_corr, zred_cut)
-            Mg = mag_g_corr + 5 - 5 * np.log10(d_in_pc) - kg
+            valid_mg = (d_in_pc > 0) & np.isfinite(d_in_pc) & np.isfinite(samp_i_cat_cut["MAG_G_SDSS_Z0"].data)
+            Mg = samp_i_cat_cut["MAG_G_SDSS_Z0"].data + 5 - 5 * np.log10(d_in_pc)
             n_tot = np.sum(valid_mg)
             n_bright = np.sum(valid_mg & (Mg < -18.5))
             if n_tot > 0:
-                print(f"{gal_type}: Objects with Mg < -18.5 (nebular-corrected): N = {n_bright}, "
+                print(f"{gal_type}: Objects with Mg < -18.5 (fully corrected): N = {n_bright}, "
                       f"fraction = {n_bright / n_tot:.4f} (total with valid distance = {n_tot})")
             else:
                 print(f"{gal_type}: No objects with valid distance for Mg summary.")
 
-            # Save the nebular-corrected catalog
+            # Save the corrected catalog
             path_nebcorr = save_folder + "/" + save_filename.replace(".fits", "_INT_V2_NEBCORR.fits")
             path_int_old = save_folder + "/" + save_filename.replace(".fits", "_INT.fits")
             save_table(samp_i_cat_cut, path_nebcorr, comment="")
