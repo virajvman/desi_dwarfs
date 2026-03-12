@@ -108,6 +108,12 @@ import multiprocessing as mp
 DECAM_G = speclite.filters.load_filters('decamDR1noatm-g')
 DECAM_R = speclite.filters.load_filters('decamDR1noatm-r')
 
+BASS_G = speclite.filters.load_filters('BASS-g')
+BASS_R = speclite.filters.load_filters('BASS-r')
+
+SDSS_G = speclite.filters.load_filters('sdss2010noatm-g')
+SDSS_R = speclite.filters.load_filters('sdss2010noatm-r')
+
 
 def get_fastspecfit_path(survey, program, healpix,
                          base_dir="/global/cfs/cdirs/desi/public/dr1/vac/dr1/fastspecfit/iron/v3.0/healpix"):
@@ -116,7 +122,7 @@ def get_fastspecfit_path(survey, program, healpix,
     return f"{base_dir}/{survey}/{program}/{healpix_parent}/{healpix}/{filename}"
 
 
-def measure_photo_batch(wave_arr, flux_2d):
+def measure_photo_batch(wave_arr, flux_2d, zred, only_continuum=False):
     """
     Measure g and r AB magnitudes for a batch of spectra.
 
@@ -125,6 +131,8 @@ def measure_photo_batch(wave_arr, flux_2d):
     wave_arr : 1D array, shape (Nwave,)
     flux_2d : 2D array, shape (N_spectra, Nwave)
         Flux in 1e-17 erg/s/cm2/Ang.
+    zred : 2D array, shape (N_spectra, )
+        Redshift of objects
 
     Returns
     -------
@@ -132,8 +140,37 @@ def measure_photo_batch(wave_arr, flux_2d):
     """
     wlen_f = wave_arr * u.Angstrom
     flux_f = flux_2d * 1e-17 * u.erg / (u.cm**2 * u.s * u.Angstrom)
-    mag_g = DECAM_G.get_ab_magnitudes(flux_f, wlen_f)["decamDR1noatm-g"].data
-    mag_r = DECAM_R.get_ab_magnitudes(flux_f, wlen_f)["decamDR1noatm-r"].data
+
+    mag_g_decam = DECAM_G.get_ab_magnitudes(flux_f, wlen_f)["decamDR1noatm-g"].data
+    mag_r_decam = DECAM_R.get_ab_magnitudes(flux_f, wlen_f)["decamDR1noatm-r"].data
+
+    mag_g_bass = BASS_G
+    mag_r_bass = BASS_R
+
+    #if we are mesuring this on only continuum photometry:
+    #correcting bass to decam, and then decam to sdss, and then sdss at zobs to sdss z=0
+
+    if only_continuum=True:
+        #oc short for only continuum
+        #by measuring the bass photometry we can compare with above decam photometry to derive corrections from bass to decam
+        mag_g_bass_oc = 
+        mag_r_bass_oc =
+
+        #by measuring sdss photometry we can then compare decam to sdss
+        mag_g_sdss_oc = SDSS_G
+        mag_r_sdss_oc = SDSS_R
+
+        #then de-redshift the spectra to z=0 to derive k-corrections for sdss
+        TODO: need to fix this as we will now have a different wavelength array for each object .. so need to fix the below code
+        wlen_rest_f = ( wave_arr / (1+zred) ) * u.Angstrom
+        #need to also change the flux density as changing redshift
+        flux_rest_f = flux_2d * (1+zred) * 1e-17 * u.erg / (u.cm**2 * u.s * u.Angstrom)
+        
+        mag_g_sdss_z0_oc = SDSS_G
+        mag_r_sdss_z0_oc = SDSS_R
+
+        #return all these magnitudes and save them in the catalog so then we can analyze the k corrections
+        
     return mag_g, mag_r
 
 
@@ -414,10 +451,26 @@ def compute_photometry_catalog(catalog,
                 continuum = model_data[valid_fits_rows, 0, :]
                 emission  = model_data[valid_fits_rows, 2, :]
 
+                TODO: save these models with their targetid so in future we do not have to read many files
+                and could just load in the file with saved fastspec model for our objects of interest!
+
                 model_variants = {
                     "model_no_emi": (continuum,            g_model_no_emi, r_model_no_emi),
                     "model_w_emi":  (continuum + emission, g_model_w_emi,  r_model_w_emi),
                 }
+
+                TODO: update this step here to handle only_continuum photometry different as we want to derive many other corrections
+
+                here is the overall outline of what we are doing:
+                i) for each galaxy, measure the decam photometry of spectra with and without emission lines so can apply corrections
+                ii) for subset of galaxies where is_south = 0, the g and r band are in BASS system, so we need to first convert the BASS photometry to decam photometry, and then apply another correction to that decam photo for emission line (just as we do above). Note that all these corrections discussed here are being done on a per object basis by using the fastspec model spec.
+                iii) then we measure the sdss photometry to derive corrections to go from DECAM continuum only to sdss continuum only
+                iv) then we measure the sdss photometry by deredshifting the fastspec model to z=0 so we can correct photometry for redshift (k-corrections) and then use our stellar mass prescription which is derived using sdss photometry at zredshift = 0
+
+                About the bass to decam conversion, to make things easier, we could just compute the bass photometry for all objects, and just apply the correction when is_south = 0? Also, the only reason I am thinking of doing bass -> decam -> sdss isntead of directly bass -> sdss, is then I can specifically make a plot later how big of an impact bass and decam for galaxies I have.
+
+                Note that we need to save all these magnitudes so we can compute the magnitude differneces from each other so we can apply it to our entire galaxy tractor photometry as we only have spectra + spectra model in a fiber. 
+                
                 for vname, (flux_2d, g_out, r_out) in model_variants.items():
                     for start in range(0, len(valid_cat), batch_size):
                         end = min(start + batch_size, len(valid_cat))

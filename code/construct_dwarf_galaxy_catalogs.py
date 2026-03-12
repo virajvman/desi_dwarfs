@@ -1478,6 +1478,13 @@ if __name__ == '__main__':
             assert np.array_equal(samp_i_cat["TARGETID"].data, result_samp_i["TARGETID"].data), \
                 "TARGETID ordering mismatch after reordering!"
 
+
+            TODO: write a function here that takes in the catalog above, and applies the corrections to get 
+            sdss z=0 photometry with no emission line contribution for all galaxies. We can just call that function!
+
+
+            TODO: and then we will use sdss z=0 corrected continuum only photometry to derive the stellar masses!
+        
             # Raw delta magnitudes from model photometry (no_emi - w_emi)
             delta_mag_g_raw = result_samp_i["g_model_no_emi"].data - result_samp_i["g_model_w_emi"].data
             delta_mag_r_raw = result_samp_i["r_model_no_emi"].data - result_samp_i["r_model_w_emi"].data
