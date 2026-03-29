@@ -337,6 +337,9 @@ def get_final_catalogs(zpix_cat, zpix_trac, sample_name):
         zpix_cat["FIBERFLUX_G"] = zpix_trac["FIBERFLUX_G"].data
         zpix_cat["FIBERMAG_Z"] = 22.5 - 2.5*np.log10(zpix_trac["FIBERFLUX_Z"].data)
         zpix_cat["FIBERFLUX_Z"] = zpix_trac["FIBERFLUX_Z"].data
+        
+        zpix_cat["FIBERTOTFLUX_G"] = zpix_trac["FIBERTOTFLUX_G"].data
+        zpix_cat["FIBERTOTFLUX_R"] = zpix_trac["FIBERTOTFLUX_R"].data
     else:
         zpix_cat["FIBERMAG_R"] = 22.5 - 2.5*np.log10(zpix_cat["FIBERFLUX_R"].data)
         zpix_cat["FIBERFLUX_R"] = zpix_cat["FIBERFLUX_R"].data
@@ -344,6 +347,10 @@ def get_final_catalogs(zpix_cat, zpix_trac, sample_name):
         zpix_cat["FIBERFLUX_G"] = zpix_trac["FIBERFLUX_G"].data
         zpix_cat["FIBERMAG_Z"] = 22.5 - 2.5*np.log10(zpix_trac["FIBERFLUX_Z"].data)
         zpix_cat["FIBERFLUX_Z"] = zpix_trac["FIBERFLUX_Z"].data
+
+        zpix_cat["FIBERTOTFLUX_G"] = zpix_trac["FIBERTOTFLUX_G"].data
+        zpix_cat["FIBERTOTFLUX_R"] = zpix_trac["FIBERTOTFLUX_R"].data
+        
         
     
     #confirm that the two fiber flux match!
@@ -1456,6 +1463,12 @@ if __name__ == '__main__':
             print(f"{gal_type}: After LOGM_M24_FIDU < 9.5 pre-filter = {len(samp_i_cat)} "
                   f"(removed {np.sum(~precut_mask)})")
 
+            ## we will be using the fastspec model to do nebular correction!
+            ## however, we will use the error on the continuum only spectra photometry as an error on the nebular correction later
+            ## we can derive the nebular correction error later! 
+
+            TODO: remove the snr gating stuff, that is no longer needed.
+
             neb_photo_path = save_folder + f"/model_photometry_diffs_{gal_type}.fits"
 
             if os.path.exists(neb_photo_path) and not overwrite:
@@ -1490,7 +1503,7 @@ if __name__ == '__main__':
             # Apply the full photometric correction chain:
             # BASS->DECam (if north) -> nebular removal -> DECam->SDSS -> k-correction
             print(f"{gal_type}: Applying full photometric correction chain...")
-            corrections = apply_photometric_corrections(samp_i_cat, result_samp_i, snr_threshold=3.0)
+            corrections = apply_photometric_corrections(samp_i_cat, result_samp_i, snr_threshold=2.0)
 
             mag_g_final = corrections["mag_g_sdss_z0"]
             mag_r_final = corrections["mag_r_sdss_z0"]
@@ -1501,10 +1514,6 @@ if __name__ == '__main__':
             halpha_ew = corrections["halpha_ew"]
             halpha_ew_ivar = corrections["halpha_ew_ivar"]
 
-            # TODO: confirm behavior for objects with ew < 3, make it such that no neb correction is applied
-            # TODO: think about other proxies in addition to HALPHA_EW, like FHBETA_CONT and FHALPHA_CONTSNR etc. , 
-            # #I think the above is best proxy, do tests on how good it is! what are the cases where continuum is detected, but EW is low snr?
-            # #are those just objects with weak emission lines
             # TODO: cross-check filter transform nd k correction!
             # TODO: save the FIBERMAG_G/R/Z and coudl use that to probe color gradients ... like make a plot of difference in color as function of stellar mass ... we could make this plot for objects where we are not on an obvious HII region or something ...
             # TODO: think a bit mroe about how perture correctiosn for shredded sources will be done ... 
@@ -1574,14 +1583,12 @@ if __name__ == '__main__':
             samp_i_cat_cut["MAG_R_SDSS_Z0"] = mag_r_final[keep_mask]
             samp_i_cat_cut["MAG_G_SDSS_Z0_ERR"] = mag_g_err_final[keep_mask]
             samp_i_cat_cut["MAG_R_SDSS_Z0_ERR"] = mag_r_err_final[keep_mask]
+            
             samp_i_cat_cut["LOGM_M24_FIDU_CORR"] = logm_corr[keep_mask]
             samp_i_cat_cut["LOGM_M24_FIDU_CORR_ERR"] = logm_corr_err[keep_mask]
+            
             samp_i_cat_cut["HALPHA_EW"] = halpha_ew[keep_mask]
             samp_i_cat_cut["HALPHA_EW_IVAR"] = halpha_ew_ivar[keep_mask]
-            samp_i_cat_cut["HIGH_PIXEL_SNR"] = corrections["high_pixel_snr"][keep_mask]
-            samp_i_cat_cut["SNR_R"] = result_samp_i["SNR_R"].data[keep_mask]
-            samp_i_cat_cut["SNR_B"] = result_samp_i["SNR_B"].data[keep_mask]
-            samp_i_cat_cut["SNR_Z"] = result_samp_i["SNR_Z"].data[keep_mask]
 
             # Summary: absolute g-band mag using fully corrected SDSS z=0 photometry
             d_in_pc = np.asarray(samp_i_cat_cut["DIST_MPC_FIDU"].data, dtype=float) * 1e6

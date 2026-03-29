@@ -149,6 +149,9 @@ def download_and_append_sample_spectra(catalog_path, existing_h5_path, sample_na
     print_stage(f"Successfully appended {len(new_targetids)} spectra to {existing_h5_path}")
 
 
+def general_download(cat, save_path):
+    
+
 if __name__ == '__main__':
 
     rng = np.random.default_rng(42)

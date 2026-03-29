@@ -1,6 +1,6 @@
 import numpy as np
 from astropy.cosmology import Planck18
-
+from desispec.interpolation import resample_flux
 
 def line_snr_mask(fastspec_cat, line_names=["HALPHA"], snr_val=3):
     """
@@ -122,79 +122,214 @@ def get_fastspecfit_path(survey, program, healpix,
     return f"{base_dir}/{survey}/{program}/{healpix_parent}/{healpix}/{filename}"
 
 
-def measure_photo_batch(wave_arr, flux_2d, zred=None,
+def get_filter_weights(filt, wave_arr):
+    """
+    Interpolate a speclite FilterResponse onto an arbitrary wavelength
+    grid and return per-pixel weights for the AB maggies integral.
+
+    The weights w_i satisfy:
+        maggies = sum(f_lambda_i * w_i)   [dimensionless]
+    so that:
+        mag = -2.5 * log10(maggies)
+    and:
+        var_maggies = sum(w_i^2 * var_flambda_i)
+
+    Parameters
+    ----------
+    filt : speclite FilterResponse
+    wave_arr : 1D array, shape (Nwave,), in Angstrom
+
+    Returns
+    -------
+    weights : 1D array, shape (Nwave,)
+    """
+    # Handle both Quantity and plain ndarray wavelengths
+    filt_wave = filt.wavelength
+    if hasattr(filt_wave, 'to'):
+        filt_wave = filt_wave.to("Angstrom").value
+
+    R = np.interp(wave_arr, filt_wave, filt.response, left=0.0, right=0.0)
+
+    c_ang = 2.998e18
+    f_nu_ref = 3.631e-20
+
+    dlam = np.gradient(wave_arr)
+    num_weights = R * wave_arr * dlam
+    denom = f_nu_ref * c_ang * np.sum(R / wave_arr * dlam)
+
+    return num_weights / denom
+
+
+def measure_photo_batch(wave_arr, flux_2d, ivar_2d=None, zred=None,
                         measure_bass=False,
                         measure_sdss=False,
                         measure_sdss_z0=False):
     """
-    Measure AB magnitudes for a batch of spectra in requested filter systems.
+    Measure AB magnitudes (and optionally magnitude errors) for a batch
+    of spectra in requested filter systems.
 
     Always measures DECam g,r. Optionally measures BASS, SDSS (observed frame),
-    and SDSS at z=0 (rest frame, per-object de-redshift).
+    and SDSS at z=0 (rest frame, per-object de-redshift via resample_flux).
+
+    Magnitudes are computed using speclite's get_ab_magnitudes.
+    Errors (if ivar_2d provided) are computed via analytic propagation
+    using get_filter_weights.
 
     Parameters
     ----------
     wave_arr : 1D array, shape (Nwave,)
     flux_2d : 2D array, shape (N_spectra, Nwave)
         Flux in 1e-17 erg/s/cm2/Ang.
+    ivar_2d : 2D array, shape (N_spectra, Nwave), or None
+        Inverse variance in (1e-17 erg/s/cm2/Ang)^{-2} units.
+        If provided, magnitude errors are returned. If None, no errors.
     zred : 1D array, shape (N_spectra,), optional
         Redshift of objects. Required when measure_sdss_z0=True.
     measure_bass : bool
-        If True, also measure BASS g,r.
     measure_sdss : bool
-        If True, also measure SDSS g,r at observed wavelengths.
     measure_sdss_z0 : bool
-        If True, de-redshift each spectrum to z=0 and measure SDSS g,r.
-        Requires zred.
 
     Returns
     -------
     result : dict
         Keys: 'g_decam', 'r_decam', and optionally 'g_bass', 'r_bass',
         'g_sdss', 'r_sdss', 'g_sdss_z0', 'r_sdss_z0'.
+        If ivar_2d is provided, also contains '*_err' variants of each key.
         Each value is a 1D array of shape (N_spectra,).
     """
     flux_2d = np.atleast_2d(flux_2d)
+    n_spec = flux_2d.shape[0]
+    do_errors = ivar_2d is not None
+
+    if do_errors:
+        ivar_2d = np.atleast_2d(ivar_2d)
+
+    # Speclite units
     wlen_f = wave_arr * u.Angstrom
     flux_f = flux_2d * 1e-17 * u.erg / (u.cm**2 * u.s * u.Angstrom)
 
     result = {}
-    result['g_decam'] = DECAM_G.get_ab_magnitudes(flux_f, wlen_f)["decamDR1noatm-g"].data
-    result['r_decam'] = DECAM_R.get_ab_magnitudes(flux_f, wlen_f)["decamDR1noatm-r"].data
 
+    # --- Helper: magnitudes via speclite, errors via filter weights ---
+    def _measure_filters(filters_dict, wave, wlen, flux_with_units,
+                         flux_raw, ivar_raw=None):
+        """
+        filters_dict : dict of {result_key: (FilterSequence, column_name)}
+        wave         : 1D array in Angstrom (for get_filter_weights)
+        wlen         : wave * u.Angstrom (for speclite)
+        flux_with_units : flux with astropy units (for speclite)
+        flux_raw     : flux in 1e-17 units, no astropy units (for error calc)
+        ivar_raw     : ivar in (1e-17)^{-2} units, or None
+        """
+        for key, (filt_seq, col_name) in filters_dict.items():
+            # Magnitudes via speclite
+            result[key] = filt_seq.get_ab_magnitudes(flux_with_units, wlen)[col_name].data
+
+            # Errors via analytic propagation
+            if ivar_raw is not None:
+                w = get_filter_weights(filt_seq[0], wave)
+                flux_phys = flux_raw * 1e-17
+                var_phys = np.where(ivar_raw > 0, 1.0 / ivar_raw, 0.0) * (1e-17)**2
+                maggies = flux_phys @ w
+                var_maggies = var_phys @ (w**2)
+                result[key + '_err'] = np.where(
+                    maggies > 0,
+                    (2.5 / np.log(10)) * np.sqrt(var_maggies) / np.abs(maggies),
+                    np.nan
+                )
+
+    ivar_for_errors = ivar_2d if do_errors else None
+
+    # --- DECam g, r ---
+    _measure_filters({
+        'g_decam': (DECAM_G, 'decamDR1noatm-g'),
+        'r_decam': (DECAM_R, 'decamDR1noatm-r'),
+    }, wave_arr, wlen_f, flux_f, flux_2d, ivar_for_errors)
+
+    # --- BASS g, r ---
     if measure_bass:
-        result['g_bass'] = BASS_G.get_ab_magnitudes(flux_f, wlen_f)["BASS-g"].data
-        result['r_bass'] = BASS_R.get_ab_magnitudes(flux_f, wlen_f)["BASS-r"].data
+        _measure_filters({
+            'g_bass': (BASS_G, 'BASS-g'),
+            'r_bass': (BASS_R, 'BASS-r'),
+        }, wave_arr, wlen_f, flux_f, flux_2d, ivar_for_errors)
 
+    # --- SDSS g, r (observed frame) ---
     if measure_sdss:
-        result['g_sdss'] = SDSS_G.get_ab_magnitudes(flux_f, wlen_f)["sdss2010noatm-g"].data
-        result['r_sdss'] = SDSS_R.get_ab_magnitudes(flux_f, wlen_f)["sdss2010noatm-r"].data
+        _measure_filters({
+            'g_sdss': (SDSS_G, 'sdss2010noatm-g'),
+            'r_sdss': (SDSS_R, 'sdss2010noatm-r'),
+        }, wave_arr, wlen_f, flux_f, flux_2d, ivar_for_errors)
 
+    # --- SDSS g, r at z=0 (rest frame, vectorized) ---
     if measure_sdss_z0:
         if zred is None:
             raise ValueError("zred is required when measure_sdss_z0=True")
-        n_spec = flux_2d.shape[0]
+
+        wave_out = wave_arr
+
+        flux_rest_resampled = np.full_like(flux_2d, np.nan)
+        ivar_rest_resampled = np.full_like(flux_2d, 0.0) if do_errors else None
+
+        valid = np.isfinite(zred) & (zred > 0)
+
+        for j in np.where(valid)[0]:
+            z_j = zred[j]
+            rest_wave = wave_arr / (1.0 + z_j)
+            flux_rest_j = flux_2d[j] * (1.0 + z_j)
+
+            if do_errors:
+                ivar_rest_j = ivar_2d[j] / (1.0 + z_j)**2
+                f_out, iv_out = resample_flux(wave_out, rest_wave, flux_rest_j,
+                                              ivar=ivar_rest_j)
+                flux_rest_resampled[j] = f_out
+                ivar_rest_resampled[j] = iv_out
+            else:
+                f_out, _ = resample_flux(wave_out, rest_wave, flux_rest_j)
+                flux_rest_resampled[j] = f_out
+
         g_z0 = np.full(n_spec, np.nan)
         r_z0 = np.full(n_spec, np.nan)
-        for j in range(n_spec):
-            z_j = zred[j]
-            if not np.isfinite(z_j) or z_j <= 0:
-                continue
-            wlen_rest = (wave_arr / (1.0 + z_j)) * u.Angstrom
-            flux_rest = (flux_2d[j:j+1] * (1.0 + z_j)
-                         * 1e-17 * u.erg / (u.cm**2 * u.s * u.Angstrom))
-            try:
-                g_z0[j] = SDSS_G.get_ab_magnitudes(flux_rest, wlen_rest)[
-                    "sdss2010noatm-g"].data[0]
-                r_z0[j] = SDSS_R.get_ab_magnitudes(flux_rest, wlen_rest)[
-                    "sdss2010noatm-r"].data[0]
-            except Exception:
-                pass
+        g_z0_err = np.full(n_spec, np.nan) if do_errors else None
+        r_z0_err = np.full(n_spec, np.nan) if do_errors else None
+
+        if np.any(valid):
+            sub_flux = flux_rest_resampled[valid]
+            sub_wlen = wave_out * u.Angstrom
+            sub_flux_f = sub_flux * 1e-17 * u.erg / (u.cm**2 * u.s * u.Angstrom)
+
+            g_z0[valid] = SDSS_G.get_ab_magnitudes(sub_flux_f, sub_wlen)["sdss2010noatm-g"].data
+            r_z0[valid] = SDSS_R.get_ab_magnitudes(sub_flux_f, sub_wlen)["sdss2010noatm-r"].data
+
+            if do_errors:
+                sub_ivar = ivar_rest_resampled[valid]
+                sub_flux_phys = sub_flux * 1e-17
+                sub_var_phys = np.where(sub_ivar > 0, 1.0 / sub_ivar, 0.0) * (1e-17)**2
+
+                w_g = get_filter_weights(SDSS_G[0], wave_out)
+                w_r = get_filter_weights(SDSS_R[0], wave_out)
+
+                maggies_g = sub_flux_phys @ w_g
+                maggies_r = sub_flux_phys @ w_r
+                var_maggies_g = sub_var_phys @ (w_g**2)
+                var_maggies_r = sub_var_phys @ (w_r**2)
+
+                g_z0_err[valid] = np.where(
+                    maggies_g > 0,
+                    (2.5 / np.log(10)) * np.sqrt(var_maggies_g) / np.abs(maggies_g),
+                    np.nan)
+                r_z0_err[valid] = np.where(
+                    maggies_r > 0,
+                    (2.5 / np.log(10)) * np.sqrt(var_maggies_r) / np.abs(maggies_r),
+                    np.nan)
+
         result['g_sdss_z0'] = g_z0
         result['r_sdss_z0'] = r_z0
+        if do_errors:
+            result['g_sdss_z0_err'] = g_z0_err
+            result['r_sdss_z0_err'] = r_z0_err
 
     return result
-
+    
 
 def _process_single_file(args):
     """
@@ -340,7 +475,7 @@ def _process_single_file(args):
 def compute_photometry_catalog(catalog,
                                spectra_h5_path=None,
                                compute_data_photometry=True,
-                               base_dir="/global/cfs/cdirs/desi/public/dr1/vac/dr1/fastspecfit/iron/v3.0/healpix",
+                               base_dir="/global/cfs/cdirs/desi/public/dr1/vac/dr1/fastspecfit/iron/v2.1/healpix",
                                save_path=None,
                                batch_size=500,
                                ncore=8,
@@ -423,18 +558,9 @@ def compute_photometry_catalog(catalog,
     # SDSS at z=0 on continuum only (for k-correction)
     g_sdss_z0_no_emi = np.full(n_objects, np.nan)
     r_sdss_z0_no_emi = np.full(n_objects, np.nan)
-
-    absmag_g       = np.full(n_objects, np.nan)
-    absmag_r       = np.full(n_objects, np.nan)
-    absmag_ivar_g  = np.full(n_objects, np.nan)
-    absmag_ivar_r  = np.full(n_objects, np.nan)
-
+    
     halpha_ew      = np.full(n_objects, np.nan)
     halpha_ew_ivar = np.full(n_objects, np.nan)
-
-    snr_r = np.full(n_objects, np.nan)
-    snr_b = np.full(n_objects, np.nan)
-    snr_z = np.full(n_objects, np.nan)
 
     if compute_data_photometry:
         g_data_no_emi = np.full(n_objects, np.nan)
@@ -483,15 +609,10 @@ def compute_photometry_catalog(catalog,
                 r_sdss_no_emi[idx]  = file_result["r_sdss_no_emi"]
                 g_sdss_z0_no_emi[idx] = file_result["g_sdss_z0_no_emi"]
                 r_sdss_z0_no_emi[idx] = file_result["r_sdss_z0_no_emi"]
-                absmag_g[idx]       = file_result["absmag_g"]
-                absmag_r[idx]       = file_result["absmag_r"]
-                absmag_ivar_g[idx]  = file_result["absmag_ivar_g"]
-                absmag_ivar_r[idx]  = file_result["absmag_ivar_r"]
+                
                 halpha_ew[idx]      = file_result["halpha_ew"]
                 halpha_ew_ivar[idx] = file_result["halpha_ew_ivar"]
-                snr_r[idx] = file_result["snr_r"]
-                snr_b[idx] = file_result["snr_b"]
-                snr_z[idx] = file_result["snr_z"]
+
                 if verbose and files_done % 50 == 0:
                     print(f"  Processed {files_done}/{n_files} files")
 
@@ -517,10 +638,9 @@ def compute_photometry_catalog(catalog,
                 wavelength = (header["CRVAL1"]
                               + (np.arange(header["NAXIS1"]) - header["CRPIX1"]) * header["CDELT1"])
                 model_data = iron_vac["MODELS"].data
-
-                specphot_data = iron_vac["SPECPHOT"].data
+                
                 fastspec_data = iron_vac["FASTSPEC"].data
-                tgids_file = specphot_data["TARGETID"]
+                tgids_file = fastspec_data["TARGETID"]
                 tgid_to_fits_row = {t: i for i, t in enumerate(tgids_file)}
 
                 valid_cat = []
@@ -538,28 +658,17 @@ def compute_photometry_catalog(catalog,
 
                 valid_cat = np.array(valid_cat)
                 valid_fits_rows = np.array(valid_fits_rows)
-
-                absmag_g[valid_cat]      = specphot_data["ABSMAG01_SYNTH_SDSS_G"][valid_fits_rows]
-                absmag_r[valid_cat]      = specphot_data["ABSMAG01_SYNTH_SDSS_R"][valid_fits_rows]
-                absmag_ivar_g[valid_cat] = specphot_data["ABSMAG01_SYNTH_IVAR_SDSS_G"][valid_fits_rows]
-                absmag_ivar_r[valid_cat] = specphot_data["ABSMAG01_SYNTH_IVAR_SDSS_R"][valid_fits_rows]
-
+                
                 halpha_ew[valid_cat]      = fastspec_data["HALPHA_EW"][valid_fits_rows]
                 halpha_ew_ivar[valid_cat] = fastspec_data["HALPHA_EW_IVAR"][valid_fits_rows]
 
-                try:
-                    snr_r[valid_cat] = fastspec_data["SNR_R"][valid_fits_rows]
-                    snr_b[valid_cat] = fastspec_data["SNR_B"][valid_fits_rows]
-                    snr_z[valid_cat] = fastspec_data["SNR_Z"][valid_fits_rows]
-                except (KeyError, TypeError):
-                    pass
-
                 continuum = model_data[valid_fits_rows, 0, :]
+                smooth_continuum = model_data[valid_fits_rows, 1, :]
                 emission  = model_data[valid_fits_rows, 2, :]
                 valid_zred = redshifts[valid_cat]
 
                 # --- Continuum + emission: DECam and BASS ---
-                flux_w_emi = continuum + emission
+                flux_w_emi = continuum + smooth_continuum + emission
                 for start in range(0, len(valid_cat), batch_size):
                     end = min(start + batch_size, len(valid_cat))
                     try:
@@ -574,11 +683,12 @@ def compute_photometry_catalog(catalog,
                             print(f"  Photometry error (w_emi, batch {start}-{end}): {e}")
 
                 # --- Continuum only: DECam, SDSS, and SDSS at z=0 ---
+                flux_only_cont = continuum + smooth_continuum
                 for start in range(0, len(valid_cat), batch_size):
                     end = min(start + batch_size, len(valid_cat))
                     try:
                         phot = measure_photo_batch(
-                            wavelength, continuum[start:end],
+                            wavelength, flux_only_cont[start:end],
                             zred=valid_zred[start:end],
                             measure_sdss=True,
                             measure_sdss_z0=True,
@@ -638,16 +748,10 @@ def compute_photometry_catalog(catalog,
         "r_sdss_no_emi":              r_sdss_no_emi,
         "g_sdss_z0_no_emi":           g_sdss_z0_no_emi,
         "r_sdss_z0_no_emi":           r_sdss_z0_no_emi,
-        "ABSMAG01_SYNTH_SDSS_G":      absmag_g,
-        "ABSMAG01_SYNTH_SDSS_R":      absmag_r,
-        "ABSMAG01_SYNTH_IVAR_SDSS_G": absmag_ivar_g,
-        "ABSMAG01_SYNTH_IVAR_SDSS_R": absmag_ivar_r,
         "HALPHA_EW":                   halpha_ew,
-        "HALPHA_EW_IVAR":             halpha_ew_ivar,
-        "SNR_R":                       snr_r,
-        "SNR_B":                       snr_b,
-        "SNR_Z":                       snr_z,
+        "HALPHA_EW_IVAR":             halpha_ew_ivar
     }
+    
     if compute_data_photometry:
         columns["g_data_no_emi"] = g_data_no_emi
         columns["r_data_no_emi"] = r_data_no_emi
