@@ -1240,7 +1240,6 @@ if __name__ == '__main__':
     
                 #to understand how the target catalogs in get_lowz_catalogs() are constructed, look at read_ls_lowz_catalogs.py script
     
-                
             else:
                 if gal_type == "BGS_BRIGHT":
                     iron_bgs_tgid = zpix_iron["BGS_TARGET"]
@@ -1467,7 +1466,13 @@ if __name__ == '__main__':
             ## however, we will use the error on the continuum only spectra photometry as an error on the nebular correction later
             ## we can derive the nebular correction error later! 
 
-            TODO: remove the snr gating stuff, that is no longer needed.
+            #check snr gating stuff later!
+            # TODO: add smooth continuum to parts when k correction and nebular corrections are being derived!!
+    
+            #we basically want to correct the observed photometry and translate to continuum only in sdss at z=0
+                
+            AHH but I still check how the model based nebular corrections are if data is very noisy
+            I have checked that in good snr regime, these two are equivalent!
 
             neb_photo_path = save_folder + f"/model_photometry_diffs_{gal_type}.fits"
 

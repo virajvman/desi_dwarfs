@@ -359,9 +359,8 @@ def _process_single_file(args):
                       + (np.arange(header["NAXIS1"]) - header["CRPIX1"]) * header["CDELT1"])
         model_data = iron_vac["MODELS"].data
 
-        specphot_data = iron_vac["SPECPHOT"].data
         fastspec_data = iron_vac["FASTSPEC"].data
-        tgids_file = specphot_data["TARGETID"]
+        tgids_file = fastspec_data["TARGETID"]
         tgid_to_fits_row = {t: i for i, t in enumerate(tgids_file)}
 
         valid_cat = []
@@ -385,10 +384,6 @@ def _process_single_file(args):
 
         result = {
             "cat_indices":   valid_cat,
-            "absmag_g":      np.array(specphot_data["ABSMAG01_SYNTH_SDSS_G"][valid_fits_rows], dtype=float),
-            "absmag_r":      np.array(specphot_data["ABSMAG01_SYNTH_SDSS_R"][valid_fits_rows], dtype=float),
-            "absmag_ivar_g": np.array(specphot_data["ABSMAG01_SYNTH_IVAR_SDSS_G"][valid_fits_rows], dtype=float),
-            "absmag_ivar_r": np.array(specphot_data["ABSMAG01_SYNTH_IVAR_SDSS_R"][valid_fits_rows], dtype=float),
             "halpha_ew":      np.array(fastspec_data["HALPHA_EW"][valid_fits_rows], dtype=float),
             "halpha_ew_ivar": np.array(fastspec_data["HALPHA_EW_IVAR"][valid_fits_rows], dtype=float),
         }
@@ -402,6 +397,7 @@ def _process_single_file(args):
             result["snr_z"] = np.full(n_valid, np.nan, dtype=float)
 
         continuum = model_data[valid_fits_rows, 0, :]
+        smooth_continuum = model_data[valid_fits_rows, 1, :]
         emission  = model_data[valid_fits_rows, 2, :]
 
         # -- DECam photometry for both model variants (existing) --
@@ -414,6 +410,8 @@ def _process_single_file(args):
         g_bass_w_emi = np.full(n_valid, np.nan)
         r_bass_w_emi = np.full(n_valid, np.nan)
 
+        #we will have decam continuum only photmetry, and so will be applying sdss conversion to that!
+        
         # -- SDSS photometry on continuum only (for DECam->SDSS conversion) --
         g_sdss_no_emi = np.full(n_valid, np.nan)
         r_sdss_no_emi = np.full(n_valid, np.nan)
@@ -423,7 +421,7 @@ def _process_single_file(args):
         r_sdss_z0_no_emi = np.full(n_valid, np.nan)
 
         # --- Continuum + emission: measure DECam and BASS ---
-        flux_w_emi = continuum + emission
+        flux_w_emi = continuum + smooth_continuum + emission
         for start in range(0, n_valid, batch_size):
             end = min(start + batch_size, n_valid)
             try:
@@ -437,11 +435,12 @@ def _process_single_file(args):
                 pass
 
         # --- Continuum only: measure DECam, SDSS, and SDSS at z=0 ---
+        flux_cont_only = continuum + smooth_continuum
         for start in range(0, n_valid, batch_size):
             end = min(start + batch_size, n_valid)
             try:
                 phot = measure_photo_batch(
-                    wavelength, continuum[start:end],
+                    wavelength, flux_cont_only[start:end],
                     zred=valid_redshifts[start:end],
                     measure_sdss=True,
                     measure_sdss_z0=True,
@@ -794,7 +793,7 @@ def apply_photometric_corrections(cat, model_phot_table,
 
     Correction steps (applied in this order):
         1. BASS -> DECam  (only where is_south=0; measured on w_emi model)
-        2. Nebular emission removal in DECam (pixel-SNR gated)
+        2. Nebular emission removal in DECam
         3. DECam -> SDSS  (measured on continuum-only model)
         4. k-correction: SDSS z_obs -> SDSS z=0 (measured on continuum-only model)
 
@@ -851,7 +850,7 @@ def apply_photometric_corrections(cat, model_phot_table,
     mag_r_working[north_mask] += delta_bass2decam_r[north_mask]
 
     # ------------------------------------------------------------------
-    # Step 2: Nebular emission correction (pixel-SNR gated, DECam system)
+    # Step 2: Nebular emission correction (DECam system)
     # ------------------------------------------------------------------
     delta_neb_g_raw = (model_phot_table["g_model_no_emi"].data
                        - model_phot_table["g_model_w_emi"].data)
@@ -864,14 +863,13 @@ def apply_photometric_corrections(cat, model_phot_table,
     snr_r = np.asarray(model_phot_table["SNR_R"].data, dtype=float)
     snr_b = np.asarray(model_phot_table["SNR_B"].data, dtype=float)
     snr_z = np.asarray(model_phot_table["SNR_Z"].data, dtype=float)
+    
 
-    ivar_g = np.array(model_phot_table["ABSMAG01_SYNTH_IVAR_SDSS_G"].data, dtype=float)
-    ivar_r = np.array(model_phot_table["ABSMAG01_SYNTH_IVAR_SDSS_R"].data, dtype=float)
     with np.errstate(divide='ignore', invalid='ignore'):
         delta_neb_g_err_raw = np.where(ivar_g > 0, np.sqrt(1.0 / ivar_g), np.nan)
         delta_neb_r_err_raw = np.where(ivar_r > 0, np.sqrt(1.0 / ivar_r), np.nan)
 
-    delta_neb_g, delta_neb_r, delta_neb_g_err, delta_neb_r_err, relation_info, high_pixel_snr = \
+    delta_neb_g, delta_neb_r, relation_info = \
         apply_neb_correction_with_ew_relation(
             halpha_ew, halpha_ew_ivar,
             delta_neb_g_raw, delta_neb_r_raw,
@@ -955,7 +953,6 @@ def apply_photometric_corrections(cat, model_phot_table,
         "relation_info": relation_info,
         "halpha_ew": halpha_ew,
         "halpha_ew_ivar": halpha_ew_ivar,
-        "high_pixel_snr": high_pixel_snr,
     }
 
 
