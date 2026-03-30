@@ -767,7 +767,7 @@ if __name__ == '__main__':
         print(f"Incremental mode: {n_before} total objects, {len(existing_tgids)} already processed, {len(shreds_focus)} new objects to process")
         if len(shreds_focus) == 0:
             print("No new objects to process. Exiting.")
-            return
+            sys.exit(0)
 
     if make_cats == True:    
         print_stage("Generating relevant files for doing aperture photometry")
