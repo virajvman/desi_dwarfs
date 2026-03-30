@@ -1438,7 +1438,6 @@ if __name__ == '__main__':
     if run_neb_correction:
         from fastspec_funcs import (compute_photometry_catalog,
                                      apply_photometric_corrections,
-                                     apply_neb_correction_with_ew_relation,
                                      plot_neb_correction_diagnostic)
 
         overwrite = True
@@ -1461,18 +1460,6 @@ if __name__ == '__main__':
             samp_i_cat = samp_i_cat_full[precut_mask]
             print(f"{gal_type}: After LOGM_M24_FIDU < 9.5 pre-filter = {len(samp_i_cat)} "
                   f"(removed {np.sum(~precut_mask)})")
-
-            ## we will be using the fastspec model to do nebular correction!
-            ## however, we will use the error on the continuum only spectra photometry as an error on the nebular correction later
-            ## we can derive the nebular correction error later! 
-
-            #check snr gating stuff later!
-            # TODO: add smooth continuum to parts when k correction and nebular corrections are being derived!!
-    
-            #we basically want to correct the observed photometry and translate to continuum only in sdss at z=0
-                
-            AHH but I still check how the model based nebular corrections are if data is very noisy
-            I have checked that in good snr regime, these two are equivalent!
 
             neb_photo_path = save_folder + f"/model_photometry_diffs_{gal_type}.fits"
 
@@ -1508,30 +1495,20 @@ if __name__ == '__main__':
             # Apply the full photometric correction chain:
             # BASS->DECam (if north) -> nebular removal -> DECam->SDSS -> k-correction
             print(f"{gal_type}: Applying full photometric correction chain...")
-            corrections = apply_photometric_corrections(samp_i_cat, result_samp_i, snr_threshold=2.0)
+            corrections = apply_photometric_corrections(samp_i_cat, result_samp_i)
 
             mag_g_final = corrections["mag_g_sdss_z0"]
             mag_r_final = corrections["mag_r_sdss_z0"]
             mag_g_err_final = corrections["mag_g_sdss_z0_err"]
             mag_r_err_final = corrections["mag_r_sdss_z0_err"]
             gr_final = mag_g_final - mag_r_final
-            relation_info = corrections["relation_info"]
             halpha_ew = corrections["halpha_ew"]
             halpha_ew_ivar = corrections["halpha_ew_ivar"]
 
-            # TODO: cross-check filter transform nd k correction!
-            # TODO: save the FIBERMAG_G/R/Z and coudl use that to probe color gradients ... like make a plot of difference in color as function of stellar mass ... we could make this plot for objects where we are not on an obvious HII region or something ...
-            # TODO: think a bit mroe about how perture correctiosn for shredded sources will be done ... 
-            #in fastpsecfit, the aperture corrections are derived using flux_r/fiberflux_r ... think more about how we can do this ...
-            #but the fiberflux_r is synthesized from the model ... not the tractor fiber mag ...
-
             # Diagnostic plot for the nebular correction step
-            with np.errstate(divide="ignore", invalid="ignore"):
-                halpha_ew_snr = halpha_ew * np.sqrt(np.maximum(halpha_ew_ivar, 0.0))
             diag_plot_path = save_folder + f"/neb_correction_diagnostic_{gal_type}.png"
             plot_neb_correction_diagnostic(
                 halpha_ew, corrections["delta_neb_g"], corrections["delta_neb_r"],
-                halpha_ew_snr, 5.0, relation_info,
                 save_path=diag_plot_path, gal_type=gal_type,
             )
 
