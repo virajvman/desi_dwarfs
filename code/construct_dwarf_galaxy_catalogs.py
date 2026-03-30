@@ -913,7 +913,7 @@ def process_sga_VI_catalog():
 
     # VI file: repo data/sga_all_bad_VI.txt (RA, DEC, true/false per source)
     _code_dir = os.path.dirname(os.path.abspath(__file__))
-    _repo_data = os.path.join(os.path.dirname(_code_dir), "data", "sga_all_bad_VI.txt")
+    _repo_data = os.path.join(os.path.dirname(_code_dir), "data", "sga_all_bad_VI_V2.txt")
     sga_all_bad_VI_path = os.path.abspath(_repo_data)
 
     if not os.path.exists(sga_all_bad_VI_path):
@@ -1045,7 +1045,6 @@ def process_sga_matches(desi_sga_cat, gal_type):
 
     desi_matched_sga_bad = desi_sga_cat[~good_sga_mask]
     
-    
     print(f"{gal_type}: Galaxies (both robust + reprocess) with bad sga photo:", len(desi_matched_sga_bad))
 
 
@@ -1120,12 +1119,12 @@ if __name__ == '__main__':
     from desi_lowz_funcs import match_c_to_catalog, get_stellar_mass_mia, calc_normalized_dist
     from desi_lowz_funcs import get_sweep_filename, save_table, is_target_in_south
 
-    process_sga = False
+    process_sga = True
     compute_nam_dists = True
     save_int_catalog = False
 
     #should the photometry and stellar masses be corrected for nebular emission contamination?
-    run_neb_correction = True
+    run_neb_correction = False
     ncore_neb = 16
 
     zred_cuts = { "BGS_BRIGHT" : 0.4, "BGS_FAINT": 0.4, "LOWZ": 0.4, "ELG":0.5 }
@@ -1533,8 +1532,8 @@ if __name__ == '__main__':
 
             # Compare old vs new stellar mass cut
             logm_old = samp_i_cat["LOGM_M24_FIDU"].data
-            valid_old = logm_old > -90
-            valid_new = logm_corr > -90
+            valid_old = logm_old > 0
+            valid_new = logm_corr > 0
 
             n_old_pass = np.sum(logm_old[valid_old] < 9.25)
             n_new_pass = np.sum(logm_corr[valid_new] < 9.25)
@@ -1543,7 +1542,7 @@ if __name__ == '__main__':
             print(f"{gal_type}: Additional objects removed by corrected stellar mass: {n_old_pass - n_new_pass}")
 
             # Apply 9.25 stellar mass cut with the corrected masses
-            keep_mask = (logm_corr < 9.25) & (logm_corr > -90)
+            keep_mask = (logm_corr < 9.25) & (logm_corr > 0)
             n_before = len(samp_i_cat)
             samp_i_cat_cut = samp_i_cat[keep_mask]
 
@@ -1590,7 +1589,7 @@ if __name__ == '__main__':
             save_table(samp_i_cat_cut, path_nebcorr, comment="")
             print_catalog_overlap_diagnostics(path_nebcorr, path_int_old)
 
-    if False:
+    if True:
         
         for i,gal_type in enumerate(gal_types):
             save_filename = save_filenames[gal_type]
@@ -1733,7 +1732,6 @@ if __name__ == '__main__':
             process_sga_matches( samps_cat[samp_i] , gal_type = samp_i)
             print("----"*5)
 
-
         ##combine the catalogs to get the catalogs on which we will be running our pipeline!
         sga_base = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs"
 
@@ -1780,8 +1778,9 @@ if __name__ == '__main__':
         print_catalog_overlap_diagnostics(path_clean_v2, f"{sga_base}/iron_desi_sga_bad_trac_good_dwarfs_CLEAN.fits")
     
         ##process the VI'ed bad SGA catalogs!!
-        if False:
+        if True:
             print("Processing the VI catalogs")
+            #THE VI code is done in notebook shred_visual_inspection.ipynb in notebooks/shredding_paper
 
             cat_sga_bad_trac_bad_do_reprocess = process_sga_VI_catalog()
             cat_sga_bad_trac_bad_do_reprocess["SAMPLE"] =  ["SGA"]*len(cat_sga_bad_trac_bad_do_reprocess)
@@ -1804,7 +1803,6 @@ if __name__ == '__main__':
             desi_cat_sga_reprocess_final.write(path_sga_reprocess_final_v2, overwrite=True)
             print_catalog_overlap_diagnostics(path_sga_reprocess_final_v2, f"{sga_base}/iron_desi_SGA_matched_dwarfs_REPROCESS.fits")
 
-        
     
 # ## According to Ashley Ross, the LSS catalogs contain the tile based redshift which would be slightly different than the healpix
 # ##based redshift. The below file would give us the tile based redshift. 

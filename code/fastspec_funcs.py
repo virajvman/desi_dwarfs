@@ -116,7 +116,7 @@ SDSS_R = speclite.filters.load_filters('sdss2010noatm-r')
 
 
 def get_fastspecfit_path(survey, program, healpix,
-                         base_dir="/global/cfs/cdirs/desi/public/dr1/vac/dr1/fastspecfit/iron/v3.0/healpix"):
+                         base_dir="/global/cfs/cdirs/desi/public/dr1/vac/dr1/fastspecfit/iron/v2.1/healpix"):
     healpix_parent = healpix // 100
     filename = f"fastspec-{survey}-{program}-{healpix}.fits.gz"
     return f"{base_dir}/{survey}/{program}/{healpix_parent}/{healpix}/{filename}"
@@ -284,7 +284,7 @@ def measure_photo_batch(wave_arr, flux_2d, ivar_2d=None, zred=None,
                 flux_rest_resampled[j] = f_out
                 ivar_rest_resampled[j] = iv_out
             else:
-                f_out, _ = resample_flux(wave_out, rest_wave, flux_rest_j)
+                f_out = resample_flux(wave_out, rest_wave, flux_rest_j)
                 flux_rest_resampled[j] = f_out
 
         g_z0 = np.full(n_spec, np.nan)
@@ -351,114 +351,110 @@ def _process_single_file(args):
     try:
         iron_vac = fits.open(upath, memmap=True)
     except Exception:
+        print("ERROR: FALL NOT FOUND!!")
         return None
 
-    try:
-        header = iron_vac["MODELS"].header
-        wavelength = (header["CRVAL1"]
-                      + (np.arange(header["NAXIS1"]) - header["CRPIX1"]) * header["CDELT1"])
-        model_data = iron_vac["MODELS"].data
+    header = iron_vac["MODELS"].header
+    wavelength = (header["CRVAL1"]
+                  + (np.arange(header["NAXIS1"]) - header["CRPIX1"]) * header["CDELT1"])
+    model_data = iron_vac["MODELS"].data
 
-        fastspec_data = iron_vac["FASTSPEC"].data
-        tgids_file = fastspec_data["TARGETID"]
-        tgid_to_fits_row = {t: i for i, t in enumerate(tgids_file)}
+    fastspec_data = iron_vac["FASTSPEC"].data
+    tgids_file = fastspec_data["TARGETID"]
+    tgid_to_fits_row = {t: i for i, t in enumerate(tgids_file)}
 
-        valid_cat = []
-        valid_fits_rows = []
-        valid_local_indices = []
-        for ci_local, ci in enumerate(cat_indices):
-            row = tgid_to_fits_row.get(targetids_for_file[ci_local])
-            if row is not None:
-                valid_cat.append(ci)
-                valid_fits_rows.append(row)
-                valid_local_indices.append(ci_local)
+    valid_cat = []
+    valid_fits_rows = []
+    valid_local_indices = []
+    for ci_local, ci in enumerate(cat_indices):
+        row = tgid_to_fits_row.get(targetids_for_file[ci_local])
+        if row is not None:
+            valid_cat.append(ci)
+            valid_fits_rows.append(row)
+            valid_local_indices.append(ci_local)
 
-        if len(valid_cat) == 0:
-            return None
+    if len(valid_cat) == 0:
+        return None
 
-        valid_cat = np.array(valid_cat)
-        valid_fits_rows = np.array(valid_fits_rows)
-        valid_local_indices = np.array(valid_local_indices)
-        valid_redshifts = redshifts_for_file[valid_local_indices]
-        n_valid = len(valid_cat)
+    valid_cat = np.array(valid_cat)
+    valid_fits_rows = np.array(valid_fits_rows)
+    valid_local_indices = np.array(valid_local_indices)
+    valid_redshifts = redshifts_for_file[valid_local_indices]
+    n_valid = len(valid_cat)
 
-        result = {
-            "cat_indices":   valid_cat,
-            "halpha_ew":      np.array(fastspec_data["HALPHA_EW"][valid_fits_rows], dtype=float),
-            "halpha_ew_ivar": np.array(fastspec_data["HALPHA_EW_IVAR"][valid_fits_rows], dtype=float),
-        }
+    result = {
+        "cat_indices":   valid_cat,
+        "halpha_ew":      np.array(fastspec_data["HALPHA_EW"][valid_fits_rows], dtype=float),
+        "halpha_ew_ivar": np.array(fastspec_data["HALPHA_EW_IVAR"][valid_fits_rows], dtype=float),
+    }
 
-        continuum = model_data[valid_fits_rows, 0, :]
-        smooth_continuum = model_data[valid_fits_rows, 1, :]
-        emission  = model_data[valid_fits_rows, 2, :]
+    continuum = model_data[valid_fits_rows, 0, :]
+    smooth_continuum = model_data[valid_fits_rows, 1, :]
+    emission  = model_data[valid_fits_rows, 2, :]
 
-        # -- DECam photometry for both model variants (existing) --
-        g_no_emi = np.full(n_valid, np.nan)
-        r_no_emi = np.full(n_valid, np.nan)
-        g_w_emi  = np.full(n_valid, np.nan)
-        r_w_emi  = np.full(n_valid, np.nan)
+    # -- DECam photometry for both model variants (existing) --
+    g_no_emi = np.full(n_valid, np.nan)
+    r_no_emi = np.full(n_valid, np.nan)
+    g_w_emi  = np.full(n_valid, np.nan)
+    r_w_emi  = np.full(n_valid, np.nan)
 
-        # -- BASS photometry on continuum+emission (for BASS->DECam conversion) --
-        g_bass_w_emi = np.full(n_valid, np.nan)
-        r_bass_w_emi = np.full(n_valid, np.nan)
+    # -- BASS photometry on continuum+emission (for BASS->DECam conversion) --
+    g_bass_w_emi = np.full(n_valid, np.nan)
+    r_bass_w_emi = np.full(n_valid, np.nan)
 
-        #we will have decam continuum only photmetry, and so will be applying sdss conversion to that!
+    #we will have decam continuum only photmetry, and so will be applying sdss conversion to that!
+    
+    # -- SDSS photometry on continuum only (for DECam->SDSS conversion) --
+    g_sdss_no_emi = np.full(n_valid, np.nan)
+    r_sdss_no_emi = np.full(n_valid, np.nan)
+
+    # -- SDSS z=0 photometry on continuum only (for k-correction) --
+    g_sdss_z0_no_emi = np.full(n_valid, np.nan)
+    r_sdss_z0_no_emi = np.full(n_valid, np.nan)
+
+    # --- Continuum + emission: measure DECam and BASS ---
+    flux_w_emi = continuum + smooth_continuum + emission
+    for start in range(0, n_valid, batch_size):
+        end = min(start + batch_size, n_valid)
+     
+        phot = measure_photo_batch(wavelength, flux_w_emi[start:end],
+                                   measure_bass=True)
+        g_w_emi[start:end] = phot['g_decam']
+        r_w_emi[start:end] = phot['r_decam']
+        g_bass_w_emi[start:end] = phot['g_bass']
+        r_bass_w_emi[start:end] = phot['r_bass']
+ 
+
+    # --- Continuum only: measure DECam, SDSS, and SDSS at z=0 ---
+    flux_cont_only = continuum + smooth_continuum
+    for start in range(0, n_valid, batch_size):
+        end = min(start + batch_size, n_valid)
         
-        # -- SDSS photometry on continuum only (for DECam->SDSS conversion) --
-        g_sdss_no_emi = np.full(n_valid, np.nan)
-        r_sdss_no_emi = np.full(n_valid, np.nan)
+        phot = measure_photo_batch(
+            wavelength, flux_cont_only[start:end],
+            zred=valid_redshifts[start:end],
+            measure_sdss=True,
+            measure_sdss_z0=True,
+        )
+        g_no_emi[start:end] = phot['g_decam']
+        r_no_emi[start:end] = phot['r_decam']
+        g_sdss_no_emi[start:end] = phot['g_sdss']
+        r_sdss_no_emi[start:end] = phot['r_sdss']
+        g_sdss_z0_no_emi[start:end] = phot['g_sdss_z0']
+        r_sdss_z0_no_emi[start:end] = phot['r_sdss_z0']
+    
+    result["g_model_no_emi"] = g_no_emi
+    result["r_model_no_emi"] = r_no_emi
+    result["g_model_w_emi"]  = g_w_emi
+    result["r_model_w_emi"]  = r_w_emi
+    result["g_bass_w_emi"]   = g_bass_w_emi
+    result["r_bass_w_emi"]   = r_bass_w_emi
+    result["g_sdss_no_emi"]  = g_sdss_no_emi
+    result["r_sdss_no_emi"]  = r_sdss_no_emi
+    result["g_sdss_z0_no_emi"] = g_sdss_z0_no_emi
+    result["r_sdss_z0_no_emi"] = r_sdss_z0_no_emi
 
-        # -- SDSS z=0 photometry on continuum only (for k-correction) --
-        g_sdss_z0_no_emi = np.full(n_valid, np.nan)
-        r_sdss_z0_no_emi = np.full(n_valid, np.nan)
-
-        # --- Continuum + emission: measure DECam and BASS ---
-        flux_w_emi = continuum + smooth_continuum + emission
-        for start in range(0, n_valid, batch_size):
-            end = min(start + batch_size, n_valid)
-            try:
-                phot = measure_photo_batch(wavelength, flux_w_emi[start:end],
-                                           measure_bass=True)
-                g_w_emi[start:end] = phot['g_decam']
-                r_w_emi[start:end] = phot['r_decam']
-                g_bass_w_emi[start:end] = phot['g_bass']
-                r_bass_w_emi[start:end] = phot['r_bass']
-            except Exception:
-                pass
-
-        # --- Continuum only: measure DECam, SDSS, and SDSS at z=0 ---
-        flux_cont_only = continuum + smooth_continuum
-        for start in range(0, n_valid, batch_size):
-            end = min(start + batch_size, n_valid)
-            try:
-                phot = measure_photo_batch(
-                    wavelength, flux_cont_only[start:end],
-                    zred=valid_redshifts[start:end],
-                    measure_sdss=True,
-                    measure_sdss_z0=True,
-                )
-                g_no_emi[start:end] = phot['g_decam']
-                r_no_emi[start:end] = phot['r_decam']
-                g_sdss_no_emi[start:end] = phot['g_sdss']
-                r_sdss_no_emi[start:end] = phot['r_sdss']
-                g_sdss_z0_no_emi[start:end] = phot['g_sdss_z0']
-                r_sdss_z0_no_emi[start:end] = phot['r_sdss_z0']
-            except Exception:
-                pass
-
-        result["g_model_no_emi"] = g_no_emi
-        result["r_model_no_emi"] = r_no_emi
-        result["g_model_w_emi"]  = g_w_emi
-        result["r_model_w_emi"]  = r_w_emi
-        result["g_bass_w_emi"]   = g_bass_w_emi
-        result["r_bass_w_emi"]   = r_bass_w_emi
-        result["g_sdss_no_emi"]  = g_sdss_no_emi
-        result["r_sdss_no_emi"]  = r_sdss_no_emi
-        result["g_sdss_z0_no_emi"] = g_sdss_z0_no_emi
-        result["r_sdss_z0_no_emi"] = r_sdss_z0_no_emi
-
-    finally:
-        iron_vac.close()
+    iron_vac.close()
 
     return result
 
@@ -758,9 +754,7 @@ def compute_photometry_catalog(catalog,
 
     if verbose:
         n_good_model = np.sum(np.isfinite(g_model_w_emi))
-        n_good_absmag = np.sum(np.isfinite(absmag_g))
-        msg = (f"Done. {n_good_model}/{n_objects} with valid model photometry, "
-               f"{n_good_absmag}/{n_objects} with valid absolute mags.")
+        msg = (f"Done. {n_good_model}/{n_objects} with valid model photometry, ")
         if compute_data_photometry:
             n_good_data = np.sum(np.isfinite(g_data_w_emi))
             msg += f" {n_good_data}/{n_objects} with valid data photometry."
