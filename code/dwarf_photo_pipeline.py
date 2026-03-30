@@ -67,6 +67,7 @@ def argument_parser():
     result.add_argument('-run_parr', dest='parallel',  action='store_true') 
     result.add_argument('-use_sample',dest='use_sample', type = str, default = "")
     result.add_argument('-overwrite',dest='overwrite',action='store_true')
+    result.add_argument('-overwrite_photometry',dest='overwrite_photometry',action='store_true')
     result.add_argument('-make_cats',dest='make_cats', action='store_true')
     result.add_argument('-run_aper',dest='run_aper', action='store_true')
     result.add_argument('-run_cog',dest='run_cog', action='store_true')
@@ -249,10 +250,7 @@ def get_relevant_files_aper(input_dict):
     ## check if the source is at the edge of the brick, if so we will need to combine stuff
     more_bricks, more_wcats, more_sweeps = are_more_bricks_needed(ra_k,dec_k,radius_arcsec = int(box_size*0.262/2)  )
 
-    if len(more_bricks) == 0:
-        #there are no neighboring bricks needed
-        pass
-    else:
+    if len(more_bricks) > 0 and not os.path.exists(top_path_k + "/source_cat_f_more.fits"):
         return_sources_wneigh_bricks(top_path_k, ra_k, dec_k, objid_k, brickid_k, box_size, more_bricks, more_wcats, more_sweeps,use_pz = False)
 
 
@@ -304,13 +302,13 @@ def make_clean_shreds_catalogs():
     '''
 
     ##THESE ARE ALL THE SOURCES THAT ARE NOT IN SGA! 
-    bgsb_list = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_bgs_bright_filter_zsucc_zrr02_allfracflux.fits")
-    bgsf_list = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_bgs_faint_filter_zsucc_zrr03_allfracflux.fits")
-    elg_list = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_elg_filter_zsucc_zrr05_allfracflux.fits")
-    lowz_list = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_lowz_filter_zsucc_zrr03.fits")
+    bgsb_list = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_bgs_bright_filter_zsucc_zrr02_allfracflux_V2_NEBCORR.fits")
+    bgsf_list = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_bgs_faint_filter_zsucc_zrr03_allfracflux_V2_NEBCORR.fits")
+    elg_list = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_elg_filter_zsucc_zrr05_allfracflux_V2_NEBCORR.fits")
+    lowz_list = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_lowz_filter_zsucc_zrr03_V2_NEBCORR.fits")
 
     #these are sources to be added to the final clean catalog from SGA
-    sga_bad_trac_clean = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_sga_bad_trac_good_dwarfs_CLEAN.fits")
+    sga_bad_trac_clean = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_sga_bad_trac_good_dwarfs_CLEAN_V2.fits")
 
     ##select only unique objects
     bgsb_list = select_unique_objs(bgsb_list)
@@ -330,10 +328,10 @@ def make_clean_shreds_catalogs():
     clean_mask_lowz = (lowz_list["PHOTO_REPROCESS"] == 0)
     
     ##CLEAN CATALOG
-    dwarf_mask_bgsb = (bgsb_list["LOGM_M24_FIDU"] < 9.25) 
-    dwarf_mask_bgsf = (bgsf_list["LOGM_M24_FIDU"] < 9.25) 
-    dwarf_mask_lowz = (lowz_list["LOGM_M24_FIDU"] < 9.25) 
-    dwarf_mask_elg = (elg_list["LOGM_M24_FIDU"] < 9.25)   
+    dwarf_mask_bgsb = (bgsb_list["LOGM_M24_FIDU_CORR"] < 9.25) 
+    dwarf_mask_bgsf = (bgsf_list["LOGM_M24_FIDU_CORR"] < 9.25) 
+    dwarf_mask_lowz = (lowz_list["LOGM_M24_FIDU_CORR"] < 9.25) 
+    dwarf_mask_elg = (elg_list["LOGM_M24_FIDU_CORR"] < 9.25)   
 
     bgsb_clean_dwarfs = bgsb_list[ clean_mask_bgsb  & (dwarf_mask_bgsb) ] 
     bgsf_clean_dwarfs = bgsf_list[ clean_mask_bgsf  & (dwarf_mask_bgsf) ]
@@ -380,7 +378,7 @@ def make_clean_shreds_catalogs():
     
     
     # save the clean dwarfs now!
-    save_table(all_clean_dwarfs,"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4.fits",comment="This is a compilation of dwarf galaxy candidates in DESI Y1 data from the BGS Bright, BGS Faint, ELG and LOW-Z samples. Only galaxies with LogMstar < 9.25 (w/SAGA based stellar masses) and that have robust photometry are included.")
+    save_table(all_clean_dwarfs,"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v5.fits",comment="This is a compilation of dwarf galaxy candidates in DESI Y1 data from the BGS Bright, BGS Faint, ELG and LOW-Z samples. Only galaxies with LogMstar < 9.25 (w/SAGA based stellar masses) and that have robust photometry are included.")
         
     ##LIKELY SHREDDED CATALOG FROM THE NON SGA sources. The shredded sources in SGA have been compiled separately in construct_dwarf .. py script
 
@@ -421,7 +419,7 @@ def make_clean_shreds_catalogs():
 
     shreds_all["PCNN_FRAGMENT"] = -99*np.ones(len(shreds_all))
     
-    save_table(shreds_all,"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v4.fits")
+    save_table(shreds_all,"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v5.fits")
 
     print_stage("MAKE SURE TO ADD THE PCNN VALUES TO DO THIS CATALOG! ")
         
@@ -591,6 +589,7 @@ if __name__ == '__main__':
     ncores = args.ncores
     #will we overwrite/redo the image segmentation part?
     overwrite_bool = args.overwrite
+    overwrite_photometry = args.overwrite_photometry
     make_cats = args.make_cats
     tgids_list = args.tgids_list
     #this will be the name of pdf file where we store summary images
@@ -627,10 +626,10 @@ if __name__ == '__main__':
     #################
 
     ##add the columns on image path and file_path to these catalogs!!
-    shreds_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v4.fits"
-    clean_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4.fits"
-    clean_file_2 = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4_RUN_W_APER.fits"
-    sga_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_SGA_matched_dwarfs_REPROCESS.fits"
+    shreds_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v5.fits"
+    clean_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v5.fits"
+    clean_file_2 = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v5_RUN_W_APER.fits"
+    sga_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_SGA_matched_dwarfs_REPROCESS_V2.fits"
 
 
     ##Adding the image path and file path (where all the outputs are saved) columns to the catalog if they do not exist
@@ -753,6 +752,22 @@ if __name__ == '__main__':
         
 
     print("Number of objects in catalog so far: ", len(shreds_focus))
+
+    _clean_flag_map = {"shred": "shreds", "clean": "clean", "sga": "sga"}
+    _clean_flag = _clean_flag_map[use_sample]
+    final_output_path = f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_{sample_str}_{_clean_flag}_catalog_w_aper_mags{end_name}.fits"
+
+    existing_output_cat = None
+    if not overwrite_photometry and os.path.exists(final_output_path):
+        existing_output_cat = Table.read(final_output_path)
+        existing_tgids = set(existing_output_cat["TARGETID"].data)
+        new_mask = ~np.isin(shreds_focus["TARGETID"].data, list(existing_tgids))
+        n_before = len(shreds_focus)
+        shreds_focus = shreds_focus[new_mask]
+        print(f"Incremental mode: {n_before} total objects, {len(existing_tgids)} already processed, {len(shreds_focus)} new objects to process")
+        if len(shreds_focus) == 0:
+            print("No new objects to process. Exiting.")
+            return
 
     if make_cats == True:    
         print_stage("Generating relevant files for doing aperture photometry")
@@ -1396,23 +1411,29 @@ if __name__ == '__main__':
 
         file_template_aper = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_%s_%s_catalog_w_aper_mags"%(sample_str, clean_flag)
  
+        final_save_name = file_template_aper + "%s.fits"%end_name
+
         if nchunks == 1:
             shreds_focus_combine_aper = Table.read(file_template_aper + "_chunk_0.fits")
 
-            final_save_name = file_template_aper + "%s.fits"%end_name
-            
-            #we just need to rename the file!
-            shutil.copy(file_template_aper + "_chunk_0.fits", final_save_name)
-            if run_cog == True:
-                #see the comments below for why this if statement is here
-                os.rename(file_template_aper + "_chunk_0.fits", final_save_name)
+            if existing_output_cat is None:
+                #no merge needed, just rename/copy as before
+                shutil.copy(file_template_aper + "_chunk_0.fits", final_save_name)
+                if run_cog == True:
+                    os.rename(file_template_aper + "_chunk_0.fits", final_save_name)
+            else:
+                print(f"Merging {len(existing_output_cat)} existing + {len(shreds_focus_combine_aper)} new objects")
+                shreds_focus_combine_aper = vstack([existing_output_cat, shreds_focus_combine_aper])
+                print(f"Combined catalog size: {len(shreds_focus_combine_aper)}")
+                save_table(shreds_focus_combine_aper, final_save_name)
+                if run_cog == True:
+                    os.remove(file_template_aper + "_chunk_0.fits")
+                print_stage("Consolidated+merged aperture chunk saved at %s"%(final_save_name))
 
         else:
             #we need to consolidate files!  
             shreds_focus_combine_aper = []
 
-            final_save_name = file_template_aper + "%s.fits"%end_name
-            
             for ni in trange(nchunks):
                 shreds_focus_part = Table.read(file_template_aper + "_chunk_%d.fits"%ni  )
                 shreds_focus_combine_aper.append(shreds_focus_part)
@@ -1422,6 +1443,11 @@ if __name__ == '__main__':
                     os.remove(file_template_aper + "_chunk_%d.fits"%ni)
                 
             shreds_focus_combine_aper = vstack(shreds_focus_combine_aper)
+
+            if existing_output_cat is not None:
+                print(f"Merging {len(existing_output_cat)} existing + {len(shreds_focus_combine_aper)} new objects")
+                shreds_focus_combine_aper = vstack([existing_output_cat, shreds_focus_combine_aper])
+                print(f"Combined catalog size: {len(shreds_focus_combine_aper)}")
 
             print_stage("Total number of objects in consolidated aperture file = %d"%len(shreds_focus_combine_aper))
 
