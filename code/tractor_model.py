@@ -679,16 +679,18 @@ if __name__ == '__main__':
     
     print(f"Reading the sample = {use_sample}")
 
+    TODO: if not overwrite, is there a way to only run this for sources that are new, similar to logic in dwarf_photo_pipe
+    
     if use_sample == "sga":
         dwarf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_SGA_matched_dwarfs_REPROCESS.fits")
     if use_sample == "clean":
-        dwarf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4_RUN_W_APER.fits")
+        dwarf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v5_RUN_W_APER.fits")
         #we added the below condition as we changed our definition recently!
         #this goes from 40k -> 39.4k
         dwarf_cat = dwarf_cat[(dwarf_cat["RCHISQ_R"] < 4 ) & (dwarf_cat["RCHISQ_G"] < 4 )  & (dwarf_cat["RCHISQ_Z"] < 4 )   ]
         
     if use_sample == "shred":
-        dwarf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v4.fits")
+        dwarf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v5.fits")
 
     print(f"Reading the sample = {sample}")
     dwarf_cat = dwarf_cat[dwarf_cat["SAMPLE"] == sample]
