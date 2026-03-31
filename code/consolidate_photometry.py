@@ -678,6 +678,35 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
     return catalog_main, catalog
 
 
+def _load_dist_source_lookup():
+    """Build a TARGETID -> DIST_SOURCE lookup from the authoritative INT_V2_NEBCORR catalogs."""
+    save_folder = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs"
+    nebcorr_basenames = [
+        "iron_lowz_filter_zsucc_zrr03_INT_V2_NEBCORR.fits",
+        "iron_bgs_bright_filter_zsucc_zrr02_allfracflux_INT_V2_NEBCORR.fits",
+        "iron_bgs_faint_filter_zsucc_zrr03_allfracflux_INT_V2_NEBCORR.fits",
+        "iron_elg_filter_zsucc_zrr05_allfracflux_INT_V2_NEBCORR.fits",
+    ]
+    chunks = []
+    for basename in nebcorr_basenames:
+        path = os.path.join(save_folder, basename)
+        if not os.path.exists(path):
+            print(f"  WARNING: {path} not found, skipping")
+            continue
+        tab = Table.read(path)
+        chunks.append(Table({"TARGETID": tab["TARGETID"], "DIST_SOURCE": tab["DIST_SOURCE"]}))
+        print(f"  Loaded {len(tab)} rows from {basename}")
+
+    if len(chunks) == 0:
+        print("  ERROR: No INT_V2_NEBCORR files found for DIST_SOURCE lookup")
+        return {}
+
+    lookup_tab = vstack(chunks)
+    _, unique_idx = np.unique(np.asarray(lookup_tab["TARGETID"]), return_index=True)
+    lookup_tab = lookup_tab[np.sort(unique_idx)]
+    return dict(zip(lookup_tab["TARGETID"], lookup_tab["DIST_SOURCE"]))
+
+
 def finalize_main_hdu(catalog_main):
     '''
     We add the associated targetid columns!
@@ -688,6 +717,15 @@ def finalize_main_hdu(catalog_main):
 
     catalog_main = find_associated_tgids(catalog_main)
     catalog_main = get_dwarf_primary(catalog_main)
+
+    print("Populating DIST_SOURCE from INT_V2_NEBCORR catalogs...")
+    dist_source_map = _load_dist_source_lookup()
+    dist_source_arr = np.array([
+        dist_source_map.get(tid, "") for tid in catalog_main["TARGETID"]
+    ], dtype="U10")
+    n_matched = np.sum(dist_source_arr != "")
+    print(f"  DIST_SOURCE matched for {n_matched}/{len(catalog_main)} objects")
+    catalog_main["DIST_SOURCE"] = dist_source_arr
 
     print("Need to think a bit more about the blank value stuff")
     for col in main_datamodel.keys():
@@ -1931,8 +1969,23 @@ if __name__ == '__main__':
         if extra_cols:
             print(f"Removing {len(extra_cols)} extra columns from SGA: {extra_cols}")
             sga_all.remove_columns(list(extra_cols))
-        
-        # optional: reorder columns to match LOWZ (keeps order consistent)
+
+        # --- add missing columns to SGA that exist in LOWZ ---
+        missing_cols = set(lowz_shred.colnames) - set(sga_all.colnames)
+        if missing_cols:
+            print(f"Adding {len(missing_cols)} missing columns to SGA with defaults: {missing_cols}")
+            for col in missing_cols:
+                dtype = lowz_shred[col].dtype
+                if np.issubdtype(dtype, np.floating):
+                    sga_all[col] = np.full(len(sga_all), np.nan, dtype=dtype)
+                elif np.issubdtype(dtype, np.integer):
+                    sga_all[col] = np.full(len(sga_all), -99, dtype=dtype)
+                elif dtype.kind in ('U', 'S', 'O'):
+                    sga_all[col] = np.full(len(sga_all), "", dtype=dtype)
+                else:
+                    sga_all[col] = np.full(len(sga_all), 0, dtype=dtype)
+
+        # reorder columns to match LOWZ
         sga_all = sga_all[lowz_shred.colnames]
     
         tot_shred = safe_vstack([ bgsb_shred, bgsf_shred, lowz_shred, elg_shred, sga_all])
