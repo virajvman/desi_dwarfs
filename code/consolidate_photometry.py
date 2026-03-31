@@ -214,7 +214,7 @@ def add_best_mags(catalog, bands=("G", "R", "Z"), use_pcnn=True):
     return catalog
 
 
-def consolidate_cog_photo(catalog,sample=None, add_pcnn=True):
+def consolidate_cog_photo(catalog,sample=None, add_pcnn=False):
     '''
     Function where we add PCNN column and consolidate the ISOLATE and no ISOLATE cog photometry using the over de-deblending criterion. 
     '''
@@ -291,7 +291,7 @@ def consolidate_cog_photo(catalog,sample=None, add_pcnn=True):
     return catalog
 
 
-def consolidate_new_photo(catalog,plot=False,sample=None, add_pcnn=True, use_pcnn=False, flag_cog_nan_always=True):
+def consolidate_new_photo(catalog,plot=False,sample=None, add_pcnn=False, use_pcnn=False, flag_cog_nan_always=True):
     '''
 
     Note that the PHOTO_MASKBIT reflects only on the final type of photometry used. 
@@ -1890,9 +1890,9 @@ if __name__ == '__main__':
     process_shreds = True
     process_clean = True
     compute_mstar_err = False
-    add_model_phot = True
+    add_model_phot = False
     process_qso_scnd = False
-    process_post_hdu = True
+    process_post_hdu = False
 
     #make sure the get_fastspec_fit_catalog_V2 function is run before hand in case there are any new columns added
     process_fastspec=False
