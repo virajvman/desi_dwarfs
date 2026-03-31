@@ -628,14 +628,14 @@ if __name__ == '__main__':
     ##add the columns on image path and file_path to these catalogs!!
     shreds_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v5.fits"
     clean_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v5.fits"
-    clean_file_2 = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v5_RUN_W_APER.fits"
+    # clean_file_2 = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v5_RUN_W_APER.fits"
     sga_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_SGA_matched_dwarfs_REPROCESS_V2.fits"
 
 
     ##Adding the image path and file path (where all the outputs are saved) columns to the catalog if they do not exist
     shreds_cat = Table.read(shreds_file)
     clean_cat = Table.read(clean_file)
-    clean_cat_2 = Table.read(clean_file_2)
+    # clean_cat_2 = Table.read(clean_file_2)
     sga_cat = Table.read(sga_file)
 
     ##we need to be careful here in how we are defining the top folder!! 
@@ -655,11 +655,11 @@ if __name__ == '__main__':
 
     ###
     
-    if "IMAGE_PATH" in clean_cat_2.colnames and "FILE_PATH" in clean_cat_2.colnames:
-        print("image_path and file_path columns already exist in clean TOTAL catalog!")
-    else:
-        print("Adding image_path and file_path to clean TOTAL catalog!")
-        add_paths_to_catalog(org_file = clean_file_2, out_file = clean_file_2,top_folder="/pscratch/sd/v/virajvm/redo_photometry_plots/all_good")
+    # if "IMAGE_PATH" in clean_cat_2.colnames and "FILE_PATH" in clean_cat_2.colnames:
+    #     print("image_path and file_path columns already exist in clean TOTAL catalog!")
+    # else:
+    #     print("Adding image_path and file_path to clean TOTAL catalog!")
+    #     add_paths_to_catalog(org_file = clean_file_2, out_file = clean_file_2,top_folder="/pscratch/sd/v/virajvm/redo_photometry_plots/all_good")
 
     ##
         
@@ -678,7 +678,7 @@ if __name__ == '__main__':
         # add_pcnn_to_shred_catalog(shreds_file,get_all_data=True)
 
     #delete these variables as no longer needed!
-    del shreds_cat, clean_cat, sga_cat, clean_cat_2
+    del shreds_cat, clean_cat, sga_cat #, clean_cat_2
      
     ##################
     ##PART 2: Generate nested folder structure with relevant files for doing photometry
@@ -718,7 +718,7 @@ if __name__ == '__main__':
         sample_mask = np.isin(data_samples, all_samples) 
     else:
         #only a single sample is given!
-        sample_mask = (shreds_all["SAMPLE"] ==  sample_str) # & (shreds_all["Z"] < 0.007)
+        sample_mask = (shreds_all["SAMPLE"] ==  sample_str)
 
     shreds_focus = shreds_all[sample_mask]
     
@@ -1423,8 +1423,18 @@ if __name__ == '__main__':
                     os.rename(file_template_aper + "_chunk_0.fits", final_save_name)
             else:
                 print(f"Merging {len(existing_output_cat)} existing + {len(shreds_focus_combine_aper)} new objects")
-                shreds_focus_combine_aper = vstack([existing_output_cat, shreds_focus_combine_aper])
+
+                #we want to only merge objects from existing_output_cat that have targetids in the original catalog
+                shreds_tot_cat_tgids = shreds_all[sample_mask]["TARGETID"].data
+                existing_mask = np.isin(existing_output_cat["TARGETID"].data, shreds_tot_cat_tgids )
+                
+                shreds_focus_combine_aper = vstack([existing_output_cat[existing_mask], shreds_focus_combine_aper])
+
                 print(f"Combined catalog size: {len(shreds_focus_combine_aper)}")
+
+                if len(shreds_focus_combine_aper) != len(shreds_all[sample_mask]):
+                    raise ValueError(f"Initial catalog and final catalog size do not match: {len(shreds_focus_combine_aper)}, {len(shreds_all[sample_mask])}")
+   
                 save_table(shreds_focus_combine_aper, final_save_name)
                 if run_cog == True:
                     os.remove(file_template_aper + "_chunk_0.fits")
@@ -1446,17 +1456,23 @@ if __name__ == '__main__':
 
             if existing_output_cat is not None:
                 print(f"Merging {len(existing_output_cat)} existing + {len(shreds_focus_combine_aper)} new objects")
-                shreds_focus_combine_aper = vstack([existing_output_cat, shreds_focus_combine_aper])
+                
+                #we want to only merge objects from existing_output_cat that have targetids in the original catalog
+                shreds_tot_cat_tgids = shreds_all[sample_mask]["TARGETID"].data
+                existing_mask = np.isin(existing_output_cat["TARGETID"].data, shreds_tot_cat_tgids )
+                
+                shreds_focus_combine_aper = vstack([existing_output_cat[existing_mask], shreds_focus_combine_aper])
+                
                 print(f"Combined catalog size: {len(shreds_focus_combine_aper)}")
+
+                if len(shreds_focus_combine_aper) != len(shreds_all[sample_mask]):
+                    raise ValueError(f"Initial catalog and final catalog size do not match: {len(shreds_focus_combine_aper)}, {len(shreds_all[sample_mask])}")
 
             print_stage("Total number of objects in consolidated aperture file = %d"%len(shreds_focus_combine_aper))
 
             save_table( shreds_focus_combine_aper, final_save_name ) 
             
             print_stage("Consolidated aperture chunk saved at %s"%(final_save_name) )
-
-    ##make a scrollable pdf to view the final results!
-    ##only make for some objects?
 
 
     # ##################
