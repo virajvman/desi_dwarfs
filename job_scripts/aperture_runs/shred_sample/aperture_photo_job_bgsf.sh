@@ -9,7 +9,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=192GB
-#SBATCH --time=02:00:00
+#SBATCH --time=03:00:00
 #SBATCH --job-name=bgsf_shred
 #SBATCH --output=aperture_shred_bgsf.log
 

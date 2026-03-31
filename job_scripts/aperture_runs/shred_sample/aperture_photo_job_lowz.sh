@@ -9,7 +9,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=192GB
-#SBATCH --time=03:00:00
+#SBATCH --time=02:00:00
 #SBATCH --job-name=lowz_shred
 #SBATCH --output=aperture_shred_lowz.log
 
@@ -33,7 +33,7 @@ RUN_COG=true
 RUN_SHIFTER=true
 
 # Command-line args
-BASE_ARGS="-sample $SAMPLE -min 0 -max 100000 -run_parr -ncores 64 -overwrite -nchunks 10 -no_cnn_cut -use_sample shred -get_cnn_inputs"
+BASE_ARGS="-sample $SAMPLE -min 0 -max 100000 -run_parr -ncores 64 -overwrite -nchunks 5 -no_cnn_cut -use_sample shred -get_cnn_inputs"
 
 # ------------------------------
 # Run steps
