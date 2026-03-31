@@ -620,6 +620,25 @@ def get_main_blob_sources(i, ra, dec, tgid, zred, file_path, img_path, width, pi
     return
 
 
+def filter_existing_sources(dwarf_cat, output_files, overwrite):
+    """If overwrite is False, remove sources from catalog where all output files already exist."""
+    if overwrite:
+        return dwarf_cat
+    
+    missing_mask = np.zeros(len(dwarf_cat), dtype=bool)
+    for i in range(len(dwarf_cat)):
+        file_path = dwarf_cat["FILE_PATH"][i]
+        for suffix in output_files:
+            if not os.path.exists(f"{file_path}/{suffix}"):
+                missing_mask[i] = True
+                break
+    
+    n_skip = np.sum(~missing_mask)
+    n_run = np.sum(missing_mask)
+    print(f"  Skipping {n_skip} sources (files exist), running {n_run} new sources")
+    return dwarf_cat[missing_mask]
+
+
 def worker(args):
     i, dwarf_cat, func = args
     func(
@@ -656,6 +675,7 @@ def argument_parser():
     result.add_argument('-blend_remove_source',dest='blend_remove_source', action = "store_true")  
     result.add_argument('-parent_galaxy',dest='parent_galaxy', action = "store_true")
     result.add_argument('-tgids',dest="tgids_list", type=parse_tgids) 
+    result.add_argument('-overwrite',dest='overwrite', action='store_true')
     
     return result
 
@@ -676,10 +696,9 @@ if __name__ == '__main__':
     parent_galaxy = args.parent_galaxy
     max_num = args.max_num
     tgids_list = args.tgids_list
+    overwrite = args.overwrite
     
     print(f"Reading the sample = {use_sample}")
-
-    TODO: if not overwrite, is there a way to only run this for sources that are new, similar to logic in dwarf_photo_pipe
     
     if use_sample == "sga":
         dwarf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_SGA_matched_dwarfs_REPROCESS.fits")
@@ -708,55 +727,61 @@ if __name__ == '__main__':
 
     if img_source:
         print("Getting img source models")
-        pool = mp.Pool(62)
-        completed = 0
-        for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_img_source ) for i in range(total)], chunksize = 500 ):
-            completed += 1
-            if completed % 1000 == 0 or completed == total:
-                simple_progress_bar(completed, total-1)
-        pool.close()
-        pool.join()
+        dwarf_cat_filtered = filter_existing_sources(dwarf_cat, ["tractor_source_model.npy"], overwrite)
+        total_filtered = len(dwarf_cat_filtered)
+        if total_filtered > 0:
+            pool = mp.Pool(62)
+            completed = 0
+            for _ in pool.imap_unordered(worker, [(i, dwarf_cat_filtered, get_img_source ) for i in range(total_filtered)], chunksize = 500 ):
+                completed += 1
+                if completed % 1000 == 0 or completed == total_filtered:
+                    simple_progress_bar(completed, total_filtered-1)
+            pool.close()
+            pool.join()
 
 
     if bkg_source:
         print("Getting bkg source models")
-        pool = mp.Pool(62)
-        
-        completed = 0
-        for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_bkg_sources ) for i in range(total)], chunksize = 500 ):
-            completed += 1
-            if completed % 1000 == 0 or completed == total:
-                simple_progress_bar(completed, total-1)
-    
-        pool.close()
-        pool.join()
+        dwarf_cat_filtered = filter_existing_sources(dwarf_cat, ["tractor_background_model.npy"], overwrite)
+        total_filtered = len(dwarf_cat_filtered)
+        if total_filtered > 0:
+            pool = mp.Pool(62)
+            completed = 0
+            for _ in pool.imap_unordered(worker, [(i, dwarf_cat_filtered, get_bkg_sources ) for i in range(total_filtered)], chunksize = 500 ):
+                completed += 1
+                if completed % 1000 == 0 or completed == total_filtered:
+                    simple_progress_bar(completed, total_filtered-1)
+            pool.close()
+            pool.join()
 
     if blend_remove_source:
         print("Getting blend remove source models")
-        pool = mp.Pool(62)
-        
-        completed = 0
-        for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_blended_remove_sources) for i in range(total)], chunksize = 500 ):
-            completed += 1
-            if completed % 1000 == 0 or completed == total:
-                simple_progress_bar(completed, total-1)
-    
-        pool.close()
-        pool.join()
+        dwarf_cat_filtered = filter_existing_sources(dwarf_cat, ["tractor_blend_remove_model.npy"], overwrite)
+        total_filtered = len(dwarf_cat_filtered)
+        if total_filtered > 0:
+            pool = mp.Pool(62)
+            completed = 0
+            for _ in pool.imap_unordered(worker, [(i, dwarf_cat_filtered, get_blended_remove_sources) for i in range(total_filtered)], chunksize = 500 ):
+                completed += 1
+                if completed % 1000 == 0 or completed == total_filtered:
+                    simple_progress_bar(completed, total_filtered-1)
+            pool.close()
+            pool.join()
 
 
     if parent_galaxy:
         print("Getting the parent galaxy source models")
-        pool = mp.Pool(62)
-        
-        completed = 0
-        for _ in pool.imap_unordered(worker, [(i, dwarf_cat, get_main_blob_sources) for i in range(total)], chunksize = 500 ):
-            completed += 1
-            if completed % 1000 == 0 or completed == total:
-                simple_progress_bar(completed, total-1)
-    
-        pool.close()
-        pool.join()
+        dwarf_cat_filtered = filter_existing_sources(dwarf_cat, ["tractor_parent_sources_model.npy", "tractor_main_segment_model.npy"], overwrite)
+        total_filtered = len(dwarf_cat_filtered)
+        if total_filtered > 0:
+            pool = mp.Pool(62)
+            completed = 0
+            for _ in pool.imap_unordered(worker, [(i, dwarf_cat_filtered, get_main_blob_sources) for i in range(total_filtered)], chunksize = 500 ):
+                completed += 1
+                if completed % 1000 == 0 or completed == total_filtered:
+                    simple_progress_bar(completed, total_filtered-1)
+            pool.close()
+            pool.join()
         
     ###########################################
     ##getting the model for the temporary source!

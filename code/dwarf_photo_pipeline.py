@@ -746,8 +746,13 @@ if __name__ == '__main__':
     max_ind = np.minimum( max_ind, len(shreds_focus) )
     shreds_focus = shreds_focus[min_ind:max_ind]
 
-    TODO: have a check here if the number of chunks is smaller than number of objects, it must be. If chunks 
-    for some reason are more, then force it to be less 1 if num objects less than 5, otherwise 5 chunks.
+    num_objects = len(shreds_focus)
+    if nchunks > num_objects:
+        if num_objects < 5:
+            nchunks = 1
+        else:
+            nchunks = min(nchunks, 5)
+        print(f"Adjusted nchunks to {nchunks} (num_objects={num_objects})")
 
     if use_sample == "clean":
         print(f"Initial size = {len(shreds_focus)}")
