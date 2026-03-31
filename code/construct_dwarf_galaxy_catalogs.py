@@ -1571,6 +1571,18 @@ if __name__ == '__main__':
             samp_i_cat_cut["HALPHA_EW"] = halpha_ew[keep_mask]
             samp_i_cat_cut["HALPHA_EW_IVAR"] = halpha_ew_ivar[keep_mask]
 
+            # Attach raw fastspec model photometry in each filter system
+            samp_i_cat_cut["MAG_G_DECAM_MODEL_NOEMI"] = result_samp_i["g_model_no_emi"][keep_mask]
+            samp_i_cat_cut["MAG_R_DECAM_MODEL_NOEMI"] = result_samp_i["r_model_no_emi"][keep_mask]
+            samp_i_cat_cut["MAG_G_DECAM_MODEL_WEMI"]  = result_samp_i["g_model_w_emi"][keep_mask]
+            samp_i_cat_cut["MAG_R_DECAM_MODEL_WEMI"]  = result_samp_i["r_model_w_emi"][keep_mask]
+            samp_i_cat_cut["MAG_G_BASS_MODEL_WEMI"]   = result_samp_i["g_bass_w_emi"][keep_mask]
+            samp_i_cat_cut["MAG_R_BASS_MODEL_WEMI"]   = result_samp_i["r_bass_w_emi"][keep_mask]
+            samp_i_cat_cut["MAG_G_SDSS_MODEL_NOEMI"]  = result_samp_i["g_sdss_no_emi"][keep_mask]
+            samp_i_cat_cut["MAG_R_SDSS_MODEL_NOEMI"]  = result_samp_i["r_sdss_no_emi"][keep_mask]
+            samp_i_cat_cut["MAG_G_SDSS_Z0_MODEL_NOEMI"] = result_samp_i["g_sdss_z0_no_emi"][keep_mask]
+            samp_i_cat_cut["MAG_R_SDSS_Z0_MODEL_NOEMI"] = result_samp_i["r_sdss_z0_no_emi"][keep_mask]
+
             # Summary: absolute g-band mag using fully corrected SDSS z=0 photometry
             d_in_pc = np.asarray(samp_i_cat_cut["DIST_MPC_FIDU"].data, dtype=float) * 1e6
             valid_mg = (d_in_pc > 0) & np.isfinite(d_in_pc) & np.isfinite(samp_i_cat_cut["MAG_G_SDSS_Z0"].data)

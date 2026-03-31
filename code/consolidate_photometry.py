@@ -9,7 +9,6 @@ from shred_photometry_maskbits import cog_mag_converge, cog_nan_mask, cog_curve_
 from io import BytesIO
 from shred_photometry_maskbits import create_shred_maskbits_from_dict, print_maskbit_statistics, flag_weird_spectra
 import os
-import shutil
 import glob
 from tqdm import trange
 import h5py
@@ -19,7 +18,8 @@ from desi_lowz_funcs import get_sga_norm_dists_FAST
 from construct_dwarf_galaxy_catalogs import bright_star_filter
 
 from get_associated_fibers import find_associated_tgids, get_dwarf_primary
-from independent_distances import update_distance_catalog
+from fastspec_funcs import measure_photo_batch, get_fastspecfit_path
+from desispec.interpolation import resample_flux
 
 def combine_arrays(no_iso, w_iso, mask):
     '''
@@ -1550,245 +1550,337 @@ def add_wrong_redrock_maskbit(cat_path, main_datamodel, bit=16):
     print(f"Set DWARF_MASKBIT bit {bit} for {weird_mask.sum()} objects (MAIN HDU updated).")
 
 
-
-def incorporate_updated_distances(main_cat_path):
-
-    import matplotlib.pyplot as plt
-    from matplotlib.colors import LogNorm
-
-    main_hdu, _, _, _ = update_distance_catalog(main_cat_path, keep_lumi_dist_orig=False)
-    main_hdu = make_catalog_unmasked(main_hdu)
-
-    dist_meta = main_datamodel["DIST_SOURCE"]
-    if dist_meta.get("description"):
-        main_hdu["DIST_SOURCE"].description = dist_meta["description"]
-    if dist_meta.get("unit") is not None:
-        main_hdu["DIST_SOURCE"].unit = dist_meta["unit"]
-
-    # With the updated distance in LUMI_DIST_MPC, remeasure the stellar mass
-    gr_arr = np.array(main_hdu["MAG_G"]) - np.array(main_hdu["MAG_R"])
-    mag_g_arr = np.array(main_hdu["MAG_G"])
-    zcmb_arr = np.array(main_hdu["Z_CMB"])
-    dist_arr = np.array(main_hdu["LUMI_DIST_MPC"])
-
-    ##we will remeasure the stellar masses here!! Our fiducial approach are the mia stellar masses
-    
-    logm_m24 = get_stellar_mass_mia(gr_arr, mag_g_arr, zcmb_arr, d_in_mpc=dist_arr, input_zred=False)
-
-    # Quick comparison plot
-    plt.figure(figsize=(5, 5))
-    plt.hist2d(main_hdu["LOG_MSTAR_M24"], logm_m24, range=((6, 9.25), (6, 9.25)), bins=50, norm=LogNorm())
-    plt.xlabel("MSTAR M24 OLD", fontsize=12)
-    plt.ylabel("MSTAR M24 NEW", fontsize=12)
-    plt.xlim([6, 9.25])
-    plt.ylim([6, 9.25])
-    plt.savefig("/global/homes/v/virajvm/DESI2_LOWZ/quenched_fracs_nbs/paper_plots/mstar_dist_update_comp.png")
-    plt.close()
-
-    # Statistics on stellar mass shifts
-    old_logm_m24 = np.array(main_hdu["LOG_MSTAR_M24"])
-    delta_mstar = np.abs(logm_m24 - old_logm_m24)
-    n_shifted = np.sum(delta_mstar > 0.25)
-    print(f"Objects with > 0.25 dex shift in LOG_MSTAR_M24: {n_shifted}/{len(logm_m24)}")
-    print(f"  Median |delta|: {np.median(delta_mstar):.4f} dex")
-    print(f"  Max    |delta|: {np.max(delta_mstar):.4f} dex")
-
-    # Update the stellar mass columns
-    main_hdu["LOG_MSTAR_M24"] = logm_m24
-
-    # Mask for objects that are no longer below the dwarf mass cut
-    not_dwarf_mask = (logm_m24 > 9.25)
-    dwarf_mask = ~not_dwarf_mask
-
-    n_removed = np.sum(not_dwarf_mask)
-    print(f"Removing {n_removed} objects with LOG_MSTAR_M24 > 9.25 after distance update")
-
-    # Save the TARGETIDs of removed objects
-    removed_tgids = np.array(main_hdu["TARGETID"])[not_dwarf_mask]
-    removed_path = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/temp/removed_targetids.fits"
-    Table({"TARGETID": removed_tgids}).write(removed_path, overwrite=True)
-    print(f"Saved {len(removed_tgids)} removed TARGETIDs to {removed_path}")
-
-    # Filter the updated MAIN table
-    main_hdu_filtered = main_hdu[dwarf_mask]
-    kept_tgids = set(np.array(main_hdu["TARGETID"])[dwarf_mask])
-
-    # REPROCESS_PHOTO has only shreds (not clean+shreds+qso_scnd),
-    # so it has a different row count and must be filtered by TARGETID.
-    diff_row_extensions = {"REPROCESS_PHOTO"}
-
-    # Read the original file to get the exact HDU names and ordering
-    with fits.open(main_cat_path) as orig_hdul:
-        orig_hdu_names = [hdu.name for hdu in orig_hdul]
-        orig_primary_header = orig_hdul[0].header.copy()
-
-    print(f"Original HDU structure: {orig_hdu_names}")
-
-    # Rebuild the HDUList preserving the exact extension order
-    new_hdul = fits.HDUList()
-    new_hdul.append(fits.PrimaryHDU(header=orig_primary_header))
-
-    # Pre-read all extension Tables before we overwrite the file
-    ext_tables = {}
-    for hdu_name in orig_hdu_names:
-        if hdu_name == "PRIMARY":
-            continue
-        ext_tables[hdu_name] = safe_read_table(main_cat_path, hdu=hdu_name)
-
-    for hdu_name in orig_hdu_names:
-        if hdu_name == "PRIMARY":
-            continue
-
-        if hdu_name == "MAIN":
-            filtered_tab = main_hdu_filtered
-        elif hdu_name in diff_row_extensions:
-            ext_tab = ext_tables[hdu_name]
-            keep = np.isin(np.array(ext_tab["TARGETID"]), np.array(main_hdu["TARGETID"])[dwarf_mask])
-            filtered_tab = ext_tab[keep]
-        else:
-            filtered_tab = ext_tables[hdu_name][dwarf_mask]
-
-        buf = BytesIO()
-        filtered_tab.write(buf, format="fits")
-        buf.seek(0)
-        new_hdu = fits.open(buf)[1]
-        new_hdu.name = hdu_name
-        new_hdu.add_checksum()
-        new_hdul.append(new_hdu)
-
-        print(f"  {hdu_name}: {len(ext_tables[hdu_name])} -> {len(filtered_tab)} rows")
-
-    new_hdul[0].add_checksum()
-    new_hdul.writeto(main_cat_path, overwrite=True)
-    print(f"Saved updated catalog to {main_cat_path} ({len(main_hdu_filtered)} objects)")
-
-    return
-
-
-def _prune_single_h5(h5_path, catalog_tgids, tgid_key, row_datasets, copy_datasets):
+def add_model_photometry_to_fastspec(
+    cat_path,
+    model_phot_dir="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs",
+    gal_types=("LOWZ", "BGS_FAINT", "BGS_BRIGHT", "ELG"),
+    verbose=True,
+):
     """
-    Backup an HDF5 file, then rewrite it keeping only rows whose TARGETID
-    appears in *catalog_tgids*.
+    Read pre-computed fastspec model photometry from
+    model_photometry_diffs_{gal_type}.fits files, cross-match by TARGETID,
+    and append 10 model-magnitude columns to the FASTSPEC HDU of the
+    multi-extension catalog at *cat_path*.
 
-    Parameters
-    ----------
-    h5_path : str
-        Path to the HDF5 file to prune.
-    catalog_tgids : np.ndarray
-        1-D array of TARGETIDs that should be kept.
-    tgid_key : str
-        Name of the TARGETID dataset inside the HDF5 (e.g. "TARGETID" or "targetid").
-    row_datasets : list[str]
-        Dataset names that are indexed along axis-0 by object and must be filtered.
-    copy_datasets : list[str]
-        Dataset names that are shared / not row-indexed and should be copied unchanged.
+    New FASTSPEC columns:
+        MAG_{G,R}_DECAM_MODEL_NOEMI   - DECam model mags, continuum only
+        MAG_{G,R}_DECAM_MODEL_WEMI    - DECam model mags, continuum + emission
+        MAG_{G,R}_BASS_MODEL_WEMI     - BASS  model mags, continuum + emission
+        MAG_{G,R}_SDSS_MODEL_NOEMI    - SDSS  model mags, continuum only
+        MAG_{G,R}_SDSS_Z0_MODEL_NOEMI - SDSS  z=0 rest-frame model mags, continuum only
     """
-    from desi_lowz_funcs import print_stage
+    print("=" * 60)
+    print("Adding fastspec model photometry columns to FASTSPEC HDU")
+    print("=" * 60)
 
-    basename = os.path.basename(h5_path)
-    print_stage(f"Pruning {basename}")
+    _COL_MAP = {
+        "g_model_no_emi":   "MAG_G_DECAM_MODEL_NOEMI",
+        "r_model_no_emi":   "MAG_R_DECAM_MODEL_NOEMI",
+        "g_model_w_emi":    "MAG_G_DECAM_MODEL_WEMI",
+        "r_model_w_emi":    "MAG_R_DECAM_MODEL_WEMI",
+        "g_bass_w_emi":     "MAG_G_BASS_MODEL_WEMI",
+        "r_bass_w_emi":     "MAG_R_BASS_MODEL_WEMI",
+        "g_sdss_no_emi":    "MAG_G_SDSS_MODEL_NOEMI",
+        "r_sdss_no_emi":    "MAG_R_SDSS_MODEL_NOEMI",
+        "g_sdss_z0_no_emi": "MAG_G_SDSS_Z0_MODEL_NOEMI",
+        "r_sdss_z0_no_emi": "MAG_R_SDSS_Z0_MODEL_NOEMI",
+    }
 
-    # --- 1. Backup --------------------------------------------------------
-    backup_path = h5_path.replace(".h5", "_OG.h5")
-    if os.path.exists(backup_path):
-        print(f"  Backup already exists at {backup_path} — skipping copy")
-    else:
-        shutil.copy2(h5_path, backup_path)
-        print(f"  Backup saved to {backup_path}")
+    # ── 1. Read and combine model photometry tables ────────────────────
+    tables = []
+    for gal_type in gal_types:
+        path = os.path.join(model_phot_dir, f"model_photometry_diffs_{gal_type}.fits")
+        if not os.path.exists(path):
+            print(f"  WARNING: {path} not found, skipping {gal_type}")
+            continue
+        tab = safe_read_table(path)
+        if verbose:
+            print(f"  Loaded {len(tab)} rows from {path}")
+        tables.append(tab)
 
-    # --- 2. Read TARGETIDs and compute keep mask --------------------------
-    with h5py.File(h5_path, "r") as f:
-        h5_tgids = f[tgid_key][:]
-    
-    keep_mask = np.isin(h5_tgids, catalog_tgids)
-    n_before = len(h5_tgids)
-    n_keep = int(keep_mask.sum())
-    n_remove = n_before - n_keep
-    print(f"  {basename}: {n_before} objects -> keeping {n_keep}, removing {n_remove}")
-
-    if n_remove == 0:
-        print(f"  Nothing to remove from {basename}")
+    if len(tables) == 0:
+        print("  ERROR: No model photometry files found. Aborting.")
         return
 
-    # --- 3. Write pruned file to a temp path, then swap -------------------
-    tmp_path = h5_path + ".tmp.h5"
+    model_phot = safe_vstack(tables)
 
-    with h5py.File(h5_path, "r") as fin, h5py.File(tmp_path, "w") as fout:
-        for ds_name in row_datasets:
-            data = fin[ds_name][:]
-            filtered = data[keep_mask]
+    # De-duplicate on TARGETID (keep first occurrence)
+    _, unique_idx = np.unique(np.asarray(model_phot["TARGETID"]), return_index=True)
+    model_phot = model_phot[np.sort(unique_idx)]
+    if verbose:
+        print(f"  Combined model photometry table: {len(model_phot)} unique TARGETIDs")
 
-            create_kwargs = {"dtype": filtered.dtype}
+    # ── 2. Read FASTSPEC HDU from the catalog ──────────────────────────
+    fspec_cat = safe_read_table(cat_path, hdu="FASTSPEC")
+    n_objects = len(fspec_cat)
+    cat_tids = np.asarray(fspec_cat["TARGETID"])
 
-            orig_ds = fin[ds_name]
-            if orig_ds.compression is not None:
-                create_kwargs["compression"] = orig_ds.compression
-                if orig_ds.compression_opts is not None:
-                    create_kwargs["compression_opts"] = orig_ds.compression_opts
-            if orig_ds.chunks is not None:
-                orig_chunks = orig_ds.chunks
-                new_chunks = (min(orig_chunks[0], len(filtered)),) + orig_chunks[1:]
-                create_kwargs["chunks"] = new_chunks
+    if verbose:
+        print(f"  FASTSPEC HDU has {n_objects} rows")
 
-            fout.create_dataset(ds_name, data=filtered, **create_kwargs)
+    # ── 3. Build TARGETID lookup and fill columns ──────────────────────
+    model_tid_to_row = {int(t): i for i, t in enumerate(model_phot["TARGETID"])}
 
-        for ds_name in copy_datasets:
-            data = fin[ds_name][:]
-            fout.create_dataset(ds_name, data=data, dtype=fin[ds_name].dtype)
+    for old_col, new_col in _COL_MAP.items():
+        arr = np.full(n_objects, np.nan, dtype=np.float64)
+        src = np.asarray(model_phot[old_col], dtype=np.float64)
+        for j, tid in enumerate(cat_tids):
+            row = model_tid_to_row.get(int(tid))
+            if row is not None:
+                arr[j] = src[row]
+        fspec_cat[new_col] = arr
 
-    os.replace(tmp_path, h5_path)
-    print(f"  Pruned file written to {h5_path}")
+    n_matched = int(np.sum(np.isfinite(fspec_cat["MAG_G_DECAM_MODEL_NOEMI"])))
+    if verbose:
+        print(f"  Matched {n_matched}/{n_objects} objects to model photometry")
 
-    # --- 4. Validate ------------------------------------------------------
-    with h5py.File(h5_path, "r") as f:
-        final_count = f[tgid_key].shape[0]
-    assert final_count == n_keep, (
-        f"Validation failed for {basename}: expected {n_keep} rows, got {final_count}"
+    # ── 4. Write updated FASTSPEC HDU back ─────────────────────────────
+    buf = BytesIO()
+    fspec_cat.write(buf, format="fits")
+    buf.seek(0)
+    fspec_hdu_new = fits.open(buf)[1]
+    fspec_hdu_new.name = "FASTSPEC"
+    fspec_hdu_new.add_checksum()
+
+    with fits.open(cat_path) as orig_hdul:
+        hdu_names = [hdu.name for hdu in orig_hdul]
+    fspec_idx = hdu_names.index("FASTSPEC")
+
+    with fits.open(cat_path, mode="update") as hdul:
+        hdul[fspec_idx] = fspec_hdu_new
+        hdul.flush()
+
+    new_cols_str = ", ".join(_COL_MAP.values())
+    print(f"Updated {cat_path}:")
+    print(f"  FASTSPEC HDU: added {new_cols_str}")
+    print("=" * 60)
+
+
+def compute_emission_subtracted_photo_errors(
+    cat_path,
+    spectra_h5_path="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/data/desi_dr1_dwarf_catalog_spectra.h5",
+    fastspec_base_dir="/global/cfs/cdirs/desi/public/dr1/vac/dr1/fastspecfit/iron/v2.1/healpix",
+    batch_size=500,
+    verbose=True,
+):
+    """
+    Subtract fastspec emission-line models from observed spectra, measure
+    DECam g/r photometry (with errors) on the residual, and propagate
+    those magnitude errors into a stellar-mass uncertainty.
+
+    Updates the multi-extension FITS catalog at *cat_path*:
+      - MAIN HDU: adds LOG_MSTAR_M24_ERR
+      - FASTSPEC HDU: adds MAG_G_NOEMI, MAG_R_NOEMI, MAG_G_NOEMI_ERR,
+        MAG_R_NOEMI_ERR
+    """
+    print("=" * 60)
+    print("Computing emission-subtracted photometry and stellar mass errors")
+    print("=" * 60)
+
+    # ── 1. Read catalog ──────────────────────────────────────────────
+    main_cat = safe_read_table(cat_path, hdu="MAIN")
+    fspec_cat = safe_read_table(cat_path, hdu="FASTSPEC")
+
+    n_objects = len(main_cat)
+    targetids = np.array(main_cat["TARGETID"])
+    redshifts = np.array(main_cat["Z"], dtype=float)
+
+    if verbose:
+        print(f"Catalog has {n_objects} objects")
+
+    # ── 2. Read observed spectra from H5 ─────────────────────────────
+    if verbose:
+        print(f"Loading observed spectra from {spectra_h5_path} ...")
+    with h5py.File(spectra_h5_path, "r") as f:
+        h5_wave = f["WAVE"][:]
+        h5_flux = f["FLUX"][:]
+        h5_ivar = f["FLUX_IVAR"][:]
+        h5_tgids = f["TARGETID"][:]
+
+    h5_tgid_to_row = {int(t): i for i, t in enumerate(h5_tgids)}
+    if verbose:
+        print(f"  Loaded {len(h5_tgids)} spectra, wave shape {h5_wave.shape}")
+
+    # ── 3. Build per-object fastspecfit file paths ────────────────────
+    surveys = np.array(main_cat["SURVEY"].data).astype(str)
+    programs = np.array(main_cat["PROGRAM"].data).astype(str)
+    healpixes = np.array(main_cat["HEALPIX"].data, dtype=int)
+
+    paths = np.array([
+        get_fastspecfit_path(surveys[i], programs[i], healpixes[i], fastspec_base_dir)
+        for i in range(n_objects)
+    ])
+    unique_paths = np.unique(paths)
+    n_files = len(unique_paths)
+
+    if verbose:
+        print(f"Unique fastspecfit FITS files: {n_files}")
+
+    # ── 4. Output arrays ─────────────────────────────────────────────
+    g_noemi = np.full(n_objects, np.nan)
+    r_noemi = np.full(n_objects, np.nan)
+    g_noemi_err = np.full(n_objects, np.nan)
+    r_noemi_err = np.full(n_objects, np.nan)
+
+    # ── 5. Loop over fastspecfit healpix files ────────────────────────
+    files_done = 0
+    for upath in unique_paths:
+        cat_indices = np.where(paths == upath)[0]
+
+        try:
+            iron_vac = fits.open(upath, memmap=True)
+        except Exception as e:
+            if verbose:
+                print(f"  SKIP {upath}: {e}")
+            continue
+
+        try:
+            header = iron_vac["MODELS"].header
+            model_wave = (header["CRVAL1"]
+                          + (np.arange(header["NAXIS1"]) - header["CRPIX1"])
+                          * header["CDELT1"])
+            model_data = iron_vac["MODELS"].data
+
+            tgids_file = iron_vac["FASTSPEC"].data["TARGETID"]
+            tgid_to_fits_row = {int(t): i for i, t in enumerate(tgids_file)}
+
+            # Match catalog objects to both the FITS file and H5 spectra
+            valid_cat = []
+            valid_fits_rows = []
+            valid_h5_rows = []
+            for ci in cat_indices:
+                fits_row = tgid_to_fits_row.get(int(targetids[ci]))
+                h5_row = h5_tgid_to_row.get(int(targetids[ci]), -1)
+                if fits_row is not None and h5_row >= 0:
+                    valid_cat.append(ci)
+                    valid_fits_rows.append(fits_row)
+                    valid_h5_rows.append(h5_row)
+
+            if len(valid_cat) == 0:
+                continue
+
+            valid_cat = np.array(valid_cat)
+            valid_fits_rows = np.array(valid_fits_rows)
+            valid_h5_rows = np.array(valid_h5_rows)
+
+            emission = model_data[valid_fits_rows, 2, :]
+
+            obs_flux = h5_flux[valid_h5_rows]
+            obs_ivar = h5_ivar[valid_h5_rows]
+
+            # Resample emission onto H5 wavelength grid if grids differ
+            need_resample = (len(model_wave) != len(h5_wave)
+                             or not np.allclose(model_wave, h5_wave, atol=0.01))
+            if need_resample:
+                emission_resampled = np.zeros_like(obs_flux)
+                for j in range(len(valid_cat)):
+                    emission_resampled[j] = resample_flux(h5_wave, model_wave, emission[j])
+                emission = emission_resampled
+
+            flux_no_emi = obs_flux - emission
+
+            # Measure DECam g,r with errors
+            for start in range(0, len(valid_cat), batch_size):
+                end = min(start + batch_size, len(valid_cat))
+                try:
+                    phot = measure_photo_batch(
+                        h5_wave,
+                        flux_no_emi[start:end],
+                        ivar_2d=obs_ivar[start:end],
+                    )
+                    g_noemi[valid_cat[start:end]] = phot['g_decam']
+                    r_noemi[valid_cat[start:end]] = phot['r_decam']
+                    g_noemi_err[valid_cat[start:end]] = phot['g_decam_err']
+                    r_noemi_err[valid_cat[start:end]] = phot['r_decam_err']
+                except Exception as e:
+                    if verbose:
+                        print(f"  Photometry error (batch {start}-{end}): {e}")
+
+        finally:
+            iron_vac.close()
+
+        files_done += 1
+        if verbose and files_done % 50 == 0:
+            print(f"  Processed {files_done}/{n_files} files")
+
+    if verbose:
+        n_good = int(np.sum(np.isfinite(g_noemi)))
+        print(f"  Emission-subtracted photometry measured for {n_good}/{n_objects} objects")
+
+    # ── 6. Propagate magnitude errors into stellar mass error ─────────
+    gr_colors = np.array(main_cat["MAG_G"]) - np.array(main_cat["MAG_R"])
+    mag_g_arr = np.array(main_cat["MAG_G"])
+    zcmb_arr = np.array(main_cat["Z_CMB"])
+    dist_arr = np.array(main_cat["LUMI_DIST_MPC"])
+
+    _, log_mstar_err = get_stellar_mass_mia(
+        gr_colors, mag_g_arr, zcmb_arr,
+        d_in_mpc=dist_arr, input_zred=False,
+        mag_g_err=g_noemi_err, mag_r_err=r_noemi_err,
     )
-    print(f"  Validated: {final_count} objects in pruned {basename}")
 
+    if verbose:
+        finite_err = np.isfinite(log_mstar_err)
+        print(f"  LOG_MSTAR_M24_ERR: {np.sum(finite_err)} finite values, "
+              f"median = {np.nanmedian(log_mstar_err):.4f} dex")
 
-def prune_h5_files(main_cat_path, spectra_h5_path, images_h5_path):
-    """
-    After the FITS catalog has been pruned to remove non-dwarfs, propagate
-    those removals into the spectra and images HDF5 files.
+    # ── 7. Update MAIN HDU with LOG_MSTAR_M24_ERR ────────────────────
+    main_cat["LOG_MSTAR_M24_ERR"] = log_mstar_err.astype(np.float64)
 
-    Each H5 file is first backed up to ``<name>_OG.h5`` in the same directory,
-    then rewritten to contain only the rows whose TARGETID still appears in
-    the MAIN HDU of *main_cat_path*.
-    """
-    from desi_lowz_funcs import print_stage
+    # ── 7b. Flag objects without SNR>5 in g AND r continuum photometry (bit 17) ──
+    snr_threshold = 5.0
+    mag_err_limit = 1.0857 / snr_threshold
+    low_cont_snr_mask = (
+        ~np.isfinite(g_noemi_err) | ~np.isfinite(r_noemi_err)
+        | (g_noemi_err >= mag_err_limit)
+        | (r_noemi_err >= mag_err_limit)
+    )
+    dwarf_maskbits = np.asarray(main_cat["DWARF_MASKBIT"], dtype=np.int64)
+    dwarf_maskbits[low_cont_snr_mask] |= np.int64(1) << 17
+    main_cat["DWARF_MASKBIT"] = dwarf_maskbits
 
-    print_stage("Pruning H5 files to match updated catalog")
+    if verbose:
+        n_flagged = int(low_cont_snr_mask.sum())
+        print(f"  DWARF_MASKBIT bit 17 (low continuum SNR): flagged "
+              f"{n_flagged}/{n_objects} objects")
 
-    catalog_tgids = np.array(safe_read_table(main_cat_path, hdu="MAIN")["TARGETID"])
-    print(f"  Catalog contains {len(catalog_tgids)} surviving TARGETIDs")
+    buf = BytesIO()
+    main_cat.write(buf, format="fits")
+    buf.seek(0)
+    main_hdu_new = fits.open(buf)[1]
+    main_hdu_new.name = "MAIN"
+    main_hdu_new.add_checksum()
 
-    # --- Spectra H5 -------------------------------------------------------
-    if os.path.exists(spectra_h5_path):
-        _prune_single_h5(
-            h5_path=spectra_h5_path,
-            catalog_tgids=catalog_tgids,
-            tgid_key="TARGETID",
-            row_datasets=["TARGETID", "Z", "FLUX", "FLUX_IVAR"],
-            copy_datasets=["WAVE"],
-        )
-    else:
-        print(f"  WARNING: spectra H5 not found at {spectra_h5_path}, skipping")
+    # ── 8. Update FASTSPEC HDU with emission-subtracted photometry ────
+    fspec_cat["MAG_G_NOEMI"] = g_noemi.astype(np.float64)
+    fspec_cat["MAG_R_NOEMI"] = r_noemi.astype(np.float64)
+    fspec_cat["MAG_G_NOEMI_ERR"] = g_noemi_err.astype(np.float64)
+    fspec_cat["MAG_R_NOEMI_ERR"] = r_noemi_err.astype(np.float64)
 
-    # --- Images H5 --------------------------------------------------------
-    if os.path.exists(images_h5_path):
-        _prune_single_h5(
-            h5_path=images_h5_path,
-            catalog_tgids=catalog_tgids,
-            tgid_key="targetid",
-            row_datasets=["targetid", "images"],
-            copy_datasets=[],
-        )
-    else:
-        print(f"  WARNING: images H5 not found at {images_h5_path}, skipping")
+    buf2 = BytesIO()
+    fspec_cat.write(buf2, format="fits")
+    buf2.seek(0)
+    fspec_hdu_new = fits.open(buf2)[1]
+    fspec_hdu_new.name = "FASTSPEC"
+    fspec_hdu_new.add_checksum()
 
-    print_stage("H5 pruning complete")
+    # ── 9. Write both HDUs back ───────────────────────────────────────
+    with fits.open(cat_path) as orig_hdul:
+        hdu_names = [hdu.name for hdu in orig_hdul]
+
+    main_idx = hdu_names.index("MAIN")
+    fspec_idx = hdu_names.index("FASTSPEC")
+
+    with fits.open(cat_path, mode="update") as hdul:
+        hdul[main_idx] = main_hdu_new
+        hdul[fspec_idx] = fspec_hdu_new
+        hdul.flush()
+
+    print(f"Updated {cat_path}:")
+    print(f"  MAIN HDU: added LOG_MSTAR_M24_ERR, updated DWARF_MASKBIT (bit 17: low continuum SNR)")
+    print(f"  FASTSPEC HDU: added MAG_G_NOEMI, MAG_R_NOEMI, MAG_G_NOEMI_ERR, MAG_R_NOEMI_ERR")
+    print("=" * 60)
+
 
 
 if __name__ == '__main__':
@@ -1797,10 +1889,13 @@ if __name__ == '__main__':
     
     process_shreds = True
     process_clean = True
-    process_qso_scnd = True
+    compute_mstar_err = False
+    add_model_phot = True
+    process_qso_scnd = False
+    process_post_hdu = True
 
     #make sure the get_fastspec_fit_catalog_V2 function is run before hand in case there are any new columns added
-    process_fastspec=True
+    process_fastspec=False
 
     main_cat_outpath = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits"
 
@@ -1911,28 +2006,22 @@ if __name__ == '__main__':
                  output_file=main_cat_outpath,
                  extra_prefixes=["qso_scnd"] if process_qso_scnd else [])
 
-    ##add the spectra NMF+PCA information!!
-    create_spectra_hdu(main_cat_outpath)
+    if compute_mstar_err:
+        print("Computing emission-subtracted photometry and stellar mass errors")
+        compute_emission_subtracted_photo_errors(main_cat_outpath)
 
-    ##add image SSL UMAP + similarity information
-    create_image_ssl_hdu(main_cat_outpath)
+    if add_model_phot:
+        add_model_photometry_to_fastspec(main_cat_outpath)
 
-    print("TODO: remake the NNMF plots and the criterion for weird spectra!!")
-        
-    #update the dwarf_maskbit with some weird spectra masks
-    add_wrong_redrock_maskbit(main_cat_outpath, main_datamodel)
+    if process_post_hdu:
+        ##add the spectra NMF+PCA information!!
+        create_spectra_hdu(main_cat_outpath)
 
-    ##update the distances in the catalog and then remove objects that are not dwarf based on that!!
-    incorporate_updated_distances(main_cat_outpath)
+        ##add image SSL UMAP + similarity information
+        create_image_ssl_hdu(main_cat_outpath)
 
-    ##propagate the TARGETID removals into the spectra and images H5 files
-    # prune_h5_files(
-    #     main_cat_path=main_cat_outpath,
-    #     spectra_h5_path="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/data/desi_dr1_dwarf_catalog_spectra.h5",
-    #     images_h5_path="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/desi_dr1_dwarf_catalog_images.h5",
-    # )
-
-    
+        #update the dwarf_maskbit with some weird spectra masks
+        add_wrong_redrock_maskbit(main_cat_outpath, main_datamodel)
 
 
 

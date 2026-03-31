@@ -1467,6 +1467,57 @@ fastspec_hdu_datamodel["FLUX_SYNTH_PHOTMODEL_Z"] = {
     "dtype": "float32"
 }
 
+fastspec_hdu_datamodel["MAG_G_DECAM_MODEL_NOEMI"] = {
+    "unit": "mag",
+    "description": "DECam g-band AB magnitude of the fastspecfit continuum-only model (no emission lines).",
+    "dtype": "float64"
+}
+fastspec_hdu_datamodel["MAG_R_DECAM_MODEL_NOEMI"] = {
+    "unit": "mag",
+    "description": "DECam r-band AB magnitude of the fastspecfit continuum-only model (no emission lines).",
+    "dtype": "float64"
+}
+fastspec_hdu_datamodel["MAG_G_DECAM_MODEL_WEMI"] = {
+    "unit": "mag",
+    "description": "DECam g-band AB magnitude of the fastspecfit model including emission lines.",
+    "dtype": "float64"
+}
+fastspec_hdu_datamodel["MAG_R_DECAM_MODEL_WEMI"] = {
+    "unit": "mag",
+    "description": "DECam r-band AB magnitude of the fastspecfit model including emission lines.",
+    "dtype": "float64"
+}
+fastspec_hdu_datamodel["MAG_G_BASS_MODEL_WEMI"] = {
+    "unit": "mag",
+    "description": "BASS g-band AB magnitude of the fastspecfit model including emission lines.",
+    "dtype": "float64"
+}
+fastspec_hdu_datamodel["MAG_R_BASS_MODEL_WEMI"] = {
+    "unit": "mag",
+    "description": "BASS r-band AB magnitude of the fastspecfit model including emission lines.",
+    "dtype": "float64"
+}
+fastspec_hdu_datamodel["MAG_G_SDSS_MODEL_NOEMI"] = {
+    "unit": "mag",
+    "description": "SDSS g-band AB magnitude of the fastspecfit continuum-only model (no emission lines) at observed redshift.",
+    "dtype": "float64"
+}
+fastspec_hdu_datamodel["MAG_R_SDSS_MODEL_NOEMI"] = {
+    "unit": "mag",
+    "description": "SDSS r-band AB magnitude of the fastspecfit continuum-only model (no emission lines) at observed redshift.",
+    "dtype": "float64"
+}
+fastspec_hdu_datamodel["MAG_G_SDSS_Z0_MODEL_NOEMI"] = {
+    "unit": "mag",
+    "description": "SDSS g-band AB magnitude of the fastspecfit continuum-only model (no emission lines) k-corrected to z=0.",
+    "dtype": "float64"
+}
+fastspec_hdu_datamodel["MAG_R_SDSS_Z0_MODEL_NOEMI"] = {
+    "unit": "mag",
+    "description": "SDSS r-band AB magnitude of the fastspecfit continuum-only model (no emission lines) k-corrected to z=0.",
+    "dtype": "float64"
+}
+
 
     # "DN4000_MODEL_IVAR": {
     #     "unit": None,

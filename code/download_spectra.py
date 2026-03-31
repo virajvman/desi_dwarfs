@@ -37,6 +37,8 @@ def argument_parser():
                         help='If set, only download spectra for this SAMPLE value and append to existing HDF5')
     result.add_argument('-existing_h5', dest='existing_h5', type=str, default=None,
                         help='Path to existing HDF5 file to append to (required with -append_sample)')
+    result.add_argument('-overwrite', dest='overwrite', action='store_true',
+                        help='Re-download all spectra and overwrite the output h5 file (skips incremental sync)')
 
     return result
 
@@ -149,8 +151,83 @@ def download_and_append_sample_spectra(catalog_path, existing_h5_path, sample_na
     print_stage(f"Successfully appended {len(new_targetids)} spectra to {existing_h5_path}")
 
 
-def general_download(cat, save_path):
-    
+def general_download(cat, ncores, nchunks):
+    """
+    Download coadded spectra for every row in *cat* and return the results
+    in memory (no disk I/O).
+
+    Parameters
+    ----------
+    cat : astropy.table.Table
+        Must contain columns TARGETID, SURVEY, PROGRAM, HEALPIX, Z.
+    ncores : int
+        Number of parallel processes for ``read_spectra_parallel``.
+    nchunks : int
+        Split the download into this many sequential chunks to limit memory.
+
+    Returns
+    -------
+    dict with keys TARGETID, Z, WAVE, FLUX, FLUX_IVAR (numpy arrays).
+    """
+    temp = cat["TARGETID", "SURVEY", "PROGRAM", "HEALPIX", "Z"]
+
+    all_ks = np.arange(len(temp))
+    all_ks_chunks = np.array_split(all_ks, nchunks)
+
+    collected_tgids = []
+    collected_zreds = []
+    collected_fluxs = []
+    collected_ivars = []
+    shared_wave = None
+
+    print_stage(f"Downloading {len(temp)} spectra in {nchunks} chunk(s)")
+
+    for chunk_i in trange(nchunks):
+        all_ks_i = all_ks_chunks[chunk_i]
+        if len(all_ks_i) == 0:
+            continue
+
+        print_stage(f"Chunk {chunk_i}/{nchunks}: {len(all_ks_i)} objects")
+        temp_chunk_i = temp[all_ks_i]
+
+        data_spec = desispec.io.spectra.read_spectra_parallel(
+            temp_chunk_i, nproc=ncores, prefix='coadd',
+            rdspec_kwargs={"skip_hdus": ["EXP_FIBERMAP", "SCORES", "EXTRA_CATALOG", "MASK", "RESOLUTION"]},
+            specprod="iron", match_order=True,
+        )
+
+        spec_combined = coaddition.coadd_cameras(data_spec)
+
+        collected_tgids.append(temp_chunk_i["TARGETID"].data)
+        collected_zreds.append(temp_chunk_i["Z"].data)
+        collected_fluxs.append(spec_combined.flux["brz"])
+        collected_ivars.append(spec_combined.ivar["brz"])
+        if shared_wave is None:
+            shared_wave = spec_combined.wave["brz"]
+
+    return {
+        "TARGETID": np.concatenate(collected_tgids),
+        "Z": np.concatenate(collected_zreds),
+        "WAVE": shared_wave,
+        "FLUX": np.concatenate(collected_fluxs),
+        "FLUX_IVAR": np.concatenate(collected_ivars),
+    }
+
+
+def save_h5(data_dict, save_path):
+    """
+    Write a spectra dict (TARGETID, Z, WAVE, FLUX, FLUX_IVAR) to an HDF5 file.
+    Overwrites the file if it already exists.
+    """
+    print_stage(f"Saving {len(data_dict['TARGETID'])} spectra to {save_path}")
+    with h5py.File(save_path, "w") as f:
+        f.create_dataset("TARGETID",  data=data_dict["TARGETID"],  dtype='i8')
+        f.create_dataset("Z",         data=data_dict["Z"],         dtype='f4')
+        f.create_dataset("WAVE",      data=data_dict["WAVE"],      dtype='f4')
+        f.create_dataset("FLUX",      data=data_dict["FLUX"],      dtype='f4')
+        f.create_dataset("FLUX_IVAR", data=data_dict["FLUX_IVAR"], dtype='f4')
+    print_stage(f"Saved to {save_path}")
+
 
 if __name__ == '__main__':
 
@@ -189,133 +266,99 @@ if __name__ == '__main__':
 
     else:
         ##########################################################
-        # FULL DOWNLOAD MODE (original behavior, unchanged)
+        # SYNC (default) / OVERWRITE mode
         ##########################################################
 
         print_stage("Loading the DESI catalogs")
 
-        # load the MAIN extension directly as an Astropy Table
         data_cat = Table.read(filename, hdu="MAIN")
-
-        print(f"Number of galaxies for which spectra is being downloaded = {len(data_cat)}")
-
-        if tgids_list is not None:
-            print("List of targetids to process:",tgids_list)
-            data_cat = data_cat[np.isin(data_cat['TARGETID'], np.array(tgids_list) )]
-            print("Number of targetids to process =", len(data_cat))
-
-        # ##do we randomly shuffle spectra?
-        # if random:
-        #     print("Randomly shuffling the array now!")
-        #     arr_inds = np.arange( len(data_cat) )
-        #     np.random.shuffle(arr_inds)
-        #     data_cat = data_cat[arr_inds]
-        
-        #apply the max_ind cut if relevant
-        max_ind = np.minimum( max_ind, len(data_cat) )
-        data_cat = data_cat[min_ind:max_ind]
-
-        print("Total number of spectra to download = %d"%len(data_cat))
-
-        #only load the necessary columns
-        temp = data_cat["TARGETID","SURVEY","PROGRAM","HEALPIX","Z"]
-        
-        ##run in chunks so less memory intensive!
-        print_stage("Starting to read the spectra in parallel!")
-
-        all_ks = np.arange(len(temp))
-        print(len(temp))
-        
-        all_ks_chunks = np.array_split(all_ks, nchunks)
+        print(f"Total objects in catalog: {len(data_cat)}")
 
         file_template = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/data/" + save_name
+        h5_path = file_template + ".h5"
 
-        for chunk_i in trange(nchunks):
-            print_stage("Started chunk %d/%d"%(chunk_i, nchunks) )
-        
-            all_ks_i =  all_ks_chunks[chunk_i]
-            
-            print_stage("Number of objects in this chunk = %d"%len(all_ks_i))
+        overwrite = args.overwrite
 
-            #getting the table associated with this chunk!
-            temp_chunk_i = temp[all_ks_i]
+        if overwrite or not os.path.exists(h5_path):
+            ##########################################################
+            # OVERWRITE / FIRST-RUN: download everything
+            ##########################################################
+            if not os.path.exists(h5_path):
+                print_stage("No existing h5 file found — downloading all spectra")
+            else:
+                print_stage("Overwrite flag set — re-downloading all spectra")
 
-            data_spec = desispec.io.spectra.read_spectra_parallel(temp_chunk_i, nproc=ncores, prefix='coadd', rdspec_kwargs={ "skip_hdus" : [ "EXP_FIBERMAP", "SCORES", "EXTRA_CATALOG", "MASK", "RESOLUTION"] }, specprod="iron", match_order=True)
-        
-            #we coadd the spectra!
-            spec_combined = coaddition.coadd_cameras(data_spec)
-        
-            # ##save this now!
-            all_fluxs = spec_combined.flux
-            all_waves = spec_combined.wave
-            all_ivars = spec_combined.ivar
-        
-            all_tgids = temp_chunk_i["TARGETID"].data
-            all_zreds = temp_chunk_i["Z"].data
+            if tgids_list is not None:
+                print("List of targetids to process:", tgids_list)
+                data_cat = data_cat[np.isin(data_cat['TARGETID'], np.array(tgids_list))]
+                print("Number of targetids to process =", len(data_cat))
 
-            #then we save this in a hdf5 file!
+            max_ind = np.minimum(max_ind, len(data_cat))
+            data_cat = data_cat[min_ind:max_ind]
 
-            save_path = file_template +  "_chunk_%d.h5"%chunk_i
-        
-            with h5py.File(save_path, "w") as f:
-                f.create_dataset("TARGETID", data=all_tgids, dtype='i8')
-                f.create_dataset("Z", data=all_zreds, dtype='f4')
-                f.create_dataset("WAVE", data=all_waves["brz"], dtype='f4')  # shared
-                f.create_dataset("FLUX", data=all_fluxs["brz"], dtype='f4')
-                f.create_dataset("FLUX_IVAR", data=all_ivars["brz"], dtype='f4')
+            print(f"Total number of spectra to download = {len(data_cat)}")
 
-        #once we save all the chunks do we try to consolidate all the chunks?
-        if nchunks == 1:
-            #we just need to rename the file!
-            os.rename(file_template + "_chunk_0.h5", file_template + ".h5")
-       
+            result = general_download(data_cat, ncores, nchunks)
+            save_h5(result, h5_path)
+
         else:
-                    
-            # Prepare empty lists for stacking
-            all_targetids = []
-            all_zreds = []
-            all_fluxs = []
-            all_ivars = []
-            shared_wave = None
-            
-            for chunk_i in range(nchunks):
-                with h5py.File(file_template + "_chunk_%d.h5"%chunk_i, "r") as f:
-                    all_targetids.append(f["TARGETID"][:])
-                    all_zreds.append(f["Z"][:])
-                    all_fluxs.append(f["FLUX"][:])
-                    all_ivars.append(f["FLUX_IVAR"][:])
-                    
-                    # assuming WAVE is identical across files
-                    if shared_wave is None:
-                        shared_wave = f["WAVE"][:]
-                        
-                #remove the old files!
-                os.remove(file_template + "_chunk_%d.h5"%chunk_i)
+            ##########################################################
+            # SYNC MODE (default): only download new, remove stale
+            ##########################################################
+            print_stage("Sync mode: comparing catalog to existing h5 file")
 
-            # Stack along the first axis (rows)
-            all_targetids = np.concatenate(all_targetids)
-            all_zreds = np.concatenate(all_zreds)
-            all_fluxs = np.concatenate(all_fluxs)
-            all_ivars = np.concatenate(all_ivars)
+            catalog_tgids = set(data_cat["TARGETID"].data)
 
-            print("FLUX SHAPE=",np.shape(all_fluxs))
-            print("WAVE SHAPE=",np.shape(shared_wave))
-            print("TARGETID SHAPE=",np.shape(all_targetids))
+            with h5py.File(h5_path, "r") as f:
+                h5_tgids_arr = f["TARGETID"][:]
+            h5_tgids = set(h5_tgids_arr)
 
-            print_stage("Total number of spectra in consolidated spectra file = %d"%len(all_targetids))
-                    
-            # Save to a new HDF5 file
-            with h5py.File(file_template + ".h5", "w") as f:
-                f.create_dataset("TARGETID", data=all_targetids, dtype='i8')
-                f.create_dataset("Z", data=all_zreds, dtype='f4')
-                f.create_dataset("WAVE", data=shared_wave, dtype='f4')
-                f.create_dataset("FLUX", data=all_fluxs, dtype='f4')
-                f.create_dataset("FLUX_IVAR", data=all_ivars, dtype='f4')
+            new_tgids = catalog_tgids - h5_tgids
+            keep_tgids = h5_tgids & catalog_tgids
+            removed_tgids = h5_tgids - catalog_tgids
 
-            print_stage("Consolidated spectra chunk saved at %s"%(file_template + ".h5") )
+            print(f"  Catalog TARGETIDs : {len(catalog_tgids)}")
+            print(f"  Existing in h5    : {len(h5_tgids)}")
+            print(f"  To keep (already) : {len(keep_tgids)}")
+            print(f"  To download (new) : {len(new_tgids)}")
+            print(f"  To remove (stale) : {len(removed_tgids)}")
 
-        #to read the data, one can do
-        # with h5py.File("spectra.h5", "r") as f:
-        #     wave = f["wave"][:]
-        #     flux = f["flux"][0]  # single spectrum
-    
+            if len(new_tgids) == 0 and len(removed_tgids) == 0:
+                print_stage("h5 file already matches catalog — nothing to do")
+
+            else:
+                # --- Download spectra for new TARGETIDs ---
+                new_data = None
+                if len(new_tgids) > 0:
+                    new_cat = data_cat[np.isin(data_cat["TARGETID"].data, list(new_tgids))]
+                    print_stage(f"Downloading {len(new_cat)} new spectra")
+                    new_data = general_download(new_cat, ncores, nchunks)
+
+                # --- Load existing h5 and retain only keep_tgids ---
+                with h5py.File(h5_path, "r") as f:
+                    existing_tgids = f["TARGETID"][:]
+                    keep_mask = np.isin(existing_tgids, list(keep_tgids))
+                    kept = {
+                        "TARGETID": f["TARGETID"][:][keep_mask],
+                        "Z":        f["Z"][:][keep_mask],
+                        "WAVE":     f["WAVE"][:],
+                        "FLUX":     f["FLUX"][:][keep_mask],
+                        "FLUX_IVAR": f["FLUX_IVAR"][:][keep_mask],
+                    }
+
+                # --- Merge kept + new ---
+                if new_data is not None and len(kept["TARGETID"]) > 0:
+                    merged = {
+                        "TARGETID":  np.concatenate([kept["TARGETID"],  new_data["TARGETID"]]),
+                        "Z":         np.concatenate([kept["Z"],         new_data["Z"]]),
+                        "WAVE":      kept["WAVE"],
+                        "FLUX":      np.concatenate([kept["FLUX"],      new_data["FLUX"]]),
+                        "FLUX_IVAR": np.concatenate([kept["FLUX_IVAR"], new_data["FLUX_IVAR"]]),
+                    }
+                elif new_data is not None:
+                    merged = new_data
+                else:
+                    merged = kept
+
+                print(f"Final spectra count: {len(merged['TARGETID'])}")
+                save_h5(merged, h5_path)
