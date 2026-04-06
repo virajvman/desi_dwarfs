@@ -243,8 +243,8 @@ if __name__ == '__main__':
     print(f"Size of shredded catalog at z<20 = {len(data_cat_shreds)}")
     
     #now we need the image paths of these objects!!
-    temp_clean = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4.fits")["TARGETID","IMAGE_PATH","STARDIST_DEG"]
-    temp_shred = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v4.fits")["TARGETID","IMAGE_PATH","STARDIST_DEG"]
+    temp_clean = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v5.fits")["TARGETID","IMAGE_PATH","STARDIST_DEG"]
+    temp_shred = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v5.fits")["TARGETID","IMAGE_PATH","STARDIST_DEG"]
     temp_sga = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_SGA_matched_dwarfs_REPROCESS.fits")["TARGETID","IMAGE_PATH","STARDIST_DEG"]
     
     # Combine and remove duplicate TARGETIDs

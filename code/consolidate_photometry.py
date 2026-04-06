@@ -2132,7 +2132,7 @@ if __name__ == '__main__':
 
     if process_clean:
         ##get the clean catalog stuff now!!
-        clean_cat = safe_read_table("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4.fits")
+        clean_cat = safe_read_table("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v5.fits")
 
         print("Creating the clean main hdu")
         clean_cat, clean_cat_entire = create_main_data_model(clean_cat, save_path + "/clean_MAIN_hdu.fits", clean_cat=True)
