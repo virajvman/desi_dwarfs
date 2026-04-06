@@ -2142,11 +2142,9 @@ def compute_emission_subtracted_photo_errors(
         print(f"  DWARF_MASKBIT bit 17 (low continuum SNR): flagged "
               f"{n_flagged}/{n_objects} objects")
 
-    buf = BytesIO()
-    main_cat.write(buf, format="fits")
-    buf.seek(0)
-    _main_hdul = fits.open(buf)
-    main_hdu_new = _main_hdul[1]
+    # table_to_hdu avoids BytesIO→open→.copy() on VLAs (e.g. ASSOCIATED_TARGETIDS),
+    # which can raise "Could not find heap data" for variable-length columns.
+    main_hdu_new = fits.table_to_hdu(main_cat)
     main_hdu_new.name = "MAIN"
     main_hdu_new.add_checksum()
 
@@ -2156,11 +2154,7 @@ def compute_emission_subtracted_photo_errors(
     fspec_cat["MAG_G_FIBER_NOEMI_ERR"] = g_noemi_err.astype(np.float64)
     fspec_cat["MAG_R_FIBER_NOEMI_ERR"] = r_noemi_err.astype(np.float64)
 
-    buf2 = BytesIO()
-    fspec_cat.write(buf2, format="fits")
-    buf2.seek(0)
-    _fspec_hdul = fits.open(buf2)
-    fspec_hdu_new = _fspec_hdul[1]
+    fspec_hdu_new = fits.table_to_hdu(fspec_cat)
     fspec_hdu_new.name = "FASTSPEC"
     fspec_hdu_new.add_checksum()
 
@@ -2182,9 +2176,9 @@ def compute_emission_subtracted_photo_errors(
             new_hdus = []
             for i, hdu in enumerate(hdul):
                 if i == main_idx:
-                    new_hdus.append(main_hdu_new.copy())
+                    new_hdus.append(main_hdu_new)
                 elif i == fspec_idx:
-                    new_hdus.append(fspec_hdu_new.copy())
+                    new_hdus.append(fspec_hdu_new)
                 else:
                     new_hdus.append(hdu.copy())
             new_hdul = fits.HDUList(new_hdus)
