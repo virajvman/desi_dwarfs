@@ -67,6 +67,7 @@ Core identifiers, coordinates, redshifts, stellar masses, photometry, and qualit
 | `DIST_SOURCE` | str | | Source of the luminosity distance. One of: `NED_ZIND`, `VIRGO_SBF`, `VIRGO_EVCC`, `CF3_NAM`, `V_CMB` |
 | `LOG_MSTAR_SAGA` | float32 | $\log(M_\odot)$ | Log stellar mass using `LUMI_DIST_MPC` and the SAGA *gr*-based approximation |
 | `LOG_MSTAR_M24` | float32 | $\log(M_\odot)$ | Log stellar mass using `LUMI_DIST_MPC` and de los Reyes et al. 2024 *gr*-based approximation |
+| `LOG_MSTAR_M24_ERR` | float64 | dex | Uncertainty in `LOG_MSTAR_M24` propagated from nebular correction errors in emission-subtracted fiber photometry |
 | `MAG_G` | float32 | mag | *g*-band magnitude (MW extinction corrected). Same as Tractor photometry, except for galaxies reprocessed after being identified as likely shredded |
 | `MAG_R` | float32 | mag | Same as `MAG_G` but for *r*-band |
 | `MAG_Z` | float32 | mag | Same as `MAG_G` but for *z*-band |
@@ -272,6 +273,20 @@ Spectral measurements from FastSpecFit: spectral indices, emission-line fluxes, 
 | `FLUX_SYNTH_PHOTMODEL_G` | float32 | nanomaggy | *g*-band flux (in the PHOTSYS photometric system) synthesized from the best-fitting photometric continuum model |
 | `FLUX_SYNTH_PHOTMODEL_R` | float32 | nanomaggy | Like `FLUX_SYNTH_PHOTMODEL_G` but in the *r*-band |
 | `FLUX_SYNTH_PHOTMODEL_Z` | float32 | nanomaggy | Like `FLUX_SYNTH_PHOTMODEL_G` but in the *z*-band |
+| `MAG_G_FIBER_NOEMI` | float64 | mag | DECam *g*-band AB magnitude measured from the emission-subtracted DESI fiber spectrum |
+| `MAG_R_FIBER_NOEMI` | float64 | mag | DECam *r*-band AB magnitude measured from the emission-subtracted DESI fiber spectrum |
+| `MAG_G_FIBER_NOEMI_ERR` | float64 | mag | Uncertainty in `MAG_G_FIBER_NOEMI` |
+| `MAG_R_FIBER_NOEMI_ERR` | float64 | mag | Uncertainty in `MAG_R_FIBER_NOEMI` |
+| `MAG_G_DECAM_MODEL_NOEMI` | float64 | mag | DECam *g*-band AB magnitude of the fastspecfit continuum-only model (no emission lines) |
+| `MAG_R_DECAM_MODEL_NOEMI` | float64 | mag | DECam *r*-band AB magnitude of the fastspecfit continuum-only model (no emission lines) |
+| `MAG_G_DECAM_MODEL_WEMI` | float64 | mag | DECam *g*-band AB magnitude of the fastspecfit model including emission lines |
+| `MAG_R_DECAM_MODEL_WEMI` | float64 | mag | DECam *r*-band AB magnitude of the fastspecfit model including emission lines |
+| `MAG_G_BASS_MODEL_WEMI` | float64 | mag | BASS *g*-band AB magnitude of the fastspecfit model including emission lines |
+| `MAG_R_BASS_MODEL_WEMI` | float64 | mag | BASS *r*-band AB magnitude of the fastspecfit model including emission lines |
+| `MAG_G_SDSS_MODEL_NOEMI` | float64 | mag | SDSS *g*-band AB magnitude of the fastspecfit continuum-only model (no emission lines) at observed redshift |
+| `MAG_R_SDSS_MODEL_NOEMI` | float64 | mag | SDSS *r*-band AB magnitude of the fastspecfit continuum-only model (no emission lines) at observed redshift |
+| `MAG_G_SDSS_Z0_MODEL_NOEMI` | float64 | mag | SDSS *g*-band AB magnitude of the fastspecfit continuum-only model (no emission lines) *k*-corrected to *z*=0 |
+| `MAG_R_SDSS_Z0_MODEL_NOEMI` | float64 | mag | SDSS *r*-band AB magnitude of the fastspecfit continuum-only model (no emission lines) *k*-corrected to *z*=0 |
 
 </details>
 
@@ -457,11 +472,13 @@ Each bit in `DWARF_MASKBIT` corresponds to a quality or cleaning flag. A value o
 | 8 | 256 | Source does not lie on segmented map |
 | 9 | 512 | Source is likely shredded ($p_{\rm CNN} > 0.25$) and near bright star |
 | 10 | 1024 | Aperture center lies in masked region |
-| 11 | 2048 | Large reduced $\chi^2 > 10$ (at least one band) if using original Tractor photometry |
+| 11 | 2048 | No segmentation map found for source |
 | 12 | 4096 | Source within twice the D26 of an SGA-2020 galaxy at same redshift, but not flagged as SGA-2020 source in Tractor |
-| 13 | 8192 | Low signal-to-noise detection (SNR > 5 in only one band or fewer) |
-| 14 | 16384 | If `MAG_TYPE = TRACTOR_OG` and `TRACTOR_MASKBITS` has at least one of {2,3,4,8,9} [Tractor bits](https://www.legacysurvey.org/dr9/bitmasks/) flagged |
-| 15 | 32768 | Likely incorrect Redrock redshift, based on UMAP analysis |
+| 13 | 8192 | Large reduced $\chi^2 > 10$ (at least one band) if using original Tractor photometry |
+| 14 | 16384 | Low signal-to-noise detection (SNR > 5 in only one band or fewer) |
+| 15 | 32768 | If `MAG_TYPE = TRACTOR_OG` and `TRACTOR_MASKBITS` has at least one of {2,3,4,8,9} [Tractor bits](https://www.legacysurvey.org/dr9/bitmasks/) flagged |
+| 16 | 65536 | Likely incorrect Redrock redshift, identified via UMAP/NMF spectral template anomaly detection |
+| 17 | 131072 | Low continuum SNR in emission-subtracted fiber photometry (SNR < 5 in *g* or *r*) |
 
 </details>
 

@@ -105,6 +105,12 @@ main_datamodel = {
         "blank_value": np.nan,
         "dtype": "float32"
     },
+    "LOG_MSTAR_M24_ERR": {
+        "unit": u.Unit("dex"),
+        "description": "Uncertainty in LOG_MSTAR_M24 propagated from nebular correction errors in emission-subtracted fiber photometry",
+        "blank_value": np.nan,
+        "dtype": "float64"
+    },
     "MAG_G": {
         "unit": u.mag,
         "description": "g-band magnitude (MW extinction corrected). Same as Tractor photometry, except for galaxies that are reprocessed after identifed as likely shredded.",
@@ -1514,10 +1520,26 @@ fastspec_hdu_datamodel["MAG_R_SDSS_Z0_MODEL_NOEMI"] = {
     "unit": "mag",
     "description": "SDSS r-band AB magnitude of the fastspecfit continuum-only model (no emission lines) k-corrected to z=0.",
     "dtype": "float64"
-
-
-
-    
+}
+fastspec_hdu_datamodel["MAG_G_FIBER_NOEMI"] = {
+    "unit": "mag",
+    "description": "DECam g-band AB magnitude measured from the emission-subtracted DESI fiber spectrum.",
+    "dtype": "float64"
+}
+fastspec_hdu_datamodel["MAG_R_FIBER_NOEMI"] = {
+    "unit": "mag",
+    "description": "DECam r-band AB magnitude measured from the emission-subtracted DESI fiber spectrum.",
+    "dtype": "float64"
+}
+fastspec_hdu_datamodel["MAG_G_FIBER_NOEMI_ERR"] = {
+    "unit": "mag",
+    "description": "Uncertainty in MAG_G_FIBER_NOEMI.",
+    "dtype": "float64"
+}
+fastspec_hdu_datamodel["MAG_R_FIBER_NOEMI_ERR"] = {
+    "unit": "mag",
+    "description": "Uncertainty in MAG_R_FIBER_NOEMI.",
+    "dtype": "float64"
 }
 
 

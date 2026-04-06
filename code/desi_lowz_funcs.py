@@ -654,16 +654,20 @@ def get_stellar_mass_mia(gr_col, gmag, zred, d_in_mpc=None, input_zred=True, mag
     input_zred : bool
         If True, compute distance from zred. If False, use d_in_mpc.
     mag_g_err : array-like, optional
-        Uncertainty in g-band magnitude. If provided with mag_r_err, returns log_mstar_err.
+        Uncertainty in g-band magnitude from the nebular correction (emission-
+        subtracted fiber photometry). If provided with mag_r_err, returns
+        log_mstar_err.
     mag_r_err : array-like, optional
-        Uncertainty in r-band magnitude. If provided with mag_g_err, returns log_mstar_err.
+        Uncertainty in r-band magnitude from the nebular correction. If
+        provided with mag_g_err, returns log_mstar_err.
     
     Returns
     -------
     log_mstar : np.ndarray
         log10(Mstar / Msun)
     log_mstar_err : np.ndarray, optional
-        Uncertainty in log10(Mstar / Msun). Only returned when mag_g_err and mag_r_err are provided.
+        Uncertainty in log10(Mstar / Msun) from nebular correction errors only.
+        Only returned when mag_g_err and mag_r_err are provided.
     '''
     from astropy.cosmology import Planck18
 
@@ -689,14 +693,17 @@ def get_stellar_mass_mia(gr_col, gmag, zred, d_in_mpc=None, input_zred=True, mag
     if return_err:
         mag_g_err = np.atleast_1d(np.asarray(mag_g_err, dtype=float))
         mag_r_err = np.atleast_1d(np.asarray(mag_r_err, dtype=float))
-        dkg_dgr = g_kcorr_deriv_gr(gr_col, zred)
-        # Propagate w.r.t. independent variables (gmag, rmag).
-        # log_mstar = a + b*(g-r) + c*(g + const - kg(g-r, z))
-        # where gr = gmag - rmag, so gmag and gr are correlated.
+        # Propagate only nebular correction uncertainties (not through kg).
+        # The k-corrections are derived from fastspec templates and share
+        # the same systematic uncertainty as the continuum model, so we
+        # treat kg as exact here.
+        # log_mstar = a + b*(g-r) + c*(g + const - kg)
+        #   dlogm/dg = b + c    (color + absolute mag terms)
+        #   dlogm/dr = -b       (color term only)
         b_coeff = np.where(Mg > -18.5, 1.315, 1.347)
         c_coeff = np.where(Mg > -18.5, -0.365, -0.4)
-        dlogm_dg = b_coeff + c_coeff * (1.0 - dkg_dgr)
-        dlogm_dr = -b_coeff + c_coeff * dkg_dgr
+        dlogm_dg = b_coeff + c_coeff
+        dlogm_dr = -b_coeff
         log_mstar_err = np.sqrt((dlogm_dg * mag_g_err)**2 + (dlogm_dr * mag_r_err)**2)
         return log_mstar, log_mstar_err
 

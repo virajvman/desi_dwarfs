@@ -22,7 +22,8 @@ from io import BytesIO
 from shred_photometry_maskbits import create_shred_maskbits_from_dict, print_maskbit_statistics, flag_weird_spectra
 import os
 import glob
-from tqdm import trange
+import multiprocessing as mp
+from tqdm import tqdm, trange
 import h5py
 from desi_lowz_funcs import match_c_to_catalog, match_fastspec_catalog, get_stellar_mass_mia
 from desi_lowz_funcs import add_sweeps_column
@@ -1808,11 +1809,118 @@ def add_model_photometry_to_fastspec(
     print("=" * 60)
 
 
+_SHARED_EMI_DATA = {}
+
+
+def _process_one_emi_file(args):
+    """Worker: process one fastspecfit healpix file for emission-subtracted photometry.
+
+    Reads (or loads cached) emission-line models, subtracts them from observed
+    spectra, and measures DECam g/r photometry with errors on the residual.
+    Accesses the large H5 arrays via the module-level _SHARED_EMI_DATA dict
+    (shared across fork-based workers via copy-on-write).
+    """
+    upath, cat_indices, batch_size, emi_cache_dir, overwrite = args
+
+    h5_wave = _SHARED_EMI_DATA['wave']
+    h5_flux = _SHARED_EMI_DATA['flux']
+    h5_ivar = _SHARED_EMI_DATA['ivar']
+    h5_tgid_to_row = _SHARED_EMI_DATA['tgid_to_row']
+    targetids = _SHARED_EMI_DATA['targetids']
+
+    cache_name = os.path.basename(upath).replace('.fits.gz', '.npz').replace('.fits', '.npz')
+    cache_path = os.path.join(emi_cache_dir, cache_name) if emi_cache_dir else None
+    use_cache = (cache_path is not None and not overwrite
+                 and os.path.exists(cache_path))
+
+    if use_cache:
+        cached = np.load(cache_path)
+        model_wave = cached['model_wave']
+        all_emission = cached['emission']
+        tgids_file = cached['targetids']
+    else:
+        try:
+            iron_vac = fits.open(upath, memmap=True)
+        except Exception:
+            return None
+        try:
+            header = iron_vac["MODELS"].header
+            model_wave = (header["CRVAL1"]
+                          + (np.arange(header["NAXIS1"]) - header["CRPIX1"])
+                          * header["CDELT1"])
+            all_emission = iron_vac["MODELS"].data[:, 2, :].copy()
+            tgids_file = np.array(iron_vac["FASTSPEC"].data["TARGETID"])
+        finally:
+            iron_vac.close()
+
+        if cache_path is not None:
+            os.makedirs(emi_cache_dir, exist_ok=True)
+            np.savez(cache_path, model_wave=model_wave,
+                     emission=all_emission, targetids=tgids_file)
+
+    tgid_to_fits_row = {int(t): i for i, t in enumerate(tgids_file)}
+
+    valid_cat, valid_fits_rows, valid_h5_rows = [], [], []
+    for ci in cat_indices:
+        fits_row = tgid_to_fits_row.get(int(targetids[ci]))
+        h5_row = h5_tgid_to_row.get(int(targetids[ci]), -1)
+        if fits_row is not None and h5_row >= 0:
+            valid_cat.append(ci)
+            valid_fits_rows.append(fits_row)
+            valid_h5_rows.append(h5_row)
+
+    if len(valid_cat) == 0:
+        return None
+
+    valid_cat = np.array(valid_cat)
+    valid_fits_rows = np.array(valid_fits_rows)
+    valid_h5_rows = np.array(valid_h5_rows)
+
+    emission = all_emission[valid_fits_rows]
+    obs_flux = h5_flux[valid_h5_rows]
+    obs_ivar = h5_ivar[valid_h5_rows]
+
+    need_resample = (len(model_wave) != len(h5_wave)
+                     or not np.allclose(model_wave, h5_wave, atol=0.01))
+    if need_resample:
+        emission_resampled = np.zeros_like(obs_flux)
+        for j in range(len(valid_cat)):
+            emission_resampled[j] = resample_flux(h5_wave, model_wave, emission[j])
+        emission = emission_resampled
+
+    flux_no_emi = obs_flux - emission
+
+    g_vals = np.full(len(valid_cat), np.nan)
+    r_vals = np.full(len(valid_cat), np.nan)
+    g_err_vals = np.full(len(valid_cat), np.nan)
+    r_err_vals = np.full(len(valid_cat), np.nan)
+
+    for start in range(0, len(valid_cat), batch_size):
+        end = min(start + batch_size, len(valid_cat))
+        try:
+            phot = measure_photo_batch(
+                h5_wave,
+                flux_no_emi[start:end],
+                ivar_2d=obs_ivar[start:end],
+            )
+            g_vals[start:end] = phot['g_decam']
+            r_vals[start:end] = phot['r_decam']
+            g_err_vals[start:end] = phot['g_decam_err']
+            r_err_vals[start:end] = phot['r_decam_err']
+        except Exception:
+            pass
+
+    return (valid_cat, g_vals, r_vals, g_err_vals, r_err_vals)
+
+
 def compute_emission_subtracted_photo_errors(
     cat_path,
     spectra_h5_path="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/data/desi_dr1_dwarf_catalog_spectra.h5",
     fastspec_base_dir="/global/cfs/cdirs/desi/public/dr1/vac/dr1/fastspecfit/iron/v2.1/healpix",
     batch_size=500,
+    overwrite_model_files=False,
+    emi_cache_dir="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/emi_model_cache/",
+    ncores=1,
     verbose=True,
 ):
     """
@@ -1820,10 +1928,33 @@ def compute_emission_subtracted_photo_errors(
     DECam g/r photometry (with errors) on the residual, and propagate
     those magnitude errors into a stellar-mass uncertainty.
 
+    Parameters
+    ----------
+    cat_path : str
+        Path to the multi-extension FITS catalog.
+    spectra_h5_path : str
+        Path to the HDF5 file with observed spectra (WAVE, FLUX, FLUX_IVAR, TARGETID).
+    fastspec_base_dir : str
+        Base directory for fastspecfit healpix FITS files.
+    batch_size : int
+        Number of spectra per photometry measurement batch.
+    overwrite_model_files : bool
+        If True (or cache files do not exist), read MODELS extensions from the
+        fastspecfit FITS files and save them as .npz caches under *emi_cache_dir*.
+        If False and caches exist, load from .npz instead of reading FITS.
+    emi_cache_dir : str or None
+        Directory for cached emission model .npz files. Set to None to disable caching.
+    ncores : int
+        Number of parallel workers for the healpix file loop. Uses fork-based
+        multiprocessing so the large H5 arrays are shared via copy-on-write.
+        Set to 1 for serial execution.
+    verbose : bool
+        Print progress information.
+
     Updates the multi-extension FITS catalog at *cat_path*:
-      - MAIN HDU: adds LOG_MSTAR_M24_ERR
-      - FASTSPEC HDU: adds MAG_G_NOEMI, MAG_R_NOEMI, MAG_G_NOEMI_ERR,
-        MAG_R_NOEMI_ERR
+      - MAIN HDU: adds LOG_MSTAR_M24_ERR, updates DWARF_MASKBIT (bit 17)
+      - FASTSPEC HDU: adds MAG_G_FIBER_NOEMI, MAG_R_FIBER_NOEMI,
+        MAG_G_FIBER_NOEMI_ERR, MAG_R_FIBER_NOEMI_ERR
     """
     print("=" * 60)
     print("Computing emission-subtracted photometry and stellar mass errors")
@@ -1835,7 +1966,6 @@ def compute_emission_subtracted_photo_errors(
 
     n_objects = len(main_cat)
     targetids = np.array(main_cat["TARGETID"])
-    redshifts = np.array(main_cat["Z"], dtype=float)
 
     if verbose:
         print(f"Catalog has {n_objects} objects")
@@ -1874,86 +2004,44 @@ def compute_emission_subtracted_photo_errors(
     g_noemi_err = np.full(n_objects, np.nan)
     r_noemi_err = np.full(n_objects, np.nan)
 
-    # ── 5. Loop over fastspecfit healpix files ────────────────────────
-    files_done = 0
+    # ── 5. Populate shared data and build job arguments ──────────────
+    _SHARED_EMI_DATA['wave'] = h5_wave
+    _SHARED_EMI_DATA['flux'] = h5_flux
+    _SHARED_EMI_DATA['ivar'] = h5_ivar
+    _SHARED_EMI_DATA['tgid_to_row'] = h5_tgid_to_row
+    _SHARED_EMI_DATA['targetids'] = targetids
+
+    job_args = []
     for upath in unique_paths:
         cat_indices = np.where(paths == upath)[0]
+        job_args.append((upath, cat_indices, batch_size, emi_cache_dir,
+                         overwrite_model_files))
 
-        try:
-            iron_vac = fits.open(upath, memmap=True)
-        except Exception as e:
-            if verbose:
-                print(f"  SKIP {upath}: {e}")
+    # ── 5b. Process files (parallel or serial) ───────────────────────
+    if ncores > 1:
+        ctx = mp.get_context('fork')
+        with ctx.Pool(processes=ncores) as pool:
+            results = list(tqdm(
+                pool.imap(_process_one_emi_file, job_args),
+                total=len(job_args), desc="Emission subtraction"
+            ))
+    else:
+        results = []
+        for i, args in enumerate(job_args):
+            results.append(_process_one_emi_file(args))
+            if verbose and (i + 1) % 50 == 0:
+                print(f"  Processed {i+1}/{n_files} files")
+
+    _SHARED_EMI_DATA.clear()
+
+    for result in results:
+        if result is None:
             continue
-
-        try:
-            header = iron_vac["MODELS"].header
-            model_wave = (header["CRVAL1"]
-                          + (np.arange(header["NAXIS1"]) - header["CRPIX1"])
-                          * header["CDELT1"])
-            model_data = iron_vac["MODELS"].data
-
-            tgids_file = iron_vac["FASTSPEC"].data["TARGETID"]
-            tgid_to_fits_row = {int(t): i for i, t in enumerate(tgids_file)}
-
-            # Match catalog objects to both the FITS file and H5 spectra
-            valid_cat = []
-            valid_fits_rows = []
-            valid_h5_rows = []
-            for ci in cat_indices:
-                fits_row = tgid_to_fits_row.get(int(targetids[ci]))
-                h5_row = h5_tgid_to_row.get(int(targetids[ci]), -1)
-                if fits_row is not None and h5_row >= 0:
-                    valid_cat.append(ci)
-                    valid_fits_rows.append(fits_row)
-                    valid_h5_rows.append(h5_row)
-
-            if len(valid_cat) == 0:
-                continue
-
-            valid_cat = np.array(valid_cat)
-            valid_fits_rows = np.array(valid_fits_rows)
-            valid_h5_rows = np.array(valid_h5_rows)
-
-            emission = model_data[valid_fits_rows, 2, :]
-
-            obs_flux = h5_flux[valid_h5_rows]
-            obs_ivar = h5_ivar[valid_h5_rows]
-
-            # Resample emission onto H5 wavelength grid if grids differ
-            need_resample = (len(model_wave) != len(h5_wave)
-                             or not np.allclose(model_wave, h5_wave, atol=0.01))
-            if need_resample:
-                emission_resampled = np.zeros_like(obs_flux)
-                for j in range(len(valid_cat)):
-                    emission_resampled[j] = resample_flux(h5_wave, model_wave, emission[j])
-                emission = emission_resampled
-
-            flux_no_emi = obs_flux - emission
-
-            # Measure DECam g,r with errors
-            for start in range(0, len(valid_cat), batch_size):
-                end = min(start + batch_size, len(valid_cat))
-                try:
-                    phot = measure_photo_batch(
-                        h5_wave,
-                        flux_no_emi[start:end],
-                        ivar_2d=obs_ivar[start:end],
-                    )
-                    g_noemi[valid_cat[start:end]] = phot['g_decam']
-                    r_noemi[valid_cat[start:end]] = phot['r_decam']
-                    g_noemi_err[valid_cat[start:end]] = phot['g_decam_err']
-                    r_noemi_err[valid_cat[start:end]] = phot['r_decam_err']
-                except Exception as e:
-                    if verbose:
-                        print(f"  Photometry error (batch {start}-{end}): {e}")
-
-        finally:
-            iron_vac.close()
-
-        files_done += 1
-        if verbose and files_done % 50 == 0:
-            print(f"  Processed {files_done}/{n_files} files")
+        valid_cat, g_vals, r_vals, g_err_vals, r_err_vals = result
+        g_noemi[valid_cat] = g_vals
+        r_noemi[valid_cat] = r_vals
+        g_noemi_err[valid_cat] = g_err_vals
+        r_noemi_err[valid_cat] = r_err_vals
 
     if verbose:
         n_good = int(np.sum(np.isfinite(g_noemi)))
@@ -2003,11 +2091,11 @@ def compute_emission_subtracted_photo_errors(
     main_hdu_new.name = "MAIN"
     main_hdu_new.add_checksum()
 
-    # ── 8. Update FASTSPEC HDU with emission-subtracted photometry ────
-    fspec_cat["MAG_G_NOEMI"] = g_noemi.astype(np.float64)
-    fspec_cat["MAG_R_NOEMI"] = r_noemi.astype(np.float64)
-    fspec_cat["MAG_G_NOEMI_ERR"] = g_noemi_err.astype(np.float64)
-    fspec_cat["MAG_R_NOEMI_ERR"] = r_noemi_err.astype(np.float64)
+    # ── 8. Update FASTSPEC HDU with emission-subtracted fiber photometry ──
+    fspec_cat["MAG_G_FIBER_NOEMI"] = g_noemi.astype(np.float64)
+    fspec_cat["MAG_R_FIBER_NOEMI"] = r_noemi.astype(np.float64)
+    fspec_cat["MAG_G_FIBER_NOEMI_ERR"] = g_noemi_err.astype(np.float64)
+    fspec_cat["MAG_R_FIBER_NOEMI_ERR"] = r_noemi_err.astype(np.float64)
 
     buf2 = BytesIO()
     fspec_cat.write(buf2, format="fits")
@@ -2030,7 +2118,7 @@ def compute_emission_subtracted_photo_errors(
 
     print(f"Updated {cat_path}:")
     print(f"  MAIN HDU: added LOG_MSTAR_M24_ERR, updated DWARF_MASKBIT (bit 17: low continuum SNR)")
-    print(f"  FASTSPEC HDU: added MAG_G_NOEMI, MAG_R_NOEMI, MAG_G_NOEMI_ERR, MAG_R_NOEMI_ERR")
+    print(f"  FASTSPEC HDU: added MAG_G_FIBER_NOEMI, MAG_R_FIBER_NOEMI, MAG_G_FIBER_NOEMI_ERR, MAG_R_FIBER_NOEMI_ERR")
     print("=" * 60)
 
 
