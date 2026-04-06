@@ -681,11 +681,24 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
 
 
     print("Applying the dwarf galaxy cut!")
-    # print("Need to update to the M24 mass cut")
     print(f"Number before dwarf mass cut = {len(catalog)}")
     catalog = catalog[catalog["LOG_MSTAR_M24"].data < 9.25]
     print(f"Number after dwarf mass cut = {len(catalog)}")
-    
+
+    # Flag sources brighter than Mg = -18.5 (bit 18 of DWARF_MASKBIT)
+    mag_g_corr_bright, _ = _apply_delta_mag_corrections(catalog)
+    dist_pc = np.asarray(catalog["LUMI_DIST_MPC"], dtype=float) * 1.0e6
+    valid_bright = np.isfinite(dist_pc) & (dist_pc > 0) & np.isfinite(mag_g_corr_bright)
+    abs_mag_g = np.full(len(catalog), np.nan)
+    abs_mag_g[valid_bright] = mag_g_corr_bright[valid_bright] - 5.0 * np.log10(dist_pc[valid_bright]) + 5.0
+    too_bright = np.isfinite(abs_mag_g) & (abs_mag_g < -18.5)
+    dwarf_maskbits = np.asarray(catalog["DWARF_MASKBIT"], dtype=np.int64)
+    dwarf_maskbits[too_bright] |= np.int64(1) << 18
+    catalog["DWARF_MASKBIT"] = dwarf_maskbits
+    n_flagged = int(too_bright.sum())
+    print(f"DWARF_MASKBIT bit 18 (Mg < -18.5): flagged {n_flagged}/{len(catalog)} "
+          f"({100.0 * n_flagged / len(catalog):.1f}%)")
+
     #then we loop over the columns to get the final subset of columns
     # Keep only columns present in main_datamodel
     print("Selecting the subset of columns for MAIN extension")
@@ -2161,9 +2174,6 @@ if __name__ == '__main__':
                  base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats",
                  output_file=main_cat_outpath,
                  extra_prefixes=["qso_scnd"] if process_qso_scnd else [])
-
-    print("Flagging sources brighter than Mg = -18.5")
-    add_too_bright_maskbit(main_cat_outpath)
 
     if compute_mstar_err:
         print("Computing emission-subtracted photometry and stellar mass errors")
