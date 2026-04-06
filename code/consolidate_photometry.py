@@ -35,6 +35,9 @@ from get_associated_fibers import find_associated_tgids, get_dwarf_primary
 from fastspec_funcs import measure_photo_batch, get_fastspecfit_path
 from desispec.interpolation import resample_flux
 
+# Default folder for INT_V2_NEBCORR FITS (DIST_SOURCE, DELTA_MAG_*, is_south, etc.)
+NEBCORR_DEFAULT_FOLDER = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs"
+
 # Authoritative dwarf NEBCORR tables from construct_dwarf_galaxy_catalogs (DIST_SOURCE, DELTA_MAG_*, etc.)
 NEBCORR_INT_V2_BASENAMES = (
     "iron_lowz_filter_zsucc_zrr03_INT_V2_NEBCORR.fits",
@@ -564,19 +567,105 @@ def consolidate_positions_and_shapes(catalog):
     return catalog
 
 
-def _apply_delta_mag_corrections(catalog, mag_g_col="MAG_G", mag_r_col="MAG_R"):
+def _load_nebcorr_is_south_lookup(
+    save_folder=NEBCORR_DEFAULT_FOLDER,
+    verbose=False,
+):
+    """Build TARGETID -> is_south from stacked INT_V2_NEBCORR tables (int keys)."""
+    chunks = []
+    for basename in NEBCORR_INT_V2_BASENAMES:
+        path = os.path.join(save_folder, basename)
+        if not os.path.exists(path):
+            if verbose:
+                raise ValueError(f"  WARNING: {path} not found, skipping")
+            continue
+        tab = safe_read_table(path)
+        if "is_south" not in tab.colnames:
+            if verbose:
+                raise ValueError(f"  WARNING: {basename} has no is_south column, skipping")
+            continue
+        chunks.append(tab[["TARGETID", "is_south"]])
+        if verbose:
+            print(f"  Loaded is_south from {len(tab)} rows in {basename}")
+
+    if len(chunks) == 0:
+        return {}
+
+    stacked = safe_vstack(chunks)
+    _, unique_idx = np.unique(np.asarray(stacked["TARGETID"]), return_index=True)
+    stacked = stacked[np.sort(unique_idx)]
+    tids = np.asarray(stacked["TARGETID"])
+    flags = np.asarray(stacked["is_south"], dtype=np.int64)
+    return {int(t): int(s) for t, s in zip(tids, flags)}
+
+
+def _bass2decam_apply_mask(catalog, nebcorr_folder=NEBCORR_DEFAULT_FOLDER):
+    """float64 array: 1.0 where BASS->DECam applies (north, is_south==0), else 0.0."""
+    n = len(catalog)
+    gcol, rcol = "DELTA_MAG_G_BASS2DECAM", "DELTA_MAG_R_BASS2DECAM"
+    if gcol not in catalog.colnames or rcol not in catalog.colnames:
+        return np.ones(n, dtype=np.float64)
+
+    lookup = _load_nebcorr_is_south_lookup(save_folder=nebcorr_folder, verbose=False)
+    if len(lookup) == 0:
+        print(
+            "WARNING: _apply_delta_mag_corrections: no NEBCORR is_south lookup; "
+            "BASS2DECAM deltas skipped for all rows."
+        )
+        return np.zeros(n, dtype=np.float64)
+
+    if "TARGETID" not in catalog.colnames:
+        print(
+            "WARNING: _apply_delta_mag_corrections: no TARGETID column; "
+            "BASS2DECAM deltas skipped for all rows."
+        )
+        return np.zeros(n, dtype=np.float64)
+
+    tids = np.asarray(catalog["TARGETID"].data)
+    mask = np.zeros(n, dtype=np.float64)
+    n_unmatched = 0
+    for j in range(n):
+        s = lookup.get(int(tids[j]))
+        if s is None:
+            n_unmatched += 1
+        elif s == 0:
+            mask[j] = 1.0
+    if n_unmatched > 0:
+        print(
+            f"_apply_delta_mag_corrections: {n_unmatched}/{n} TARGETIDs not in "
+            f"NEBCORR is_south lookup (BASS2DECAM skipped for those rows)"
+        )
+    return mask
+
+
+def _apply_delta_mag_corrections(
+    catalog,
+    mag_g_col="MAG_G",
+    mag_r_col="MAG_R",
+    nebcorr_folder=NEBCORR_DEFAULT_FOLDER,
+):
     """Apply DELTA_MAG corrections to get SDSS z=0 continuum-only magnitudes.
 
     Applies the full correction chain (BASS->DECam, nebular, DECam->SDSS,
     k-correction) using the DELTA_MAG columns attached by
     construct_dwarf_galaxy_catalogs.py.  Corrections that are absent from the
     catalog are silently skipped.
+
+    BASS->DECam deltas are added only for north targets (is_south == 0), using
+    ``is_south`` from stacked INT_V2_NEBCORR files matched by TARGETID — same rule
+    as ``apply_photometric_corrections``.  South and unmatched TARGETIDs get no
+    BASS2DECAM term even if DELTA_MAG_*_BASS2DECAM is non-zero in the table.
     """
     mag_g = np.array(catalog[mag_g_col].data, dtype=float)
     mag_r = np.array(catalog[mag_r_col].data, dtype=float)
 
+    g_b2d, r_b2d = "DELTA_MAG_G_BASS2DECAM", "DELTA_MAG_R_BASS2DECAM"
+    if g_b2d in catalog.colnames and r_b2d in catalog.colnames:
+        m = _bass2decam_apply_mask(catalog, nebcorr_folder=nebcorr_folder)
+        mag_g += np.array(catalog[g_b2d].data, dtype=float) * m
+        mag_r += np.array(catalog[r_b2d].data, dtype=float) * m
+
     delta_pairs = [
-        ("DELTA_MAG_G_BASS2DECAM", "DELTA_MAG_R_BASS2DECAM"),
         ("DELTA_MAG_G_NEB",        "DELTA_MAG_R_NEB"),
         ("DELTA_MAG_G_DECAM2SDSS", "DELTA_MAG_R_DECAM2SDSS"),
         ("DELTA_MAG_G_KCORR",      "DELTA_MAG_R_KCORR"),
@@ -1854,11 +1943,12 @@ def add_model_photometry_to_fastspec(
 
 
 def _load_nebcorr_delta_mag_table(
-    save_folder="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs",
+    save_folder=NEBCORR_DEFAULT_FOLDER,
     verbose=True,
 ):
-    """Stack DELTA_MAG_* columns from INT_V2_NEBCORR FITS (one row per TARGETID)."""
+    """Stack TARGETID, is_south, and DELTA_MAG_* from INT_V2_NEBCORR (one row per TARGETID)."""
     chunks = []
+    required = ("TARGETID", "is_south") + FASTSPEC_DELTA_MAG_COLS
     for basename in NEBCORR_INT_V2_BASENAMES:
         path = os.path.join(save_folder, basename)
         if not os.path.exists(path):
@@ -1866,15 +1956,15 @@ def _load_nebcorr_delta_mag_table(
                 print(f"  WARNING: {path} not found, skipping")
             continue
         tab = safe_read_table(path)
-        missing = [c for c in FASTSPEC_DELTA_MAG_COLS if c not in tab.colnames]
+        missing = [c for c in required if c not in tab.colnames]
         if missing:
             if verbose:
                 print(f"  WARNING: {basename} missing columns {missing}, skipping")
             continue
-        sub = tab[["TARGETID"] + list(FASTSPEC_DELTA_MAG_COLS)]
+        sub = tab[list(required)]
         chunks.append(sub)
         if verbose:
-            print(f"  Loaded DELTA_MAG columns from {len(tab)} rows in {basename}")
+            print(f"  Loaded DELTA_MAG + is_south from {len(tab)} rows in {basename}")
 
     if len(chunks) == 0:
         return None
@@ -1889,13 +1979,16 @@ def _load_nebcorr_delta_mag_table(
 
 def add_delta_mag_to_fastspec(
     cat_path,
-    nebcorr_dir="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs",
+    nebcorr_dir=NEBCORR_DEFAULT_FOLDER,
     verbose=True,
 ):
     """
     Copy tractor photometry correction deltas from INT_V2_NEBCORR tables into
     the FASTSPEC HDU (matched by TARGETID). Same deltas as used in
     _apply_delta_mag_corrections / apply_photometric_corrections.
+
+    BASS2DECAM columns are zero for south (is_south == 1); other deltas are
+    copied unchanged.  is_south is read from the same NEBCORR rows.
 
     New FASTSPEC columns:
         DELTA_MAG_{G,R}_BASS2DECAM, _NEB, _DECAM2SDSS, _KCORR
@@ -1918,6 +2011,8 @@ def add_delta_mag_to_fastspec(
         print(f"  FASTSPEC HDU has {n_objects} rows")
 
     tid_to_row = {int(t): i for i, t in enumerate(delta_tab["TARGETID"])}
+    is_south_rows = np.asarray(delta_tab["is_south"], dtype=np.int64)
+    north_row = (is_south_rows == 0).astype(np.float64)
 
     for col in FASTSPEC_DELTA_MAG_COLS:
         arr = np.full(n_objects, np.nan, dtype=np.float64)
@@ -1925,7 +2020,13 @@ def add_delta_mag_to_fastspec(
         for j, tid in enumerate(cat_tids):
             row = tid_to_row.get(int(tid))
             if row is not None:
-                arr[j] = src[row]
+                v = src[row]
+                if col in (
+                    "DELTA_MAG_G_BASS2DECAM",
+                    "DELTA_MAG_R_BASS2DECAM",
+                ):
+                    v = v * north_row[row]
+                arr[j] = v
         fspec_cat[col] = arr
 
     n_matched = int(np.sum(np.isfinite(fspec_cat[FASTSPEC_DELTA_MAG_COLS[0]])))
