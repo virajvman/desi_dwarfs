@@ -1542,6 +1542,55 @@ fastspec_hdu_datamodel["MAG_R_FIBER_NOEMI_ERR"] = {
     "dtype": "float64"
 }
 
+fastspec_hdu_datamodel["DELTA_MAG_G_BASS2DECAM"] = {
+    "unit": "mag",
+    "description": "Delta magnitude (add to Tractor g) for BASS-to-DECam conversion from fastspecfit models (north only; south typically ~0).",
+    "dtype": "float64",
+    "blank_value": np.nan,
+}
+fastspec_hdu_datamodel["DELTA_MAG_R_BASS2DECAM"] = {
+    "unit": "mag",
+    "description": "Same as DELTA_MAG_G_BASS2DECAM for r-band.",
+    "dtype": "float64",
+    "blank_value": np.nan,
+}
+fastspec_hdu_datamodel["DELTA_MAG_G_NEB"] = {
+    "unit": "mag",
+    "description": "Delta magnitude (add to working g mag) for nebular emission removal, from fastspecfit template difference.",
+    "dtype": "float64",
+    "blank_value": np.nan,
+}
+fastspec_hdu_datamodel["DELTA_MAG_R_NEB"] = {
+    "unit": "mag",
+    "description": "Same as DELTA_MAG_G_NEB for r-band.",
+    "dtype": "float64",
+    "blank_value": np.nan,
+}
+fastspec_hdu_datamodel["DELTA_MAG_G_DECAM2SDSS"] = {
+    "unit": "mag",
+    "description": "Delta magnitude (add to working g mag) for DECam-to-SDSS filter conversion from continuum-only model.",
+    "dtype": "float64",
+    "blank_value": np.nan,
+}
+fastspec_hdu_datamodel["DELTA_MAG_R_DECAM2SDSS"] = {
+    "unit": "mag",
+    "description": "Same as DELTA_MAG_G_DECAM2SDSS for r-band.",
+    "dtype": "float64",
+    "blank_value": np.nan,
+}
+fastspec_hdu_datamodel["DELTA_MAG_G_KCORR"] = {
+    "unit": "mag",
+    "description": "Delta magnitude (add to working g mag) for k-correction SDSS observed-z to z=0 from continuum-only model.",
+    "dtype": "float64",
+    "blank_value": np.nan,
+}
+fastspec_hdu_datamodel["DELTA_MAG_R_KCORR"] = {
+    "unit": "mag",
+    "description": "Same as DELTA_MAG_G_KCORR for r-band.",
+    "dtype": "float64",
+    "blank_value": np.nan,
+}
+
 
 
 

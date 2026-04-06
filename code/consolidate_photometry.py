@@ -35,6 +35,27 @@ from get_associated_fibers import find_associated_tgids, get_dwarf_primary
 from fastspec_funcs import measure_photo_batch, get_fastspecfit_path
 from desispec.interpolation import resample_flux
 
+# Authoritative dwarf NEBCORR tables from construct_dwarf_galaxy_catalogs (DIST_SOURCE, DELTA_MAG_*, etc.)
+NEBCORR_INT_V2_BASENAMES = (
+    "iron_lowz_filter_zsucc_zrr03_INT_V2_NEBCORR.fits",
+    "iron_bgs_bright_filter_zsucc_zrr02_allfracflux_INT_V2_NEBCORR.fits",
+    "iron_bgs_faint_filter_zsucc_zrr03_allfracflux_INT_V2_NEBCORR.fits",
+    "iron_elg_filter_zsucc_zrr05_allfracflux_INT_V2_NEBCORR.fits",
+)
+
+# Photometric correction deltas appended to FASTSPEC (same chain as _apply_delta_mag_corrections)
+FASTSPEC_DELTA_MAG_COLS = (
+    "DELTA_MAG_G_BASS2DECAM",
+    "DELTA_MAG_R_BASS2DECAM",
+    "DELTA_MAG_G_NEB",
+    "DELTA_MAG_R_NEB",
+    "DELTA_MAG_G_DECAM2SDSS",
+    "DELTA_MAG_R_DECAM2SDSS",
+    "DELTA_MAG_G_KCORR",
+    "DELTA_MAG_R_KCORR",
+)
+
+
 def combine_arrays(no_iso, w_iso, mask):
     '''
     For each element: if mask == True, take the value from no_iso; otherwise, take the value from w_iso.
@@ -738,14 +759,8 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
 def _load_dist_source_lookup():
     """Build a TARGETID -> DIST_SOURCE lookup from the authoritative INT_V2_NEBCORR catalogs."""
     save_folder = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs"
-    nebcorr_basenames = [
-        "iron_lowz_filter_zsucc_zrr03_INT_V2_NEBCORR.fits",
-        "iron_bgs_bright_filter_zsucc_zrr02_allfracflux_INT_V2_NEBCORR.fits",
-        "iron_bgs_faint_filter_zsucc_zrr03_allfracflux_INT_V2_NEBCORR.fits",
-        "iron_elg_filter_zsucc_zrr05_allfracflux_INT_V2_NEBCORR.fits",
-    ]
     chunks = []
-    for basename in nebcorr_basenames:
+    for basename in NEBCORR_INT_V2_BASENAMES:
         path = os.path.join(save_folder, basename)
         if not os.path.exists(path):
             print(f"  WARNING: {path} not found, skipping")
@@ -1838,6 +1853,129 @@ def add_model_photometry_to_fastspec(
     print("=" * 60)
 
 
+def _load_nebcorr_delta_mag_table(
+    save_folder="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs",
+    verbose=True,
+):
+    """Stack DELTA_MAG_* columns from INT_V2_NEBCORR FITS (one row per TARGETID)."""
+    chunks = []
+    for basename in NEBCORR_INT_V2_BASENAMES:
+        path = os.path.join(save_folder, basename)
+        if not os.path.exists(path):
+            if verbose:
+                print(f"  WARNING: {path} not found, skipping")
+            continue
+        tab = safe_read_table(path)
+        missing = [c for c in FASTSPEC_DELTA_MAG_COLS if c not in tab.colnames]
+        if missing:
+            if verbose:
+                print(f"  WARNING: {basename} missing columns {missing}, skipping")
+            continue
+        sub = tab[["TARGETID"] + list(FASTSPEC_DELTA_MAG_COLS)]
+        chunks.append(sub)
+        if verbose:
+            print(f"  Loaded DELTA_MAG columns from {len(tab)} rows in {basename}")
+
+    if len(chunks) == 0:
+        return None
+
+    stacked = safe_vstack(chunks)
+    _, unique_idx = np.unique(np.asarray(stacked["TARGETID"]), return_index=True)
+    stacked = stacked[np.sort(unique_idx)]
+    if verbose:
+        print(f"  Combined NEBCORR DELTA_MAG table: {len(stacked)} unique TARGETIDs")
+    return stacked
+
+
+def add_delta_mag_to_fastspec(
+    cat_path,
+    nebcorr_dir="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs",
+    verbose=True,
+):
+    """
+    Copy tractor photometry correction deltas from INT_V2_NEBCORR tables into
+    the FASTSPEC HDU (matched by TARGETID). Same deltas as used in
+    _apply_delta_mag_corrections / apply_photometric_corrections.
+
+    New FASTSPEC columns:
+        DELTA_MAG_{G,R}_BASS2DECAM, _NEB, _DECAM2SDSS, _KCORR
+    """
+    print("=" * 60)
+    print("Adding DELTA_MAG photometric correction columns to FASTSPEC HDU")
+    print("=" * 60)
+
+    delta_tab = _load_nebcorr_delta_mag_table(save_folder=nebcorr_dir, verbose=verbose)
+    if delta_tab is None:
+        print("  ERROR: No NEBCORR tables with DELTA_MAG columns found. Aborting.")
+        print("=" * 60)
+        return
+
+    fspec_cat = safe_read_table(cat_path, hdu="FASTSPEC")
+    n_objects = len(fspec_cat)
+    cat_tids = np.asarray(fspec_cat["TARGETID"])
+
+    if verbose:
+        print(f"  FASTSPEC HDU has {n_objects} rows")
+
+    tid_to_row = {int(t): i for i, t in enumerate(delta_tab["TARGETID"])}
+
+    for col in FASTSPEC_DELTA_MAG_COLS:
+        arr = np.full(n_objects, np.nan, dtype=np.float64)
+        src = np.asarray(delta_tab[col], dtype=np.float64)
+        for j, tid in enumerate(cat_tids):
+            row = tid_to_row.get(int(tid))
+            if row is not None:
+                arr[j] = src[row]
+        fspec_cat[col] = arr
+
+    n_matched = int(np.sum(np.isfinite(fspec_cat[FASTSPEC_DELTA_MAG_COLS[0]])))
+    if verbose:
+        print(f"  Matched {n_matched}/{n_objects} objects to NEBCORR DELTA_MAG columns")
+
+    fspec_hdu_new = fits.table_to_hdu(fspec_cat)
+    fspec_hdu_new.name = "FASTSPEC"
+    fspec_hdu_new.add_checksum()
+
+    cat_abs = os.path.abspath(cat_path)
+    cat_dir = os.path.dirname(cat_abs) or "."
+    fd, tmp_path = tempfile.mkstemp(
+        suffix=".fits", prefix="delta_mag_", dir=cat_dir
+    )
+    os.close(fd)
+    try:
+        with fits.open(cat_abs, memmap=False) as hdul:
+            hdu_names = [hdu.name for hdu in hdul]
+            main_idx = hdu_names.index("MAIN")
+            fspec_idx = hdu_names.index("FASTSPEC")
+            main_tab = safe_read_table(cat_abs, hdu="MAIN")
+            main_hdu_preserved = fits.table_to_hdu(main_tab)
+            main_hdu_preserved.name = "MAIN"
+            main_hdu_preserved.add_checksum()
+            new_hdus = []
+            for i, hdu in enumerate(hdul):
+                if i == main_idx:
+                    new_hdus.append(main_hdu_preserved)
+                elif i == fspec_idx:
+                    new_hdus.append(fspec_hdu_new)
+                else:
+                    new_hdus.append(hdu.copy())
+            new_hdul = fits.HDUList(new_hdus)
+            new_hdul[0].add_checksum()
+            new_hdul.writeto(tmp_path, overwrite=True)
+        os.replace(tmp_path, cat_abs)
+    except BaseException:
+        if os.path.isfile(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        raise
+
+    print(f"Updated {cat_path}:")
+    print(f"  FASTSPEC HDU: added {', '.join(FASTSPEC_DELTA_MAG_COLS)}")
+    print("=" * 60)
+
+
 _SHARED_EMI_DATA = {}
 
 
@@ -2372,6 +2510,7 @@ if __name__ == '__main__':
 
     if add_model_phot:
         add_model_photometry_to_fastspec(main_cat_outpath)
+        add_delta_mag_to_fastspec(main_cat_outpath)
 
     if process_post_hdu:
         ##add the spectra NMF+PCA information!!
