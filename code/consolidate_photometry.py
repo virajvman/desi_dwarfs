@@ -703,10 +703,10 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
     #then we loop over the columns to get the final subset of columns
     # Keep only columns present in main_datamodel
     print("Selecting the subset of columns for MAIN extension")
-    catalog_main = catalog[ [col for col in main_datamodel.keys() if col not in ["ASSOCIATED_TARGETIDS", "DWARF_PRIMARY_TARGETID", "DWARF_PRIMARY", "DIST_SOURCE"] ] ]
+    catalog_main = catalog[ [col for col in main_datamodel.keys() if col not in ["ASSOCIATED_TARGETIDS", "DWARF_PRIMARY_TARGETID", "DWARF_PRIMARY", "DIST_SOURCE","LOG_MSTAR_M24_ERR"] ] ]
     
     for col in main_datamodel.keys():
-        if col not in ["ASSOCIATED_TARGETIDS", "DWARF_PRIMARY_TARGETID", "DWARF_PRIMARY", "DIST_SOURCE"]:
+        if col not in ["ASSOCIATED_TARGETIDS", "DWARF_PRIMARY_TARGETID", "DWARF_PRIMARY", "DIST_SOURCE", "LOG_MSTAR_M24_ERR"]:
             print(f"Column : {col}")
             meta = main_datamodel[col]
     
@@ -1920,7 +1920,7 @@ def compute_emission_subtracted_photo_errors(
     batch_size=500,
     overwrite_model_files=False,
     emi_cache_dir="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/emi_model_cache/",
-    ncores=1,
+    ncores=8,
     verbose=True,
 ):
     """
@@ -2178,15 +2178,13 @@ if __name__ == '__main__':
     
     process_shreds = True
     process_clean = True
-    compute_mstar_err = False
-    add_model_phot = False
+    compute_mstar_err = True
+    add_model_phot = True
     process_qso_scnd = False
     process_post_hdu = False
 
     #make sure the get_fastspec_fit_catalog_V2 function is run before hand in case there are any new columns added
     process_fastspec=True
-
-    # TODO: add a second flag for Mg < -18.5 as beyond that stellar mass is not calibrated.
 
     main_cat_outpath = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits"
 
