@@ -592,6 +592,9 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
 
         catalog["MAG_TYPE"] = np.full(len(catalog), "TRACTOR_OG", dtype=object)
 
+        AHH WE NEED TO USE NEBULAR CORRECTED HERE!!
+        SAME FOR THE PHOTOMETRY RIGHT, WE DO NOT USE MAG_G, MAG_R, BUT WE USE THE NEBULAR CORRECTED ONES
+        
 
         if "LOGM_M24_FIDU" in catalog.keys():
             catalog.rename_column("LOGM_M24_FIDU", "LOG_MSTAR_M24")
@@ -1057,19 +1060,14 @@ fastspec_specphot_cols = [
     "FOII_3727_CONT", "FOII_3727_CONT_IVAR",
     "FHBETA_CONT", "FHBETA_CONT_IVAR",
     "FOIII_5007_CONT", "FOIII_5007_CONT_IVAR",
-    "FHALPHA_CONT", "FHALPHA_CONT_IVAR",
-    "FLUX_SYNTH_G", "FLUX_SYNTH_R", "FLUX_SYNTH_Z",
-    "FLUX_SYNTH_SPECMODEL_G", "FLUX_SYNTH_SPECMODEL_R", "FLUX_SYNTH_SPECMODEL_Z",
-    "FLUX_SYNTH_PHOTMODEL_G", "FLUX_SYNTH_PHOTMODEL_R", "FLUX_SYNTH_PHOTMODEL_Z",
+    "FHALPHA_CONT", "FHALPHA_CONT_IVAR","LOGMSTAR"
 ]
 
 fastspec_cols = ["SNR_B", "SNR_R", "SNR_Z", "APERCORR", "APERCORR_G", "APERCORR_R", "APERCORR_Z"] 
 
-fastspec_mag_cols = ["ABSMAG01_SDSS_G", "ABSMAG01_SDSS_R", "ABSMAG01_SDSS_I", "ABSMAG01_SDSS_Z", "ABSMAG01_IVAR_SDSS_G", "ABSMAG01_IVAR_SDSS_R", "ABSMAG01_IVAR_SDSS_I", "ABSMAG01_IVAR_SDSS_Z" ]
-
 fastspec_emlines_cols = ["OII_3726_FLUX", "OII_3726_FLUX_IVAR", "OII_3729_FLUX", "OII_3729_FLUX_IVAR", "OIII_4363_FLUX", "OIII_4363_FLUX_IVAR", "HEII_4686_FLUX", "HEII_4686_FLUX_IVAR", "HBETA_FLUX", "HBETA_FLUX_IVAR", "OIII_4959_FLUX", "OIII_4959_FLUX_IVAR", "OIII_5007_FLUX", "OIII_5007_FLUX_IVAR", "HEI_5876_FLUX", "HEI_5876_FLUX_IVAR", "NII_6548_FLUX", "NII_6548_FLUX_IVAR", "HALPHA_FLUX", "HALPHA_FLUX_IVAR", "HALPHA_BROAD_FLUX", "HALPHA_BROAD_FLUX_IVAR", "NII_6584_FLUX", "NII_6584_FLUX_IVAR", "SII_6716_FLUX", "SII_6716_FLUX_IVAR", "SII_6731_FLUX", "SII_6731_FLUX_IVAR", "SIII_9069_FLUX", "SIII_9069_FLUX_IVAR", "SIII_9532_FLUX", "SIII_9532_FLUX_IVAR", "HALPHA_BOXFLUX", "HALPHA_BOXFLUX_IVAR", "HALPHA_EW", "HALPHA_EW_IVAR", "HALPHA_SIGMA", "HALPHA_SIGMA_IVAR"]
 
-fastspec_tot_cols = fastspec_cols +  fastspec_emlines_cols + fastspec_mag_cols
+fastspec_tot_cols = fastspec_cols +  fastspec_emlines_cols
 
 def get_fastspec_fit_catalog_V3():
     '''
@@ -1933,7 +1931,9 @@ if __name__ == '__main__':
     process_post_hdu = False
 
     #make sure the get_fastspec_fit_catalog_V2 function is run before hand in case there are any new columns added
-    process_fastspec=False
+    process_fastspec=True
+
+    # TODO: add a second flag for Mg < -18.5 as beyond that stellar mass is not calibrated.
 
     main_cat_outpath = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits"
 

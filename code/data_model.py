@@ -99,12 +99,6 @@ main_datamodel = {
         "description": "Source of the luminosity distance. One of: NED_ZIND, VIRGO_SBF, VIRGO_EVCC, CF3_NAM, V_CMB.",
         "dtype": "str"
     },
-    "LOG_MSTAR_SAGA": {
-        "unit": logM_sun,
-        "description": "Log stellar mass (in Msol) using the LUMI_DIST_MPC luminosity distance and SAGA gr-based approximation",
-        "blank_value": np.nan,
-        "dtype": "float32"
-    },
     "LOG_MSTAR_M24": {
         "unit": logM_sun,
         "description": "Log stellar mass (in Msol) using the LUMI_DIST_MPC luminosity distance and de los Reyes et al. 2024 gr-based approximation",
@@ -1374,6 +1368,10 @@ fastspec_hdu_datamodel = {
         "description": "Inverse variance of absolute magnitude in SDSS z-band band-shifted to z=0.1 assuming h=1.0.",
         "dtype": "float32"
     },
+    "LOG_MSTAR": {
+     "unit": logM_sun,
+     "description": "Stellar mass from fastspecfit assuming h=1.0.",
+    "dtype": "float32"}
     
 }
                     
@@ -1516,7 +1514,14 @@ fastspec_hdu_datamodel["MAG_R_SDSS_Z0_MODEL_NOEMI"] = {
     "unit": "mag",
     "description": "SDSS r-band AB magnitude of the fastspecfit continuum-only model (no emission lines) k-corrected to z=0.",
     "dtype": "float64"
+
+
+
+    
 }
+
+
+
 
 
     # "DN4000_MODEL_IVAR": {
