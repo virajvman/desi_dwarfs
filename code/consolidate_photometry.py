@@ -22,6 +22,7 @@ from io import BytesIO
 from shred_photometry_maskbits import create_shred_maskbits_from_dict, print_maskbit_statistics, flag_weird_spectra
 import os
 import glob
+import tempfile
 import multiprocessing as mp
 from tqdm import tqdm, trange
 import h5py
@@ -2161,19 +2162,40 @@ def compute_emission_subtracted_photo_errors(
     fspec_hdu_new.name = "FASTSPEC"
     fspec_hdu_new.add_checksum()
 
-    # ── 9. Write MAIN HDU back ────────────────────────────────────────
-    with fits.open(cat_path, mode="update") as hdul:
-        hdul[1] = main_hdu_new
-        hdul.flush()
-
-    # ── 10. Write FASTSPEC HDU back ───────────────────────────────────
-    with fits.open(cat_path) as orig_hdul:
-        hdu_names = [hdu.name for hdu in orig_hdul]
-    fspec_idx = hdu_names.index("FASTSPEC")
-
-    with fits.open(cat_path, mode="update") as hdul:
-        hdul[fspec_idx] = fspec_hdu_new
-        hdul.flush()
+    # ── 9. Rewrite catalog (MAIN + FASTSPEC) ───────────────────────────
+    # mode="update" + replace one HDU can leave later HDUs with stale
+    # file offsets; verify then fails ("element 2 is not an extension HDU").
+    # Build a fresh HDUList (unchanged HDUs via .copy()) and atomic writeto.
+    cat_abs = os.path.abspath(cat_path)
+    cat_dir = os.path.dirname(cat_abs) or "."
+    fd, tmp_path = tempfile.mkstemp(
+        suffix=".fits", prefix="emi_subtract_", dir=cat_dir
+    )
+    os.close(fd)
+    try:
+        with fits.open(cat_abs, memmap=False) as hdul:
+            hdu_names = [hdu.name for hdu in hdul]
+            main_idx = hdu_names.index("MAIN")
+            fspec_idx = hdu_names.index("FASTSPEC")
+            new_hdus = []
+            for i, hdu in enumerate(hdul):
+                if i == main_idx:
+                    new_hdus.append(main_hdu_new.copy())
+                elif i == fspec_idx:
+                    new_hdus.append(fspec_hdu_new.copy())
+                else:
+                    new_hdus.append(hdu.copy())
+            new_hdul = fits.HDUList(new_hdus)
+            new_hdul[0].add_checksum()
+            new_hdul.writeto(tmp_path, overwrite=True)
+        os.replace(tmp_path, cat_abs)
+    except BaseException:
+        if os.path.isfile(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        raise
 
     print(f"Updated {cat_path}:")
     print(f"  MAIN HDU: added LOG_MSTAR_M24_ERR, updated DWARF_MASKBIT (bit 17: low continuum SNR)")
