@@ -2101,10 +2101,8 @@ def compute_emission_subtracted_photo_errors(
             mag_g_err=g_noemi_err, mag_r_err=r_noemi_err,
         )
 
-        if verbose:
-            finite_err = np.isfinite(log_mstar_err)
-            print(f"  LOG_MSTAR_M24_ERR: {np.sum(finite_err)} finite values, "
-                  f"median = {np.nanmedian(log_mstar_err):.4f} dex")
+        finite_err = np.isfinite(log_mstar_err)
+        print(f"LOG_MSTAR_M24_ERR: {np.sum(finite_err)} finite values, median = {np.nanmedian(log_mstar_err):.3f} dex")
 
         # ── 6b. Compute low-continuum-SNR mask ───────────────────────
         snr_threshold = 5.0
@@ -2127,6 +2125,10 @@ def compute_emission_subtracted_photo_errors(
             if verbose:
                 print(f"  Saved results cache to {results_cache_path}")
 
+
+    finite_err = np.isfinite(log_mstar_err)
+    print(f"LOG_MSTAR_M24_ERR: {np.sum(finite_err)} finite values, median = {np.nanmedian(log_mstar_err):.3f} dex")
+    
     # ── 7. Update MAIN HDU with LOG_MSTAR_M24_ERR ────────────────────
     main_cat["LOG_MSTAR_M24_ERR"] = log_mstar_err.astype(np.float64)
 
