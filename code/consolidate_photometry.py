@@ -1791,6 +1791,8 @@ def add_model_photometry_to_fastspec(
     # ── 4. Rewrite catalog (FASTSPEC only) ─────────────────────────────
     # Same as compute_emission_subtracted_photo_errors: mode="update" after
     # resizing an extension breaks verify on the following HDU (here el. 5).
+    # MAIN must use table_to_hdu (not hdu.copy()) so VLAs e.g. ASSOCIATED_TARGETIDS
+    # do not hit "Could not find heap data" on copy.
     fspec_hdu_new = fits.table_to_hdu(fspec_cat)
     fspec_hdu_new.name = "FASTSPEC"
     fspec_hdu_new.add_checksum()
@@ -1804,10 +1806,17 @@ def add_model_photometry_to_fastspec(
     try:
         with fits.open(cat_abs, memmap=False) as hdul:
             hdu_names = [hdu.name for hdu in hdul]
+            main_idx = hdu_names.index("MAIN")
             fspec_idx = hdu_names.index("FASTSPEC")
+            main_tab = safe_read_table(cat_abs, hdu="MAIN")
+            main_hdu_preserved = fits.table_to_hdu(main_tab)
+            main_hdu_preserved.name = "MAIN"
+            main_hdu_preserved.add_checksum()
             new_hdus = []
             for i, hdu in enumerate(hdul):
-                if i == fspec_idx:
+                if i == main_idx:
+                    new_hdus.append(main_hdu_preserved)
+                elif i == fspec_idx:
                     new_hdus.append(fspec_hdu_new)
                 else:
                     new_hdus.append(hdu.copy())
