@@ -1788,21 +1788,40 @@ def add_model_photometry_to_fastspec(
     if verbose:
         print(f"  Matched {n_matched}/{n_objects} objects to model photometry")
 
-    # ── 4. Write updated FASTSPEC HDU back ─────────────────────────────
-    buf = BytesIO()
-    fspec_cat.write(buf, format="fits")
-    buf.seek(0)
-    fspec_hdu_new = fits.open(buf)[1]
+    # ── 4. Rewrite catalog (FASTSPEC only) ─────────────────────────────
+    # Same as compute_emission_subtracted_photo_errors: mode="update" after
+    # resizing an extension breaks verify on the following HDU (here el. 5).
+    fspec_hdu_new = fits.table_to_hdu(fspec_cat)
     fspec_hdu_new.name = "FASTSPEC"
     fspec_hdu_new.add_checksum()
 
-    with fits.open(cat_path) as orig_hdul:
-        hdu_names = [hdu.name for hdu in orig_hdul]
-    fspec_idx = hdu_names.index("FASTSPEC")
-
-    with fits.open(cat_path, mode="update") as hdul:
-        hdul[fspec_idx] = fspec_hdu_new
-        hdul.flush()
+    cat_abs = os.path.abspath(cat_path)
+    cat_dir = os.path.dirname(cat_abs) or "."
+    fd, tmp_path = tempfile.mkstemp(
+        suffix=".fits", prefix="model_phot_", dir=cat_dir
+    )
+    os.close(fd)
+    try:
+        with fits.open(cat_abs, memmap=False) as hdul:
+            hdu_names = [hdu.name for hdu in hdul]
+            fspec_idx = hdu_names.index("FASTSPEC")
+            new_hdus = []
+            for i, hdu in enumerate(hdul):
+                if i == fspec_idx:
+                    new_hdus.append(fspec_hdu_new)
+                else:
+                    new_hdus.append(hdu.copy())
+            new_hdul = fits.HDUList(new_hdus)
+            new_hdul[0].add_checksum()
+            new_hdul.writeto(tmp_path, overwrite=True)
+        os.replace(tmp_path, cat_abs)
+    except BaseException:
+        if os.path.isfile(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        raise
 
     new_cols_str = ", ".join(_COL_MAP.values())
     print(f"Updated {cat_path}:")
