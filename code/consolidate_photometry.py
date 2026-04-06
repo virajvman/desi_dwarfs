@@ -1812,6 +1812,15 @@ def add_model_photometry_to_fastspec(
 _SHARED_EMI_DATA = {}
 
 
+def _init_emi_worker(wave, flux, ivar, tgid_to_row, targetids):
+    """Pool initializer: set shared arrays in each worker."""
+    _SHARED_EMI_DATA['wave'] = wave
+    _SHARED_EMI_DATA['flux'] = flux
+    _SHARED_EMI_DATA['ivar'] = ivar
+    _SHARED_EMI_DATA['tgid_to_row'] = tgid_to_row
+    _SHARED_EMI_DATA['targetids'] = targetids
+
+
 def _process_one_emi_file(args):
     """Worker: process one fastspecfit healpix file for emission-subtracted photometry.
 
@@ -2038,13 +2047,7 @@ def compute_emission_subtracted_photo_errors(
         g_noemi_err = np.full(n_objects, np.nan)
         r_noemi_err = np.full(n_objects, np.nan)
 
-        # ── 5b. Populate shared data and build job arguments ─────────
-        _SHARED_EMI_DATA['wave'] = h5_wave
-        _SHARED_EMI_DATA['flux'] = h5_flux
-        _SHARED_EMI_DATA['ivar'] = h5_ivar
-        _SHARED_EMI_DATA['tgid_to_row'] = h5_tgid_to_row
-        _SHARED_EMI_DATA['targetids'] = targetids
-
+        # ── 5b. Build job arguments ────────────────────────────────
         job_args = []
         for upath in unique_paths:
             cat_indices = np.where(paths == upath)[0]
@@ -2053,20 +2056,23 @@ def compute_emission_subtracted_photo_errors(
 
         # ── 5c. Process files (parallel or serial) ───────────────────
         if ncores > 1:
-            ctx = mp.get_context('fork')
-            with ctx.Pool(processes=ncores) as pool:
+            with mp.Pool(processes=ncores,
+                         initializer=_init_emi_worker,
+                         initargs=(h5_wave, h5_flux, h5_ivar,
+                                   h5_tgid_to_row, targetids)) as pool:
                 results = list(tqdm(
                     pool.imap(_process_one_emi_file, job_args),
                     total=len(job_args), desc="Emission subtraction"
                 ))
         else:
+            _init_emi_worker(h5_wave, h5_flux, h5_ivar,
+                             h5_tgid_to_row, targetids)
             results = []
             for i, args in enumerate(job_args):
                 results.append(_process_one_emi_file(args))
                 if verbose and (i + 1) % 50 == 0:
                     print(f"  Processed {i+1}/{n_files} files")
-
-        _SHARED_EMI_DATA.clear()
+            _SHARED_EMI_DATA.clear()
 
         for result in results:
             if result is None:
