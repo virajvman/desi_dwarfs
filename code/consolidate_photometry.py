@@ -1,10 +1,22 @@
 '''
 Functions where preferred, best photometry column is created along with photometry maskbits to identify reliable measurements. This is also the script where we produce the final, multi-extension fits files as the final catalog output.
 '''
+import warnings
 import numpy as np
 import astropy.io.fits as fits
 import astropy.units as u
 from astropy.table import Table, vstack, join, hstack
+
+warnings.filterwarnings(
+    "ignore",
+    message="The following header keyword is invalid",
+    category=fits.verify.VerifyWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message="The following header keyword is invalid",
+    module=r"astropy\.io\.fits",
+)
 from shred_photometry_maskbits import cog_mag_converge, cog_nan_mask, cog_curve_decrease, bad_colors, iffy_tractor_model
 from io import BytesIO
 from shred_photometry_maskbits import create_shred_maskbits_from_dict, print_maskbit_statistics, flag_weird_spectra
