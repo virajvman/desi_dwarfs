@@ -2142,7 +2142,8 @@ def compute_emission_subtracted_photo_errors(
     buf = BytesIO()
     main_cat.write(buf, format="fits")
     buf.seek(0)
-    main_hdu_new = fits.open(buf)[1]
+    _main_hdul = fits.open(buf)
+    main_hdu_new = _main_hdul[1]
     main_hdu_new.name = "MAIN"
     main_hdu_new.add_checksum()
 
@@ -2155,19 +2156,22 @@ def compute_emission_subtracted_photo_errors(
     buf2 = BytesIO()
     fspec_cat.write(buf2, format="fits")
     buf2.seek(0)
-    fspec_hdu_new = fits.open(buf2)[1]
+    _fspec_hdul = fits.open(buf2)
+    fspec_hdu_new = _fspec_hdul[1]
     fspec_hdu_new.name = "FASTSPEC"
     fspec_hdu_new.add_checksum()
 
-    # ── 9. Write both HDUs back ───────────────────────────────────────
+    # ── 9. Write MAIN HDU back ────────────────────────────────────────
+    with fits.open(cat_path, mode="update") as hdul:
+        hdul[1] = main_hdu_new
+        hdul.flush()
+
+    # ── 10. Write FASTSPEC HDU back ───────────────────────────────────
     with fits.open(cat_path) as orig_hdul:
         hdu_names = [hdu.name for hdu in orig_hdul]
-
-    main_idx = hdu_names.index("MAIN")
     fspec_idx = hdu_names.index("FASTSPEC")
 
     with fits.open(cat_path, mode="update") as hdul:
-        hdul[main_idx] = main_hdu_new
         hdul[fspec_idx] = fspec_hdu_new
         hdul.flush()
 
