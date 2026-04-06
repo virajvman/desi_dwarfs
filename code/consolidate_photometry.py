@@ -529,6 +529,31 @@ def consolidate_positions_and_shapes(catalog):
     return catalog
 
 
+def _apply_delta_mag_corrections(catalog, mag_g_col="MAG_G", mag_r_col="MAG_R"):
+    """Apply DELTA_MAG corrections to get SDSS z=0 continuum-only magnitudes.
+
+    Applies the full correction chain (BASS->DECam, nebular, DECam->SDSS,
+    k-correction) using the DELTA_MAG columns attached by
+    construct_dwarf_galaxy_catalogs.py.  Corrections that are absent from the
+    catalog are silently skipped.
+    """
+    mag_g = np.array(catalog[mag_g_col].data, dtype=float)
+    mag_r = np.array(catalog[mag_r_col].data, dtype=float)
+
+    delta_pairs = [
+        ("DELTA_MAG_G_BASS2DECAM", "DELTA_MAG_R_BASS2DECAM"),
+        ("DELTA_MAG_G_NEB",        "DELTA_MAG_R_NEB"),
+        ("DELTA_MAG_G_DECAM2SDSS", "DELTA_MAG_R_DECAM2SDSS"),
+        ("DELTA_MAG_G_KCORR",      "DELTA_MAG_R_KCORR"),
+    ]
+    for dcol_g, dcol_r in delta_pairs:
+        if dcol_g in catalog.colnames and dcol_r in catalog.colnames:
+            mag_g += np.array(catalog[dcol_g].data, dtype=float)
+            mag_r += np.array(catalog[dcol_r].data, dtype=float)
+
+    return mag_g, mag_r
+
+
 def create_main_data_model(catalog, save_name, clean_cat=False):
     '''
     Function that creates the data model for the main hdu. Containing the most important information.
@@ -592,24 +617,22 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
 
         catalog["MAG_TYPE"] = np.full(len(catalog), "TRACTOR_OG", dtype=object)
 
-        AHH WE NEED TO USE NEBULAR CORRECTED HERE!!
-        SAME FOR THE PHOTOMETRY RIGHT, WE DO NOT USE MAG_G, MAG_R, BUT WE USE THE NEBULAR CORRECTED ONES
-        
-
-        if "LOGM_M24_FIDU" in catalog.keys():
-            catalog.rename_column("LOGM_M24_FIDU", "LOG_MSTAR_M24")
+        # Use the nebular+filter+k-corrected stellar mass from
+        # construct_dwarf_galaxy_catalogs.py.  Fall back to applying the
+        # DELTA_MAG correction chain if the pre-computed column is absent.
+        if "LOGM_M24_FIDU_CORR" in catalog.keys():
+            catalog["LOG_MSTAR_M24"] = catalog["LOGM_M24_FIDU_CORR"].data.copy()
         else:
-            gr_colors = catalog["MAG_G"].data - catalog["MAG_R"].data
-            mstars_M24_new = get_stellar_mass_mia(gr_colors, catalog["MAG_G"].data, catalog["Z_CMB"].data, d_in_mpc=catalog["LUMI_DIST_MPC"].data, input_zred=False)
-            catalog["LOG_MSTAR_M24"] = mstars_M24_new
-            
-        catalog["PHOTOMETRY_UPDATED"] = np.zeros(len(catalog)).astype(bool)  
+            mag_g_corr, mag_r_corr = _apply_delta_mag_corrections(catalog)
+            gr_corr = mag_g_corr - mag_r_corr
+            catalog["LOG_MSTAR_M24"] = get_stellar_mass_mia(
+                gr_corr, mag_g_corr,
+                zred=np.zeros(len(catalog)),
+                d_in_mpc=catalog["LUMI_DIST_MPC"].data,
+                input_zred=False,
+            )
 
-        #updating the stellar mass from M24, uses g band magnitude
-        gr_colors = catalog["MAG_G"].data - catalog["MAG_R"].data
-        log_mstars_M24 = get_stellar_mass_mia(gr_colors, catalog["MAG_G"].data , catalog["Z_CMB"].data, d_in_mpc = catalog["LUMI_DIST_MPC"].data, input_zred =  False)
-
-        catalog["LOG_MSTAR_M24"] = log_mstars_M24
+        catalog["PHOTOMETRY_UPDATED"] = np.zeros(len(catalog)).astype(bool)
 
         print("Adding DWARF MASKBIT columns to clean catalog")
         clean_maskbits = create_shred_maskbits_from_dict(catalog, bitmasks_to_apply = [7,12,13,14,15], verbose=True, mag_type = "")
@@ -624,21 +647,25 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
 
     else:
         print("Processing shred catalog!")
-        #then overwriting the original magnitude with the new magnitudes
         catalog["MAG_G"] = catalog["MAG_G_BEST"].copy()
         catalog["MAG_R"] = catalog["MAG_R_BEST"].copy()
         catalog["MAG_Z"] = catalog["MAG_Z_BEST"].copy()
-    
+
         catalog = consolidate_positions_and_shapes(catalog)
 
         catalog.rename_column("PHOTO_MASKBIT", "DWARF_MASKBIT")
 
-        #with the finalized photometry, get the stellar masses!!
-        gr_colors = catalog["MAG_G"].data - catalog["MAG_R"].data
-        
-        mstars_M24_new = get_stellar_mass_mia(gr_colors, catalog["MAG_G"].data, catalog["Z_CMB"].data, d_in_mpc=catalog["LUMI_DIST_MPC"].data, input_zred=False)
-
-        catalog["LOG_MSTAR_M24"] = mstars_M24_new
+        # Apply DELTA_MAG corrections (nebular + filter + k) to the
+        # reprocessed photometry, then compute stellar mass with zred=0
+        # (model k-correction already folded into the deltas).
+        mag_g_corr, mag_r_corr = _apply_delta_mag_corrections(catalog)
+        gr_corr = mag_g_corr - mag_r_corr
+        catalog["LOG_MSTAR_M24"] = get_stellar_mass_mia(
+            gr_corr, mag_g_corr,
+            zred=np.zeros(len(catalog)),
+            d_in_mpc=catalog["LUMI_DIST_MPC"].data,
+            input_zred=False,
+        )
 
 
     print("Applying the dwarf galaxy cut!")
@@ -1512,6 +1539,70 @@ def create_image_ssl_hdu(file_path):
     return
 
 
+def add_too_bright_maskbit(cat_path, bit=18, mag_cut=-18.5):
+    """
+    Flag sources whose corrected absolute g-band magnitude is brighter than
+    *mag_cut* (default Mg < -18.5) by setting *bit* in DWARF_MASKBIT.
+
+    The absolute magnitude is computed from the fully corrected z=0 SDSS
+    continuum photometry (via ``_apply_delta_mag_corrections``) and the
+    luminosity distance::
+
+        d_pc  = LUMI_DIST_MPC * 1e6
+        Mg    = mag_g_corrected - 5 * log10(d_pc) + 5
+
+    Parameters
+    ----------
+    cat_path : str
+        Path to the multi-extension FITS catalog.
+    bit : int, optional
+        Bit index to set (default 18).
+    mag_cut : float, optional
+        Absolute magnitude threshold (default -18.5).  Sources *brighter*
+        (more negative) than this value are flagged.
+    """
+    main_cat = safe_read_table(cat_path, hdu="MAIN")
+
+    mag_g_corr, _ = _apply_delta_mag_corrections(main_cat)
+
+    dist_mpc = np.asarray(main_cat["LUMI_DIST_MPC"], dtype=float)
+    dist_pc = dist_mpc * 1.0e6
+
+    valid = np.isfinite(dist_pc) & (dist_pc > 0) & np.isfinite(mag_g_corr)
+    abs_mag_g = np.full(len(main_cat), np.nan)
+    abs_mag_g[valid] = mag_g_corr[valid] - 5.0 * np.log10(dist_pc[valid]) + 5.0
+
+    too_bright = np.isfinite(abs_mag_g) & (abs_mag_g < mag_cut)
+
+    dwarf_maskbits = np.asarray(main_cat["DWARF_MASKBIT"], dtype=np.int64)
+    dwarf_maskbits[too_bright] |= np.int64(1) << bit
+    main_cat["DWARF_MASKBIT"] = dwarf_maskbits
+
+    n_total = len(main_cat)
+    n_flagged = int(too_bright.sum())
+    print(f"DWARF_MASKBIT bit {bit} (Mg < {mag_cut}): "
+          f"flagged {n_flagged}/{n_total} ({100.0 * n_flagged / n_total:.1f}%) total")
+
+    samples = np.asarray(main_cat["SAMPLE"], dtype=str)
+    for sample in sorted(set(samples)):
+        in_sample = samples == sample
+        n_samp = int(in_sample.sum())
+        n_flag = int((too_bright & in_sample).sum())
+        pct = 100.0 * n_flag / n_samp if n_samp > 0 else 0.0
+        print(f"  {sample}: {n_flag}/{n_samp} ({pct:.1f}%)")
+
+    buf = BytesIO()
+    main_cat.write(buf, format="fits")
+    buf.seek(0)
+    main_hdu = fits.open(buf)[1]
+    main_hdu.name = "MAIN"
+    main_hdu.add_checksum()
+
+    with fits.open(cat_path, mode="update") as hdul:
+        hdul[1] = main_hdu
+        hdul.flush()
+
+
 def add_wrong_redrock_maskbit(cat_path, main_datamodel, bit=16):
     """
     Identify objects with wrong Redrock redshifts and update DWARF_MASKBIT.
@@ -2058,6 +2149,9 @@ if __name__ == '__main__':
                  base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats",
                  output_file=main_cat_outpath,
                  extra_prefixes=["qso_scnd"] if process_qso_scnd else [])
+
+    print("Flagging sources brighter than Mg = -18.5")
+    add_too_bright_maskbit(main_cat_outpath)
 
     if compute_mstar_err:
         print("Computing emission-subtracted photometry and stellar mass errors")

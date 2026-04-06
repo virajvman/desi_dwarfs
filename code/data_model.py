@@ -101,7 +101,7 @@ main_datamodel = {
     },
     "LOG_MSTAR_M24": {
         "unit": logM_sun,
-        "description": "Log stellar mass (in Msol) using the LUMI_DIST_MPC luminosity distance and de los Reyes et al. 2024 gr-based approximation",
+        "description": "Log stellar mass (in Msol) using LUMI_DIST_MPC and de los Reyes et al. 2024 gr-based relation, computed from nebular+filter+k-corrected SDSS z=0 continuum-only photometry",
         "blank_value": np.nan,
         "dtype": "float32"
     },
