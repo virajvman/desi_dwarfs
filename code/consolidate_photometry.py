@@ -603,20 +603,14 @@ def _bass2decam_apply_mask(catalog, nebcorr_folder=NEBCORR_DEFAULT_FOLDER):
     """float64 array: 1.0 where BASS->DECam applies (north, is_south==0), else 0.0."""
     n = len(catalog)
     gcol, rcol = "DELTA_MAG_G_BASS2DECAM", "DELTA_MAG_R_BASS2DECAM"
-    if gcol not in catalog.colnames or rcol not in catalog.colnames:
-        return np.ones(n, dtype=np.float64)
+
+    ## WE DO NOT WANT IF, THE FACT THAT WE HAVE CALLED THIS FUNCTION MEANS THAT WE WNAT TO DO THE CORRECTIN!
+    #SO CORRECTION HAS BEEN MADE BELOW
 
     lookup = _load_nebcorr_is_south_lookup(save_folder=nebcorr_folder, verbose=False)
     if len(lookup) == 0:
         print(
             "WARNING: _apply_delta_mag_corrections: no NEBCORR is_south lookup; "
-            "BASS2DECAM deltas skipped for all rows."
-        )
-        return np.zeros(n, dtype=np.float64)
-
-    if "TARGETID" not in catalog.colnames:
-        print(
-            "WARNING: _apply_delta_mag_corrections: no TARGETID column; "
             "BASS2DECAM deltas skipped for all rows."
         )
         return np.zeros(n, dtype=np.float64)
@@ -635,6 +629,7 @@ def _bass2decam_apply_mask(catalog, nebcorr_folder=NEBCORR_DEFAULT_FOLDER):
             f"_apply_delta_mag_corrections: {n_unmatched}/{n} TARGETIDs not in "
             f"NEBCORR is_south lookup (BASS2DECAM skipped for those rows)"
         )
+        
     return mask
 
 
@@ -659,21 +654,31 @@ def _apply_delta_mag_corrections(
     mag_g = np.array(catalog[mag_g_col].data, dtype=float)
     mag_r = np.array(catalog[mag_r_col].data, dtype=float)
 
-    g_b2d, r_b2d = "DELTA_MAG_G_BASS2DECAM", "DELTA_MAG_R_BASS2DECAM"
-    if g_b2d in catalog.colnames and r_b2d in catalog.colnames:
-        m = _bass2decam_apply_mask(catalog, nebcorr_folder=nebcorr_folder)
-        mag_g += np.array(catalog[g_b2d].data, dtype=float) * m
-        mag_r += np.array(catalog[r_b2d].data, dtype=float) * m
+    #These columns needed for corrections may not be in the catalog, so we will load in the NEBCORR files and match with them!
+    delta_tab = _load_nebcorr_delta_mag_table(save_folder=  NEBCORR_DEFAULT_FOLDER, verbose=True)
 
+    MATCH THESE CATALOG WITH input caatalog ot get all the correction terms!
+    so we will can apply them below.
+
+    #apply the bass 2 decam corrections if need be!
+
+    g_b2d, r_b2d = "DELTA_MAG_G_BASS2DECAM", "DELTA_MAG_R_BASS2DECAM"
+    
+    m = _bass2decam_apply_mask(catalog, nebcorr_folder=nebcorr_folder)
+    mag_g += catalog[g_b2d].data * m
+    mag_r += catalog[r_b2d].data * m
+
+    #apply the nebular, sdss filter, and k corrections if need be!
+    
     delta_pairs = [
         ("DELTA_MAG_G_NEB",        "DELTA_MAG_R_NEB"),
         ("DELTA_MAG_G_DECAM2SDSS", "DELTA_MAG_R_DECAM2SDSS"),
         ("DELTA_MAG_G_KCORR",      "DELTA_MAG_R_KCORR"),
     ]
+    
     for dcol_g, dcol_r in delta_pairs:
-        if dcol_g in catalog.colnames and dcol_r in catalog.colnames:
-            mag_g += np.array(catalog[dcol_g].data, dtype=float)
-            mag_r += np.array(catalog[dcol_r].data, dtype=float)
+        mag_g += catalog[dcol_g].data
+        mag_r += catalog[dcol_r].data
 
     return mag_g, mag_r
 
@@ -734,6 +739,8 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
         catalog = make_catalog_unmasked(catalog)
         
     else:
+        print(f"CHECK INSIDE: {len(catalog[catalog['TARGETID'] == 39633236543932919])}")
+        
         catalog = make_catalog_unmasked(catalog)
 
     if clean_cat:
@@ -745,6 +752,7 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
         # construct_dwarf_galaxy_catalogs.py.  Fall back to applying the
         # DELTA_MAG correction chain if the pre-computed column is absent.
         if "LOGM_M24_FIDU_CORR" in catalog.keys():
+            print("OLD CORRECTED MSTAR COLUMN FOUND!")
             catalog["LOG_MSTAR_M24"] = catalog["LOGM_M24_FIDU_CORR"].data.copy()
         else:
             mag_g_corr, mag_r_corr = _apply_delta_mag_corrections(catalog)
@@ -770,6 +778,9 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
         catalog["R50_R"] = catalog["SHAPE_R"].data
 
     else:
+        print(f"CHECK INSIDE 2: {len(catalog[catalog['TARGETID'] == 39633236543932919])}")
+
+
         print("Processing shred catalog!")
         catalog["MAG_G"] = catalog["MAG_G_BEST"].copy()
         catalog["MAG_R"] = catalog["MAG_R_BEST"].copy()
@@ -791,11 +802,20 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
             input_zred=False,
         )
 
+        print(f"CHECK INSIDE 3: {len(catalog[catalog['TARGETID'] == 39633236543932919])}")
 
+        print(f"CHECK INSIDE 4: {catalog[catalog['TARGETID'] == 39633236543932919]['LOG_MSTAR_M24']}")
+        
+        
     print("Applying the dwarf galaxy cut!")
+    print(f"CHECK INSIDE 5: {len(catalog[catalog['TARGETID'] == 39633236543932919])}")
+    
     print(f"Number before dwarf mass cut = {len(catalog)}")
     catalog = catalog[catalog["LOG_MSTAR_M24"].data < 9.25]
     print(f"Number after dwarf mass cut = {len(catalog)}")
+
+    print(f"CHECK INSIDE 6: {len(catalog[catalog['TARGETID'] == 39633236543932919])}")
+    
 
     # Flag sources brighter than Mg = -18.5 (bit 18 of DWARF_MASKBIT)
     mag_g_corr_bright, _ = _apply_delta_mag_corrections(catalog)
@@ -2470,11 +2490,13 @@ def compute_emission_subtracted_photo_errors(
 if __name__ == '__main__':
 
     save_path = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats"
+
+    print("NEED TO RERUN SGA PHOTOMETRY!!")
     
     process_shreds = True
     process_clean = True
-    compute_mstar_err = True
-    add_model_phot = True
+    compute_mstar_err = False
+    add_model_phot = False
     process_qso_scnd = False
     process_post_hdu = False
 
@@ -2506,9 +2528,13 @@ if __name__ == '__main__':
         print("=="*10)
 
         print("Reading SGA shreds!")
+
+        temp = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_SGA_sga_catalog_w_aper_mags.fits")
+
         sga_all = safe_read_table("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_SGA_sga_catalog_w_aper_mags.fits")
         sga_all = consolidate_new_photo(sga_all,sample="SGA",flag_cog_nan_always=True)
         print("=="*10)
+
     
         # --- remove extra columns from SGA before stacking ---
         extra_cols = set(sga_all.colnames) - set(lowz_shred.colnames)
@@ -2533,14 +2559,19 @@ if __name__ == '__main__':
 
         # reorder columns to match LOWZ
         sga_all = sga_all[lowz_shred.colnames]
+
+        
     
         tot_shred = safe_vstack([ bgsb_shred, bgsf_shred, lowz_shred, elg_shred, sga_all])
+
+        
     
         ##get the main hdu
         print("Creating the shred main hdu")
         #the tot_shred catalog is the one with the subset of columns for main hdu
         tot_shred, tot_shred_entire = create_main_data_model(tot_shred, save_path + "/shreds_MAIN_hdu.fits", clean_cat=False)
 
+        
         #get the tractor hdu
         print("Creating the shred tractor hdu")
         create_tractor_data_model(tot_shred_entire,save_path + "/shreds_TRACTOR_hdu.fits")
