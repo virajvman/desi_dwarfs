@@ -585,7 +585,6 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
         catalog = make_catalog_unmasked(catalog)
         
     else:
-        print(f"CHECK INSIDE: {len(catalog[catalog['TARGETID'] == 39633236543932919])}")
         
         catalog = make_catalog_unmasked(catalog)
 
@@ -624,7 +623,6 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
         catalog["R50_R"] = catalog["SHAPE_R"].data
 
     else:
-        print(f"CHECK INSIDE 2: {len(catalog[catalog['TARGETID'] == 39633236543932919])}")
 
 
         print("Processing shred catalog!")
@@ -648,19 +646,14 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
             input_zred=False,
         )
 
-        print(f"CHECK INSIDE 3: {len(catalog[catalog['TARGETID'] == 39633236543932919])}")
 
-        print(f"CHECK INSIDE 4: {catalog[catalog['TARGETID'] == 39633236543932919]['LOG_MSTAR_M24']}")
-        
         
     print("Applying the dwarf galaxy cut!")
-    print(f"CHECK INSIDE 5: {len(catalog[catalog['TARGETID'] == 39633236543932919])}")
     
     print(f"Number before dwarf mass cut = {len(catalog)}")
     catalog = catalog[catalog["LOG_MSTAR_M24"].data < 9.25]
     print(f"Number after dwarf mass cut = {len(catalog)}")
 
-    print(f"CHECK INSIDE 6: {len(catalog[catalog['TARGETID'] == 39633236543932919])}")
     
 
     # Flag sources brighter than Mg = -18.5 (bit 18 of DWARF_MASKBIT)
@@ -1819,12 +1812,14 @@ if __name__ == '__main__':
 
     save_path = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats"
 
-    print("NEED TO RERUN SGA PHOTOMETRY!!")
+
+    TODO: for the compute mstar error, if targetids do not match, see which ones are not there ,and need to computed and only run mstar err computation on those
+    also, when the mstar_err column is added, can it be added right next to the LOG_MSTAR_M24 column so it is easy references
     
     process_shreds = True
     process_clean = True
-    compute_mstar_err = False
-    add_model_phot = False
+    compute_mstar_err = True
+    add_model_phot = True
     process_qso_scnd = False
     process_post_hdu = False
 

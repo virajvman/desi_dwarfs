@@ -9,7 +9,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=192GB
-#SBATCH --time=06:00:00
+#SBATCH --time=01:00:00
 #SBATCH --job-name=sga_run
 #SBATCH --output=aperture_shred_sga.log
 
@@ -33,7 +33,7 @@ RUN_COG=true
 RUN_SHIFTER=true
 
 # Command-line args
-BASE_ARGS="-sample $SAMPLE -min 0 -max 100000 -run_parr -ncores 64 -overwrite -nchunks 100 -no_cnn_cut -use_sample sga -get_cnn_inputs"
+BASE_ARGS="-sample $SAMPLE -min 0 -max 100000 -run_parr -ncores 64 -overwrite -nchunks 5 -no_cnn_cut -use_sample sga -get_cnn_inputs"
 
 # ------------------------------
 # Run steps

@@ -701,7 +701,7 @@ if __name__ == '__main__':
     print(f"Reading the sample = {use_sample}")
     
     if use_sample == "sga":
-        dwarf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_SGA_matched_dwarfs_REPROCESS.fits")
+        dwarf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_SGA_matched_dwarfs_REPROCESS_V2.fits")
     if use_sample == "clean":
         dwarf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v5_RUN_W_APER.fits")
         #we added the below condition as we changed our definition recently!
