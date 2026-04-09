@@ -367,8 +367,7 @@ def consolidate_new_photo(catalog,plot=False,sample=None, add_pcnn=False, use_pc
 
     ##this is a nice example to show working!: 39627642730709361, 39627643640878867
     #example of how merging systems can be hard: 39627643015922148
-    #we have no optimally combined all the columns together!
-    
+
     return catalog
 
 
@@ -1801,18 +1800,35 @@ def add_model_photometry_to_fastspec(
     print("=" * 60)
 
 
-
 # _load_nebcorr_delta_mag_table and add_delta_mag_to_fastspec
 # are imported from mass_and_photo_corrections
-
-
 
 
 if __name__ == '__main__':
 
     save_path = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats"
 
+    TODO: increase SNR in spectra mag no emi to 10 in both g and r! In paper, quote the approximate median SNR per pixel this corresponds to
+    if the snr cut is not robust, we disregard the corrections and just do a straight photometry based stellar mass
+    no filter transformations as those are not robust as spectra too nosiy... 
+    then we will add a column for stellar mass maskbit flag, this is separate from dwarfmaskbit flag:
+    we want to separate the stellar maskbit from dwarf_maskbit as dwarf_mask are like catastrophic errors, while mstar is not very catastrophic
+    i) Mg0 < -18.5 will be in dwarf_maskbit as relation is not well calibrated there so catastrophic
+    ii) low SNR in spectra mag, and so we default to no corrections type of photometry
+    iii) flagging large k correction or large difference between g and r template corrections, as that will point to something suspicious ...
 
+    then describe how much of a difference in stellar mass between doing the proper transformations, vs. no transofmraitons and using C10 for k correcitons for galaxies where we trust the corrections, this can give us a sense of error and we can add that in quadrature to the error!
+
+    TODO: WHEN DOING ASSOCIATED TARGETID SEARCH, IF EXISTS ELSEWHERE IN TEH CATALOG, I MUST MAKE SURE THEIR MAG_G ETC. AGREE, some might have been reprocessed and some not, so we must make sure their stellar masses and photometry are consistent!!
+
+    So in the final catalog, we must have some decision tree for how we will consolidate these various measurements .... 
+    IMPORTANT: FOR ROWS WITH DIFFERENT TARGETIDS BUT POINTING TO SAME GALAXY: THEY MUST HAVE THE SAME MAGS, AND MSTAR .. 
+        and then need to correspondingly update the mag_type and photoemtry updated and shape_params
+
+    so need another function that does the associatd target id consolidation!! and dwarf_primary column still remains!! All this consolidation stuff for the associated fibers will be done in the new py file we added
+
+    TODO: split the fastspec into two columns: one that explicity depend or are from fastspec products and then in a different extension we have DERIVED_PROPS: SFR and metallicity. And we quote the literature on halpha based sfr and issues with metallicities, but include direct metallicity as well as a column? for indirect, already have code from shredding paper ... so would be similar in spirit with the LVL catalog paper!!
+                             
     process_shreds = True
     process_clean = True
     compute_mstar_err = True
@@ -1973,6 +1989,7 @@ if __name__ == '__main__':
 
         #update the dwarf_maskbit with some weird spectra masks
         add_wrong_redrock_maskbit(main_cat_outpath, main_datamodel)
+
 
 
 

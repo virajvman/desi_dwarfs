@@ -492,6 +492,7 @@ def compute_emission_subtracted_photo_errors(
     emi_cache_dir="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/emi_model_cache/",
     ncores=8,
     verbose=True,
+    rerun_nans=True, 
 ):
     """
     Subtract fastspec emission-line models from observed spectra, measure
@@ -522,6 +523,9 @@ def compute_emission_subtracted_photo_errors(
         Set to 1 for serial execution.
     verbose : bool
         Print progress information.
+    rerun_nans : bool
+        If True, cached rows whose g_noemi_err is NaN are treated as missing
+        and reprocessed. Useful after re-downloading the spectra HDF5 file.
 
     Updates the multi-extension FITS catalog at *cat_path*:
       - MAIN HDU: adds LOG_MSTAR_M24_ERR, updates DWARF_MASKBIT (bit 17)
@@ -574,6 +578,14 @@ def compute_emission_subtracted_photo_errors(
         g_noemi_err[hit] = cached['g_noemi_err'][idx_map[hit]]
         r_noemi_err[hit] = cached['r_noemi_err'][idx_map[hit]]
         missing_idx = np.flatnonzero(~hit)
+
+        if rerun_nans:
+            nan_idx = np.flatnonzero(hit & ~np.isfinite(g_noemi_err))
+            if verbose and len(nan_idx) > 0:
+                print(f"  rerun_nans: {len(nan_idx)} cached rows have NaN errors; "
+                      f"adding to reprocess queue")
+            missing_idx = np.union1d(missing_idx, nan_idx)
+
         if verbose:
             print(f"  Matched {int(hit.sum())}/{n_objects} TARGETIDs from cache; "
                   f"{len(missing_idx)} need emission-subtracted photometry")
