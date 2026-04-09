@@ -514,6 +514,8 @@ def compute_emission_subtracted_photo_errors(
         If False and caches exist, load from .npz instead of reading FITS.
     emi_cache_dir : str or None
         Directory for cached emission model .npz files. Set to None to disable caching.
+        Final results in ``emi_subtracted_results.npz`` are merged by TARGETID: rows
+        already in the cache are reused and only missing targets are processed.
     ncores : int
         Number of parallel workers for the healpix file loop. Uses fork-based
         multiprocessing so the large H5 arrays are shared via copy-on-write.
@@ -540,40 +542,46 @@ def compute_emission_subtracted_photo_errors(
     if verbose:
         print(f"Catalog has {n_objects} objects")
 
-    # ── 2. Check for cached final results ────────────────────────────
+    # ── 2. Load partial/full cached results by TARGETID ──────────────
     results_cache_path = None
     if emi_cache_dir is not None:
         results_cache_path = os.path.join(emi_cache_dir,
                                           "emi_subtracted_results.npz")
 
-    use_results_cache = (results_cache_path is not None
-                         and not overwrite_model_files
-                         and os.path.exists(results_cache_path))
+    can_use_results_cache = (results_cache_path is not None
+                             and not overwrite_model_files
+                             and os.path.exists(results_cache_path))
 
-    if use_results_cache:
+    g_noemi = np.full(n_objects, np.nan)
+    r_noemi = np.full(n_objects, np.nan)
+    g_noemi_err = np.full(n_objects, np.nan)
+    r_noemi_err = np.full(n_objects, np.nan)
+
+    if can_use_results_cache:
         if verbose:
             print(f"  Loading cached results from {results_cache_path} ...")
         cached = np.load(results_cache_path)
         cached_tids = cached['targetids']
-        if (len(cached_tids) == n_objects
-                and np.array_equal(cached_tids, targetids)):
-            g_noemi = cached['g_noemi']
-            r_noemi = cached['r_noemi']
-            g_noemi_err = cached['g_noemi_err']
-            r_noemi_err = cached['r_noemi_err']
-            log_mstar_err = cached['log_mstar_err']
-            low_cont_snr_mask = cached['low_cont_snr_mask']
-            if verbose:
-                n_good = int(np.sum(np.isfinite(g_noemi)))
-                print(f"  Loaded cached results for {n_good}/{n_objects} objects")
-        else:
-            if verbose:
-                print("  Cached results TARGETIDs do not match catalog, "
-                      "recomputing ...")
-            use_results_cache = False
+        tid_to_j = {int(t): j for j, t in enumerate(cached_tids)}
+        idx_map = np.full(n_objects, -1, dtype=np.int64)
+        for i in range(n_objects):
+            tid = int(targetids[i])
+            if tid in tid_to_j:
+                idx_map[i] = tid_to_j[tid]
+        hit = idx_map >= 0
+        g_noemi[hit] = cached['g_noemi'][idx_map[hit]]
+        r_noemi[hit] = cached['r_noemi'][idx_map[hit]]
+        g_noemi_err[hit] = cached['g_noemi_err'][idx_map[hit]]
+        r_noemi_err[hit] = cached['r_noemi_err'][idx_map[hit]]
+        missing_idx = np.flatnonzero(~hit)
+        if verbose:
+            print(f"  Matched {int(hit.sum())}/{n_objects} TARGETIDs from cache; "
+                  f"{len(missing_idx)} need emission-subtracted photometry")
+    else:
+        missing_idx = np.arange(n_objects, dtype=int)
 
-    if not use_results_cache:
-        # ── 3. Read observed spectra from H5 ─────────────────────────
+    # ── 3–5. Emission subtraction only for rows not in cache ────────
+    if len(missing_idx) > 0:
         if verbose:
             print(f"Loading observed spectra from {spectra_h5_path} ...")
         with h5py.File(spectra_h5_path, "r") as f:
@@ -586,7 +594,6 @@ def compute_emission_subtracted_photo_errors(
         if verbose:
             print(f"  Loaded {len(h5_tgids)} spectra, wave shape {h5_wave.shape}")
 
-        # ── 4. Build per-object fastspecfit file paths ────────────────
         surveys = np.array(main_cat["SURVEY"].data).astype(str)
         programs = np.array(main_cat["PROGRAM"].data).astype(str)
         healpixes = np.array(main_cat["HEALPIX"].data, dtype=int)
@@ -596,26 +603,23 @@ def compute_emission_subtracted_photo_errors(
                                 fastspec_base_dir)
             for i in range(n_objects)
         ])
-        unique_paths = np.unique(paths)
+        paths_miss = paths[missing_idx]
+        unique_paths = np.unique(paths_miss)
         n_files = len(unique_paths)
 
         if verbose:
-            print(f"Unique fastspecfit FITS files: {n_files}")
+            print(f"Unique fastspecfit FITS files (for missing rows): {n_files}")
 
-        # ── 5. Output arrays ─────────────────────────────────────────
-        g_noemi = np.full(n_objects, np.nan)
-        r_noemi = np.full(n_objects, np.nan)
-        g_noemi_err = np.full(n_objects, np.nan)
-        r_noemi_err = np.full(n_objects, np.nan)
-
-        # ── 5b. Build job arguments ────────────────────────────────
         job_args = []
         for upath in unique_paths:
-            cat_indices = np.where(paths == upath)[0]
+            cat_indices = np.intersect1d(
+                np.where(paths == upath)[0], missing_idx, assume_unique=True
+            )
+            if len(cat_indices) == 0:
+                continue
             job_args.append((upath, cat_indices, batch_size, emi_cache_dir,
                              overwrite_model_files))
 
-        # ── 5c. Process files (parallel or serial) ───────────────────
         if ncores > 1:
             with mp.Pool(processes=ncores,
                          initializer=_init_emi_worker,
@@ -649,48 +653,48 @@ def compute_emission_subtracted_photo_errors(
             print(f"  Emission-subtracted photometry measured for "
                   f"{n_good}/{n_objects} objects")
 
-        # ── 6. Propagate magnitude errors into stellar mass error ────
-        gr_colors = np.array(main_cat["MAG_G"]) - np.array(main_cat["MAG_R"])
-        mag_g_arr = np.array(main_cat["MAG_G"])
-        zcmb_arr = np.array(main_cat["Z_CMB"])
-        dist_arr = np.array(main_cat["LUMI_DIST_MPC"])
+    # ── 6. Propagate magnitude errors into stellar mass error ───────
+    gr_colors = np.array(main_cat["MAG_G"]) - np.array(main_cat["MAG_R"])
+    mag_g_arr = np.array(main_cat["MAG_G"])
+    zcmb_arr = np.array(main_cat["Z_CMB"])
+    dist_arr = np.array(main_cat["LUMI_DIST_MPC"])
 
-        _, log_mstar_err = get_stellar_mass_mia(
-            gr_colors, mag_g_arr, zcmb_arr,
-            d_in_mpc=dist_arr, input_zred=False,
-            mag_g_err=g_noemi_err, mag_r_err=r_noemi_err,
-        )
-
-        finite_err = np.isfinite(log_mstar_err)
-        print(f"LOG_MSTAR_M24_ERR: {np.sum(finite_err)} finite values, median = {np.nanmedian(log_mstar_err):.3f} dex")
-
-        # ── 6b. Compute low-continuum-SNR mask ───────────────────────
-        snr_threshold = 5.0
-        mag_err_limit = 1.0857 / snr_threshold
-        low_cont_snr_mask = (
-            ~np.isfinite(g_noemi_err) | ~np.isfinite(r_noemi_err)
-            | (g_noemi_err >= mag_err_limit)
-            | (r_noemi_err >= mag_err_limit)
-        )
-
-        # ── 6c. Save results cache ──────────────────────────────────
-        if results_cache_path is not None:
-            os.makedirs(emi_cache_dir, exist_ok=True)
-            np.savez(results_cache_path,
-                     targetids=targetids,
-                     g_noemi=g_noemi, r_noemi=r_noemi,
-                     g_noemi_err=g_noemi_err, r_noemi_err=r_noemi_err,
-                     log_mstar_err=log_mstar_err,
-                     low_cont_snr_mask=low_cont_snr_mask)
-            if verbose:
-                print(f"  Saved results cache to {results_cache_path}")
-
+    _, log_mstar_err = get_stellar_mass_mia(
+        gr_colors, mag_g_arr, zcmb_arr,
+        d_in_mpc=dist_arr, input_zred=False,
+        mag_g_err=g_noemi_err, mag_r_err=r_noemi_err,
+    )
 
     finite_err = np.isfinite(log_mstar_err)
     print(f"LOG_MSTAR_M24_ERR: {np.sum(finite_err)} finite values, median = {np.nanmedian(log_mstar_err):.3f} dex")
-    
+
+    snr_threshold = 5.0
+    mag_err_limit = 1.0857 / snr_threshold
+    low_cont_snr_mask = (
+        ~np.isfinite(g_noemi_err) | ~np.isfinite(r_noemi_err)
+        | (g_noemi_err >= mag_err_limit)
+        | (r_noemi_err >= mag_err_limit)
+    )
+
+    if results_cache_path is not None:
+        os.makedirs(emi_cache_dir, exist_ok=True)
+        np.savez(results_cache_path,
+                 targetids=targetids,
+                 g_noemi=g_noemi, r_noemi=r_noemi,
+                 g_noemi_err=g_noemi_err, r_noemi_err=r_noemi_err,
+                 log_mstar_err=log_mstar_err,
+                 low_cont_snr_mask=low_cont_snr_mask)
+        if verbose:
+            print(f"  Saved results cache to {results_cache_path}")
+
     # ── 7. Update MAIN HDU with LOG_MSTAR_M24_ERR ────────────────────
     main_cat["LOG_MSTAR_M24_ERR"] = log_mstar_err.astype(np.float64)
+    if "LOG_MSTAR_M24" in main_cat.colnames:
+        cols = list(main_cat.colnames)
+        cols.remove("LOG_MSTAR_M24_ERR")
+        ins_at = cols.index("LOG_MSTAR_M24") + 1
+        cols.insert(ins_at, "LOG_MSTAR_M24_ERR")
+        main_cat = main_cat[cols]
 
     # ── 7b. Flag objects without SNR>5 in g AND r continuum photometry (bit 17) ──
     dwarf_maskbits = np.asarray(main_cat["DWARF_MASKBIT"], dtype=np.int64)

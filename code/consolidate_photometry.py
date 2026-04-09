@@ -1813,9 +1813,6 @@ if __name__ == '__main__':
     save_path = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats"
 
 
-    TODO: for the compute mstar error, if targetids do not match, see which ones are not there ,and need to computed and only run mstar err computation on those
-    also, when the mstar_err column is added, can it be added right next to the LOG_MSTAR_M24 column so it is easy references
-    
     process_shreds = True
     process_clean = True
     compute_mstar_err = True
