@@ -17,7 +17,7 @@ import h5py
 from tqdm import tqdm
 from desispec.interpolation import resample_flux
 from fastspec_funcs import measure_photo_batch, get_fastspecfit_path
-from desi_lowz_funcs import get_stellar_mass_mia
+from desi_lowz_funcs import get_stellar_mass_mia, g_kcorr
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -528,7 +528,8 @@ def compute_emission_subtracted_photo_errors(
         and reprocessed. Useful after re-downloading the spectra HDF5 file.
 
     Updates the multi-extension FITS catalog at *cat_path*:
-      - MAIN HDU: adds LOG_MSTAR_M24_ERR, updates DWARF_MASKBIT (bit 17)
+      - MAIN HDU: adds LOG_MSTAR_M24_ERR; sets MSTAR_MASKBIT bit 0 (low continuum
+        SNR in nebular-subtracted g/r fiber photometry, threshold 10)
       - FASTSPEC HDU: adds MAG_G_FIBER_NOEMI, MAG_R_FIBER_NOEMI,
         MAG_G_FIBER_NOEMI_ERR, MAG_R_FIBER_NOEMI_ERR
     """
@@ -680,7 +681,7 @@ def compute_emission_subtracted_photo_errors(
     finite_err = np.isfinite(log_mstar_err)
     print(f"LOG_MSTAR_M24_ERR: {np.sum(finite_err)} finite values, median = {np.nanmedian(log_mstar_err):.3f} dex")
 
-    snr_threshold = 5.0
+    snr_threshold = 10.0
     mag_err_limit = 1.0857 / snr_threshold
     low_cont_snr_mask = (
         ~np.isfinite(g_noemi_err) | ~np.isfinite(r_noemi_err)
@@ -708,15 +709,76 @@ def compute_emission_subtracted_photo_errors(
         cols.insert(ins_at, "LOG_MSTAR_M24_ERR")
         main_cat = main_cat[cols]
 
-    # ── 7b. Flag objects without SNR>5 in g AND r continuum photometry (bit 17) ──
-    dwarf_maskbits = np.asarray(main_cat["DWARF_MASKBIT"], dtype=np.int64)
-    dwarf_maskbits[low_cont_snr_mask] |= np.int64(1) << 17
-    main_cat["DWARF_MASKBIT"] = dwarf_maskbits
+    # ── 7a. Low continuum SNR: photometry + Z_CMB k-corr mass (no delta_mag path) ──
+    log_mstar_fallback = get_stellar_mass_mia(
+        gr_colors, mag_g_arr, zcmb_arr,
+        d_in_mpc=dist_arr, input_zred=False,
+    )
+    n_low_snr = int(np.sum(low_cont_snr_mask))
+    print(f"Low continuum SNR (fallback mass): {n_low_snr} / {n_objects} objects")
+
+    if "LOG_MSTAR_M24" in main_cat.colnames:
+        mstar_dtype = main_cat["LOG_MSTAR_M24"].dtype
+        lm = np.asarray(main_cat["LOG_MSTAR_M24"], dtype=np.float64).copy()
+        lm[low_cont_snr_mask] = np.asarray(log_mstar_fallback, dtype=np.float64)[
+            low_cont_snr_mask]
+        main_cat["LOG_MSTAR_M24"] = lm.astype(mstar_dtype)
+
+    err_arr = np.asarray(main_cat["LOG_MSTAR_M24_ERR"], dtype=np.float64).copy()
+    err_arr[low_cont_snr_mask] = 0.0
+    main_cat["LOG_MSTAR_M24_ERR"] = err_arr
+    print(
+        "TODO: LOG_MSTAR_M24_ERR is set to 0 for low continuum-SNR objects using "
+        "the photometry+Z_CMB fallback mass; improve uncertainty estimate later."
+    )
+
+    d_pc = dist_arr * 1.0e6
+    valid_mg = (
+        np.isfinite(d_pc) & (d_pc > 0) & np.isfinite(mag_g_arr)
+        & np.isfinite(gr_colors) & np.isfinite(zcmb_arr)
+    )
+    kg_arr = g_kcorr(gr_colors, zcmb_arr)
+    mg_fallback = np.full(n_objects, np.nan, dtype=np.float64)
+    mg_fallback[valid_mg] = (
+        mag_g_arr[valid_mg] + 5.0 - 5.0 * np.log10(d_pc[valid_mg]) - kg_arr[valid_mg]
+    )
+
+    if "DWARF_MASKBIT" in main_cat.colnames:
+        dwarf_maskbits = np.asarray(main_cat["DWARF_MASKBIT"], dtype=np.int64).copy()
+    else:
+        dwarf_maskbits = None
+
+    if "MSTAR_MASKBIT" in main_cat.colnames:
+        mstar_maskbits = np.asarray(main_cat["MSTAR_MASKBIT"], dtype=np.int64).copy()
+    else:
+        mstar_maskbits = (
+            (np.asarray(main_cat["DWARF_MASKBIT"], dtype=np.int64) >> 18) & 1
+        ) << 1
+
+    low = low_cont_snr_mask
+    if dwarf_maskbits is not None:
+        dwarf_maskbits[low] &= ~np.int64(1 << 18)
+    mstar_maskbits[low] &= ~np.int64(1 << 1)
+    too_bright_fb = low & np.isfinite(mg_fallback) & (mg_fallback < -18.5)
+    if dwarf_maskbits is not None:
+        dwarf_maskbits[too_bright_fb] |= np.int64(1 << 18)
+        main_cat["DWARF_MASKBIT"] = dwarf_maskbits.astype(
+            main_cat["DWARF_MASKBIT"].dtype)
+    mstar_maskbits[too_bright_fb] |= np.int64(1 << 1)
+
+    # ── 7b. MSTAR_MASKBIT bit 0: low continuum SNR (nebular-subtracted g/r) ──
+    mstar_maskbits[low_cont_snr_mask] |= np.int64(1) << 0
+    main_cat["MSTAR_MASKBIT"] = mstar_maskbits.astype(np.int32)
+    if "DWARF_MASKBIT" in main_cat.colnames:
+        cols = list(main_cat.colnames)
+        cols.remove("MSTAR_MASKBIT")
+        ins_at = cols.index("DWARF_MASKBIT") + 1
+        cols.insert(ins_at, "MSTAR_MASKBIT")
+        main_cat = main_cat[cols]
 
     if verbose:
-        n_flagged = int(low_cont_snr_mask.sum())
-        print(f"  DWARF_MASKBIT bit 17 (low continuum SNR): flagged "
-              f"{n_flagged}/{n_objects} objects")
+        print(f"  MSTAR_MASKBIT bit 0 (low continuum SNR, threshold 10): flagged "
+              f"{n_low_snr}/{n_objects} objects")
 
     # table_to_hdu avoids BytesIO→open→.copy() on VLAs (e.g. ASSOCIATED_TARGETIDS),
     # which can raise "Could not find heap data" for variable-length columns.
@@ -770,6 +832,7 @@ def compute_emission_subtracted_photo_errors(
         raise
 
     print(f"Updated {cat_path}:")
-    print(f"  MAIN HDU: added LOG_MSTAR_M24_ERR, updated DWARF_MASKBIT (bit 17: low continuum SNR)")
+    print(f"  MAIN HDU: added LOG_MSTAR_M24_ERR; low-SNR fallback LOG_MSTAR_M24; "
+          f"MSTAR_MASKBIT (bit 0); DWARF/MSTAR bright bits refit for low-SNR rows")
     print(f"  FASTSPEC HDU: added MAG_G_FIBER_NOEMI, MAG_R_FIBER_NOEMI, MAG_G_FIBER_NOEMI_ERR, MAG_R_FIBER_NOEMI_ERR")
     print("=" * 60)

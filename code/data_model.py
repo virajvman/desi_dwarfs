@@ -154,7 +154,21 @@ main_datamodel = {
     },
     "DWARF_MASKBIT": {
         "unit": None,
-        "description": "Bitwise mask to apply various cleaning cuts. See for description of bitmasks here.",
+        "description": (
+            "Bitwise mask to apply various cleaning cuts. Low continuum SNR in "
+            "emission-subtracted fiber photometry (mass pipeline) is recorded in "
+            "MSTAR_MASKBIT, not here. See bitmask descriptions in README."
+        ),
+        "dtype": "int32"
+    },
+    "MSTAR_MASKBIT": {
+        "unit": None,
+        "description": (
+            "Bitwise mask for the LOG_MSTAR_M24 derivation: bit 0 = low continuum SNR "
+            "(nebular-subtracted g/r fiber photometry, threshold SNR 10); "
+            "bit 1 = M_g,0 < -18.5 after corrections. Copied with LOG_MSTAR_M24 from "
+            "PROPERTY_SOURCE_TARGETID during associated-fiber consolidation."
+        ),
         "dtype": "int32"
     },
     "MAG_TYPE": {
@@ -209,7 +223,18 @@ main_datamodel = {
             "fiber (TARGETID == DWARF_PRIMARY_TARGETID) for the dwarf galaxy."
         ),
         "dtype": "bool"
-}
+    },
+
+    "PROPERTY_SOURCE_TARGETID": {
+        "unit": None,
+        "description": (
+            "TARGETID of the associated fiber whose galaxy-level properties "
+            "(MAG_G/R/Z, RA, DEC, R50_R, LOG_MSTAR_M24, LOG_MSTAR_M24_ERR, "
+            "MSTAR_MASKBIT, etc.) are adopted for this row. "
+            "Chosen as the brightest MAG_R among the associated group."
+        ),
+        "dtype": "int64"
+    },
 }
 
 

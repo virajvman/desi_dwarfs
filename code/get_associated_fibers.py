@@ -126,8 +126,7 @@ def get_dwarf_primary(dwarf_cat):
     primary_ids = np.full(len(dwarf_cat), -1, dtype=np.int64)
 
     for i, row in tqdm(enumerate(dwarf_cat), total=len(dwarf_cat), desc="Finding dwarf primaries"):
-        tids = [row["TARGETID"]]
-        tids.extend(row["ASSOCIATED_TARGETIDS"])
+        tids = list(set([int(row["TARGETID"])] + [int(t) for t in row["ASSOCIATED_TARGETIDS"]]))
 
         valid_rows = [
             tid_to_index[tid]

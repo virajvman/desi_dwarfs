@@ -31,6 +31,7 @@ from desi_lowz_funcs import get_sga_norm_dists_FAST
 from construct_dwarf_galaxy_catalogs import bright_star_filter
 
 from get_associated_fibers import find_associated_tgids, get_dwarf_primary
+from consolidate_associated_fibers import symmetrize_and_group_associated_tgids, consolidate_associated_fiber_properties
 
 from mass_and_photo_corrections import (
     make_catalog_unmasked,
@@ -471,10 +472,7 @@ def consolidate_positions_and_shapes(catalog):
         catalog["BA"].data,
         catalog["PHI"].data
     ]).T.astype(np.float32)                                           # shape (N, 2)
-
-    # print("TODO: check that the SHAPE_R, BA, PHI columns are consistent with the aperture ones, especially PHI.")
-    # print("TODO: add the VI + aper r3 based stuff here too")
-        
+     
     # Prepare output arrays
     n = len(mag_type)
     ra_final = np.full(n, np.nan, dtype=np.float64)
@@ -669,6 +667,10 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
     print(f"DWARF_MASKBIT bit 18 (Mg < -18.5): flagged {n_flagged}/{len(catalog)} "
           f"({100.0 * n_flagged / len(catalog):.1f}%)")
 
+    mstar_maskbits = np.zeros(len(catalog), dtype=np.int64)
+    mstar_maskbits[too_bright] |= np.int64(1) << 1
+    catalog["MSTAR_MASKBIT"] = mstar_maskbits.astype(np.int32)
+
     #then we loop over the columns to get the final subset of columns
     # Keep only columns present in main_datamodel
     print("Selecting the subset of columns for MAIN extension")
@@ -735,6 +737,7 @@ def finalize_main_hdu(catalog_main):
     print("Finding the associated TARGETIDs!")
 
     catalog_main = find_associated_tgids(catalog_main)
+    catalog_main = symmetrize_and_group_associated_tgids(catalog_main)
     catalog_main = get_dwarf_primary(catalog_main)
 
     print("Populating DIST_SOURCE from INT_V2_NEBCORR catalogs...")
@@ -1567,6 +1570,11 @@ def add_too_bright_maskbit(cat_path, bit=18, mag_cut=-18.5):
     dwarf_maskbits[too_bright] |= np.int64(1) << bit
     main_cat["DWARF_MASKBIT"] = dwarf_maskbits
 
+    if "MSTAR_MASKBIT" in main_cat.colnames and bit == 18:
+        mstar = np.asarray(main_cat["MSTAR_MASKBIT"], dtype=np.int64)
+        mstar[too_bright] |= np.int64(1) << 1
+        main_cat["MSTAR_MASKBIT"] = mstar.astype(np.int32)
+
     n_total = len(main_cat)
     n_flagged = int(too_bright.sum())
     print(f"DWARF_MASKBIT bit {bit} (Mg < {mag_cut}): "
@@ -1808,26 +1816,18 @@ if __name__ == '__main__':
 
     save_path = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats"
 
-    TODO: increase SNR in spectra mag no emi to 10 in both g and r! In paper, quote the approximate median SNR per pixel this corresponds to
-    if the snr cut is not robust, we disregard the corrections and just do a straight photometry based stellar mass
-    no filter transformations as those are not robust as spectra too nosiy... 
-    then we will add a column for stellar mass maskbit flag, this is separate from dwarfmaskbit flag:
-    we want to separate the stellar maskbit from dwarf_maskbit as dwarf_mask are like catastrophic errors, while mstar is not very catastrophic
-    i) Mg0 < -18.5 will be in dwarf_maskbit as relation is not well calibrated there so catastrophic
-    ii) low SNR in spectra mag, and so we default to no corrections type of photometry
-    iii) flagging large k correction or large difference between g and r template corrections, as that will point to something suspicious ...
+    # TODO: increase SNR in spectra mag no emi to 10 in both g and r! In paper, quote the approximate median SNR per pixel this corresponds to
+    # if the snr cut is not robust, we disregard the corrections and just do a straight photometry based stellar mass
+    # no filter transformations as those are not robust as spectra too nosiy... 
+    # then we will add a column for stellar mass maskbit flag, this is separate from dwarfmaskbit flag:
+    # we want to separate the stellar maskbit from dwarf_maskbit as dwarf_mask are like catastrophic errors, while mstar is not very catastrophic
+    # i) Mg0 < -18.5 will be in dwarf_maskbit as relation is not well calibrated there so catastrophic
+    # ii) low SNR in spectra mag, and so we default to no corrections type of photometry
+    # iii) flagging large k correction or large difference between g and r template corrections, as that will point to something suspicious ...
 
-    then describe how much of a difference in stellar mass between doing the proper transformations, vs. no transofmraitons and using C10 for k correcitons for galaxies where we trust the corrections, this can give us a sense of error and we can add that in quadrature to the error!
+    # then describe how much of a difference in stellar mass between doing the proper transformations, vs. no transofmraitons and using C10 for k correcitons for galaxies where we trust the corrections, this can give us a sense of error and we can add that in quadrature to the error!
 
-    TODO: WHEN DOING ASSOCIATED TARGETID SEARCH, IF EXISTS ELSEWHERE IN TEH CATALOG, I MUST MAKE SURE THEIR MAG_G ETC. AGREE, some might have been reprocessed and some not, so we must make sure their stellar masses and photometry are consistent!!
-
-    So in the final catalog, we must have some decision tree for how we will consolidate these various measurements .... 
-    IMPORTANT: FOR ROWS WITH DIFFERENT TARGETIDS BUT POINTING TO SAME GALAXY: THEY MUST HAVE THE SAME MAGS, AND MSTAR .. 
-        and then need to correspondingly update the mag_type and photoemtry updated and shape_params
-
-    so need another function that does the associatd target id consolidation!! and dwarf_primary column still remains!! All this consolidation stuff for the associated fibers will be done in the new py file we added
-
-    TODO: split the fastspec into two columns: one that explicity depend or are from fastspec products and then in a different extension we have DERIVED_PROPS: SFR and metallicity. And we quote the literature on halpha based sfr and issues with metallicities, but include direct metallicity as well as a column? for indirect, already have code from shredding paper ... so would be similar in spirit with the LVL catalog paper!!
+    # TODO: split the fastspec into two columns: one that explicity depend or are from fastspec products and then in a different extension we have DERIVED_PROPS: SFR and metallicity. And we quote the literature on halpha based sfr and issues with metallicities, but include direct metallicity as well as a column? for indirect, already have code from shredding paper ... so would be similar in spirit with the LVL catalog paper!!
                              
     process_shreds = True
     process_clean = True
@@ -1990,6 +1990,10 @@ if __name__ == '__main__':
         #update the dwarf_maskbit with some weird spectra masks
         add_wrong_redrock_maskbit(main_cat_outpath, main_datamodel)
 
+    # Associated fiber consolidation: must be the very last step so all
+    # columns (LOG_MSTAR_M24_ERR, MSTAR_MASKBIT, DWARF_MASKBIT bits 16 and 18, etc.)
+    # are final.
+    consolidate_associated_fiber_properties(main_cat_outpath)
 
 
 
