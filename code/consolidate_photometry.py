@@ -679,10 +679,10 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
     #then we loop over the columns to get the final subset of columns
     # Keep only columns present in main_datamodel
     print("Selecting the subset of columns for MAIN extension")
-    catalog_main = catalog[ [col for col in main_datamodel.keys() if col not in ["ASSOCIATED_TARGETIDS", "DWARF_PRIMARY_TARGETID", "DWARF_PRIMARY", "DIST_SOURCE","LOG_MSTAR_M24_ERR"] ] ]
+    catalog_main = catalog[ [col for col in main_datamodel.keys() if col not in ["ASSOCIATED_TARGETIDS", "DWARF_PRIMARY_TARGETID", "DWARF_PRIMARY", "DIST_SOURCE","LOG_MSTAR_M24_ERR","PROPERTY_SOURCE_TARGETID", "DWARF_PRIMARY_TARGETID"] ] ]
     
     for col in main_datamodel.keys():
-        if col not in ["ASSOCIATED_TARGETIDS", "DWARF_PRIMARY_TARGETID", "DWARF_PRIMARY", "DIST_SOURCE", "LOG_MSTAR_M24_ERR"]:
+        if col not in ["ASSOCIATED_TARGETIDS", "DWARF_PRIMARY_TARGETID", "DWARF_PRIMARY", "DIST_SOURCE", "LOG_MSTAR_M24_ERR","PROPERTY_SOURCE_TARGETID", "DWARF_PRIMARY_TARGETID"]:
             print(f"Column : {col}")
             meta = main_datamodel[col]
     
