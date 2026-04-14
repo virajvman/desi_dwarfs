@@ -28,7 +28,12 @@ import h5py
 from desi_lowz_funcs import match_c_to_catalog, match_fastspec_catalog, get_stellar_mass_mia
 from desi_lowz_funcs import add_sweeps_column
 from desi_lowz_funcs import get_sga_norm_dists_FAST
-from construct_dwarf_galaxy_catalogs import bright_star_filter
+from desitarget.targetmask import desi_mask, bgs_mask
+from construct_dwarf_galaxy_catalogs import (
+    bright_star_filter,
+    get_sv_bgs_mask,
+    get_sv_elg_mask,
+)
 
 from get_associated_fibers import find_associated_tgids, get_dwarf_primary
 from consolidate_associated_fibers import symmetrize_and_group_associated_tgids, consolidate_associated_fiber_properties
@@ -1231,11 +1236,84 @@ def add_lowz_fiberflux(trac_cat,tot_cat):
     return trac_cat
 
 
+def _assert_targetid_aligned(tab_ref, tab_other, name_ref, name_other):
+    """Require identical length and row-wise TARGETID equality."""
+    if len(tab_ref) != len(tab_other):
+        raise ValueError(
+            f"{name_ref} ({len(tab_ref)} rows) vs {name_other} ({len(tab_other)} rows): length mismatch"
+        )
+    if not (
+        np.asarray(tab_ref["TARGETID"]) == np.asarray(tab_other["TARGETID"])
+    ).all():
+        raise ValueError(f"TARGETID mismatch between {name_ref} and {name_other}")
+
+
+def _reassign_sample_from_zcat(main_tab, zcat_tab):
+    """
+    Set MAIN.SAMPLE from ZCAT targeting bits (main survey + SV), same logic as
+    construct_dwarf_galaxy_catalogs.py. Priority: BGS_BRIGHT > BGS_FAINT > ELG.
+
+    Only rows with SAMPLE in {BGS_BRIGHT, BGS_FAINT, ELG} are updated. LOWZ, OTHER,
+    and other labels are left unchanged. Rows slated for update but with no matching
+    bit keep their current SAMPLE.
+    """
+    _assert_targetid_aligned(main_tab, zcat_tab, "MAIN", "ZCAT")
+
+    z = zcat_tab
+    iron_bgs = z["BGS_TARGET"]
+    bgsb_main = (iron_bgs & bgs_mask["BGS_BRIGHT"]) != 0
+    bgsb_sv = get_sv_bgs_mask(z, bgs_class="BGS_BRIGHT")
+    is_bgsb = bgsb_main | bgsb_sv
+
+    bgsf_main = (iron_bgs & bgs_mask["BGS_FAINT"]) != 0
+    bgsf_sv = get_sv_bgs_mask(z, bgs_class="BGS_FAINT")
+    is_bgsf = bgsf_main | bgsf_sv
+
+    desi_tgt = z["DESI_TARGET"]
+    elg_main = (desi_tgt & desi_mask["ELG"]) != 0
+    elg_sv = get_sv_elg_mask(z)
+    is_elg = elg_main | elg_sv
+
+    n = len(main_tab)
+    reassigned = np.full(n, "", dtype=object)
+    reassigned[is_bgsb] = "BGS_BRIGHT"
+    reassigned[~is_bgsb & is_bgsf] = "BGS_FAINT"
+    reassigned[~is_bgsb & ~is_bgsf & is_elg] = "ELG"
+
+    samples = np.asarray(main_tab["SAMPLE"], dtype=str)
+    update_mask = np.isin(samples, ["BGS_BRIGHT", "BGS_FAINT", "ELG"])
+    apply_mask = update_mask & (reassigned != "")
+    no_bit = update_mask & (reassigned == "")
+    n_no_bit = int(np.sum(no_bit))
+    if n_no_bit > 0:
+        print(
+            f"  WARNING: {n_no_bit} rows with SAMPLE in BGS_BRIGHT/BGS_FAINT/ELG have no "
+            "BGS_BRIGHT/BGS_FAINT/ELG bit in ZCAT; leaving SAMPLE unchanged"
+        )
+
+    out = samples.copy()
+    out[apply_mask] = reassigned[apply_mask]
+    main_tab["SAMPLE"] = out
+
+
+def _targetid_dedup_keep_indices(targetids):
+    """First occurrence of each TARGETID in table order (stable, vstack order)."""
+    tids = np.asarray(targetids)
+    _, first_idx = np.unique(tids, return_index=True)
+    return np.sort(first_idx)
+
+
 def combine_hdus(hdu_list, base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats",
                  output_file="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dwarfs_combined.fits",
                  extra_prefixes=None):
     """
     Combine multiple HDUs (Astropy tables) into a single multi-extension FITS file.
+
+    After stacking clean + shreds (+ optional extras) with identical row order for
+    MAIN, ZCAT, TRACTOR, and FASTSPEC, this function (1) reassigns MAIN ``SAMPLE``
+    from ZCAT targeting bits with priority BGS_BRIGHT > BGS_FAINT > ELG for rows
+    whose SAMPLE is BGS_BRIGHT, BGS_FAINT, or ELG; (2) deduplicates on TARGETID (first row
+    kept); (3) runs ``finalize_main_hdu`` on MAIN. LOWZ and OTHER are not relabeled.
 
     Parameters
     ----------
@@ -1252,25 +1330,25 @@ def combine_hdus(hdu_list, base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs
     if extra_prefixes is None:
         extra_prefixes = []
 
-    hdu_tables = []
+    stacked = {}
+    reprocess_tab = None
+
+    # Phase A: stack clean + shreds (+ extras) per HDU into aligned tables
     for hdu_name in hdu_list:
         if hdu_name in ["REPROCESS_PHOTO"]:
             shred_fname = os.path.join(base_path, f"shreds_{hdu_name}_hdu.fits")
             print(f"Reading {shred_fname}...")
-            shred_tab = safe_read_table(shred_fname)
-            
-            hdu_tables.append(shred_tab)
-        
+            reprocess_tab = safe_read_table(shred_fname)
         else:
             shred_fname = os.path.join(base_path, f"shreds_{hdu_name}_hdu.fits")
             clean_fname = os.path.join(base_path, f"clean_{hdu_name}_hdu.fits")
-            
+
             print(f"Reading {shred_fname}...")
             print(f"Reading {clean_fname}...")
-            
+
             clean_tab = safe_read_table(clean_fname)
             shred_tab = safe_read_table(shred_fname)
-    
+
             tables_to_stack = [clean_tab, shred_tab]
 
             for prefix in extra_prefixes:
@@ -1281,16 +1359,54 @@ def combine_hdus(hdu_list, base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs
                 else:
                     print(f"Skipping {extra_fname} (not found)")
 
-            tab = safe_vstack(tables_to_stack)
+            stacked[hdu_name] = safe_vstack(tables_to_stack)
 
-            if hdu_name in ["MAIN"]:
-                ##if main, we will add three new columns
-                tab = finalize_main_hdu(tab)
-            
-            hdu_tables.append(tab)
+    # Phase B: SAMPLE from ZCAT bits, dedupe TARGETID, finalize MAIN
+    science_names = [n for n in hdu_list if n != "REPROCESS_PHOTO"]
+    main_pre = stacked["MAIN"]
+    _assert_targetid_aligned(main_pre, stacked["ZCAT"], "MAIN", "ZCAT")
+    for sn in science_names:
+        if sn != "MAIN":
+            _assert_targetid_aligned(main_pre, stacked[sn], "MAIN", sn)
 
+    n_before = len(main_pre)
+    print("combine_hdus: Reassigning SAMPLE from ZCAT targeting bits (BGS_BRIGHT > BGS_FAINT > ELG)")
+    _reassign_sample_from_zcat(stacked["MAIN"], stacked["ZCAT"])
 
-    #we ignore the reprocess_cat from comparison as that as a different number of rows by construction
+    tids_pre = np.asarray(stacked["MAIN"]["TARGETID"])
+    _, tid_counts = np.unique(tids_pre, return_counts=True)
+    n_targetids_with_duplicates = int(np.sum(tid_counts > 1))
+
+    keep_idx = _targetid_dedup_keep_indices(stacked["MAIN"]["TARGETID"])
+    n_after = len(keep_idx)
+    n_rows_dropped = n_before - n_after
+    if n_rows_dropped > 0:
+        print(
+            "combine_hdus: TARGETID deduplication — "
+            f"dropped {n_rows_dropped} row(s) ({n_before} -> {n_after} rows); "
+            f"{n_targetids_with_duplicates} distinct TARGETID(s) appeared more than once "
+            "(first occurrence in stack order kept)"
+        )
+    else:
+        print(
+            f"combine_hdus: TARGETID deduplication — no duplicates "
+            f"({n_before} rows, {len(tid_counts)} unique TARGETIDs)"
+        )
+
+    for sn in science_names:
+        stacked[sn] = stacked[sn][keep_idx]
+
+    print("combine_hdus: finalize_main_hdu (associated fibers, DIST_SOURCE, …)")
+    stacked["MAIN"] = finalize_main_hdu(stacked["MAIN"])
+
+    hdu_tables = []
+    for hdu_name in hdu_list:
+        if hdu_name in ["REPROCESS_PHOTO"]:
+            hdu_tables.append(reprocess_tab)
+        else:
+            hdu_tables.append(stacked[hdu_name])
+
+    # we ignore the reprocess_cat from comparison as that as a different number of rows by construction
 
     # Sanity check: number of rows
     nrows = [len(tab) for tab in hdu_tables[:-1]]

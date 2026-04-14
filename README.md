@@ -39,8 +39,6 @@ Explore the DESI Dwarf Galaxy catalog interactively in your browser.
 
 The catalog is a multi-extension FITS file. Each extension is keyed by `TARGETID` and described below.
 
----
-
 <details>
 <summary><strong>Extension 1 &mdash; MAIN</strong></summary>
 
@@ -74,14 +72,14 @@ Core identifiers, coordinates, redshifts, stellar masses, photometry, and qualit
 | `MAG_G_TARGET` | float32 | mag | Tractor *g*-band magnitude of DESI target source (MW extinction corrected). For shredded sources, this is the uncorrected, shredded photometry |
 | `MAG_R_TARGET` | float32 | mag | Same as `MAG_G_TARGET` but for *r*-band |
 | `MAG_Z_TARGET` | float32 | mag | Same as `MAG_G_TARGET` but for *z*-band |
-| `SAMPLE` | str | | DESI target class (`BGS_BRIGHT`, `BGS_FAINT`, `LOWZ`, or `ELG`) |
+| `SAMPLE` | str | | Single catalog label: typically `BGS_BRIGHT`, `BGS_FAINT`, `LOWZ`, `ELG`, or `OTHER` (QSO/SCND supplement). See [SAMPLE column note](#sample-column-single-label-per-row); multi-bit targets are not fully described by this one string. |
 | `DWARF_MASKBIT` | int32 | | Bitwise mask for cleaning cuts. See [bitmask descriptions](#dwarf_maskbit-descriptions) |
 | `MSTAR_MASKBIT` | int32 | | Bitwise mask for the `LOG_MSTAR_M24` derivation. See [MSTAR_MASKBIT descriptions](#mstar_maskbit-descriptions) |
 | `MAG_TYPE` | str | | Photometry method used for `MAG_G/R/Z`. See [MAG_TYPE descriptions](#mag-type-descriptions) |
 | `PHOTOMETRY_UPDATED` | bool | | Whether photometry was updated from original target Tractor photometry |
 | `R50_R` | float32 | arcsec | Half-light radius in *r*-band |
 | `SHAPE_PARAMS` | float32 (2,) | | Galaxy shape parameters: *b/a* ratio, position angle (degrees) |
-| `IN_SGA_2020` | bool | | Whether target source had Tractor `MASKBITS=12` (in SGA-2020 catalog) |
+| `IN_SGA_2020` | bool | | Whether Tractor `MASKBITS=12` is set (bright-galaxy neighbor association in imaging) |
 | `ASSOCIATED_TARGETIDS` | object | | List of associated TARGETIDs (variable-length per row) |
 | `DWARF_PRIMARY_TARGETID` | int64 | | TARGETID of the primary fiber, chosen as the brightest `MAG_R_TARGET` among associated fibers |
 | `DWARF_PRIMARY` | bool | | Whether this row is the primary fiber (`TARGETID == DWARF_PRIMARY_TARGETID`) |
@@ -95,7 +93,7 @@ Core identifiers, coordinates, redshifts, stellar masses, photometry, and qualit
 
 <br>
 
-Redshift catalog columns, targeting bits, and observation metadata.
+Redshift catalog columns, targeting bits, and observation metadata. **Targeting bits** (`DESI_TARGET`, `BGS_TARGET`, SV-era columns, etc.) are the authoritative place to test bit membership if `SAMPLE` on MAIN is too coarse or if a `TARGETID` could belong to several samples in the raw targeting data. Rows match **MAIN** by `TARGETID` and order.
 
 | Name | Type | Units | Description |
 | :--- | :--- | :---: | :---------- |
@@ -153,7 +151,7 @@ Original Tractor photometry and morphological parameters from the DESI Legacy Su
 | `FIBERFLUX_R` | float32 | nanomaggy | Predicted *r*-band flux within a 1.5 arcsec diameter fiber under 1 arcsec Gaussian seeing (not extinction corrected) |
 | `MASKBITS` | int16 | | Tractor bitwise mask from coadd maskbits maps ([DR9 bitmasks](https://www.legacysurvey.org/dr9/bitmasks/)) |
 | `REF_ID` | int64 | | Reference catalog source ID (Tycho-2 or Gaia DR2) |
-| `REF_CAT` | str | | Reference catalog: `T2` (Tycho-2), `G2` (Gaia DR2), `L3` (SGA), or empty |
+| `REF_CAT` | str | | Reference catalog: `T2` (Tycho-2), `G2` (Gaia DR2), `L3` (large-galaxy imaging reference), or empty |
 | `FLUX_G` | float32 | nanomaggy | Total *g*-band flux (extinction corrected) |
 | `FLUX_IVAR_G` | float32 | 1/nanomaggy² | Inverse variance of `FLUX_G` |
 | `MAG_G` | float32 | mag | Extinction-corrected *g*-band magnitude |
@@ -451,6 +449,16 @@ Example code demonstrating how to read the HDF5 file and visualize the spectra i
 
 ### Additional Notes
 
+<a name="sample-column-single-label-per-row"></a>
+
+#### SAMPLE column (single label per row)
+
+The **`SAMPLE`** field on **MAIN** is a **single convenience label** per row, not a full description of every DESI targeting bit that may be set on that `TARGETID`. In DESI, the same target can carry multiple program bits (e.g. overlap between BGS bright/faint, or BGS and ELG). The catalog pipeline assigns one string using **survey construction rules** (stacking subsample inputs, LOWZ de-duplication against other branches before merge). When writing the combined FITS, **`combine_hdus`** enforces **one row per `TARGETID`** (first occurrence in stack order kept) and sets **`SAMPLE`** for **BGS_BRIGHT** / **BGS_FAINT** / **ELG** rows from **ZCAT** targeting bits with priority **BGS_BRIGHT** > **BGS_FAINT** > **ELG** (main survey + SV masks, same spirit as `construct_dwarf_galaxy_catalogs.py`). **LOWZ** entries stay **LOWZ**. Objects on the QSO/SCND supplement path are labeled **`OTHER`** when included (via `load_and_filter_qso_scnd_candidates` in `consolidate_photometry.py`); that branch of the pipeline is not fully finalized. **Do not** assume that `SAMPLE` exhaustively encodes multi-bit membership; use **ZCAT** bits for that.
+
+If you need **your own** sample definition (e.g. all targets with the ELG bit set regardless of this catalog’s single label), use the **ZCAT** extension: it includes **`DESI_TARGET`**, **`BGS_TARGET`**, **`MWS_TARGET`**, **`SCND_TARGET`**, and the **SV1–SV3** `*_DESI_TARGET` / `*_BGS_TARGET` / `*_MWS_TARGET` / `*_SCND_TARGET` columns, row-aligned with **MAIN** by `TARGETID`. Combine those bitmasks with `desitarget` (or your own masks) the same way you would on the spectroscopic zcatalog.
+
+---
+
 <details>
 <summary><strong>DWARF_MASKBIT Descriptions</strong></summary>
 
@@ -474,7 +482,7 @@ Each bit in `DWARF_MASKBIT` corresponds to a quality or cleaning flag. A value o
 | 9 | 512 | Source is likely shredded ($p_{\rm CNN} > 0.25$) and near bright star |
 | 10 | 1024 | Aperture center lies in masked region |
 | 11 | 2048 | No segmentation map found for source |
-| 12 | 4096 | Source within twice the D26 of an SGA-2020 galaxy at same redshift, but not flagged as SGA-2020 source in Tractor |
+| 12 | 4096 | Source within twice the D26 of a cataloged large galaxy at the same redshift, without the Tractor bright-galaxy-neighbor bit |
 | 13 | 8192 | Large reduced $\chi^2 > 10$ (at least one band) if using original Tractor photometry |
 | 14 | 16384 | Low signal-to-noise detection (SNR > 5 in only one band or fewer) |
 | 15 | 32768 | If `MAG_TYPE = TRACTOR_OG` and `TRACTOR_MASKBITS` has at least one of {2,3,4,8,9} [Tractor bits](https://www.legacysurvey.org/dr9/bitmasks/) flagged |

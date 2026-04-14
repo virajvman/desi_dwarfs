@@ -149,7 +149,14 @@ main_datamodel = {
     },
     "SAMPLE": {
         "unit": None,
-        "description": "DESI target class (BGS_BRIGHT, BGS_FAINT, LOWZ, or ELG)",
+        "description": (
+            "Single convenience label: typically BGS_BRIGHT, BGS_FAINT, LOWZ, ELG, or OTHER. "
+            "At catalog assembly (combine_hdus), duplicate TARGETIDs are collapsed to one row "
+            "(first in stack order); rows with SAMPLE in BGS_BRIGHT, BGS_FAINT, or ELG are "
+            "reassigned from ZCAT targeting bits with priority BGS_BRIGHT > BGS_FAINT > ELG "
+            "(main+SV masks). LOWZ and OTHER are unchanged. Use ZCAT bit columns for full "
+            "multi-bit membership."
+        ),
         "dtype": "str"
     },
     "DWARF_MASKBIT": {
