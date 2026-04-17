@@ -1119,9 +1119,9 @@ if __name__ == '__main__':
     from desi_lowz_funcs import match_c_to_catalog, get_stellar_mass_mia, calc_normalized_dist
     from desi_lowz_funcs import get_sweep_filename, save_table, is_target_in_south
 
-    process_sga = True
+    process_sga = False
     compute_nam_dists = True
-    save_int_catalog = False
+    save_int_catalog = True
 
     #should the photometry and stellar masses be corrected for nebular emission contamination?
     run_neb_correction = False
@@ -1601,7 +1601,7 @@ if __name__ == '__main__':
             save_table(samp_i_cat_cut, path_nebcorr, comment="")
             print_catalog_overlap_diagnostics(path_nebcorr, path_int_old)
 
-    if True:
+    if False:
         
         for i,gal_type in enumerate(gal_types):
             save_filename = save_filenames[gal_type]
