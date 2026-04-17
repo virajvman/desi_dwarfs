@@ -1945,6 +1945,11 @@ if __name__ == '__main__':
 
     # TODO: split the fastspec into two columns: one that explicity depend or are from fastspec products and then in a different extension we have DERIVED_PROPS: SFR and metallicity. And we quote the literature on halpha based sfr and issues with metallicities, but include direct metallicity as well as a column? for indirect, already have code from shredding paper ... so would be similar in spirit with the LVL catalog paper!!
                              
+
+    TODO: RENAME THE FASTSPEC EXTENSION TO SPEC_DERIVED
+    TODO: include the DESI targeting bit masks (BGS_TARGET, SV1_DESI_TARGET, SV2_DESI_TARGET, etc.)
+    TODO: in fastspec column, measure the star formation rates (both global and fiber based) and strong line metallicity from Scholte's method in sfr_and_metallicity.py
+
     process_shreds = True
     process_clean = True
     compute_mstar_err = True
@@ -2110,6 +2115,8 @@ if __name__ == '__main__':
     # columns (LOG_MSTAR_M24_ERR, MSTAR_MASKBIT, DWARF_MASKBIT bits 16 and 18, etc.)
     # are final.
     consolidate_associated_fiber_properties(main_cat_outpath)
+
+
 
 
 
