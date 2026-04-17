@@ -486,6 +486,26 @@ tractor_datamodel = {
         "dtype": "float32",
     },
 
+    "FIBERTOTFLUX_G": {
+        "unit": None,
+        "description": (
+            "Predicted g-band flux within a fiber of diameter 1.5 arcsec from all sources "
+            "at this location in 1 arcsec Gaussian seeing. Not corrected for Galactic extinction"
+        ),
+        "blank_value": np.nan,
+        "dtype": "float32",
+    },
+
+    "FIBERTOTFLUX_R": {
+        "unit": None,
+        "description": (
+            "Predicted r-band flux within a fiber of diameter 1.5 arcsec from all sources "
+            "at this location in 1 arcsec Gaussian seeing. Not corrected for Galactic extinction"
+        ),
+        "blank_value": np.nan,
+        "dtype": "float32",
+    },
+
     "MASKBITS": {
         "unit": None,
         "description": (
@@ -1455,6 +1475,38 @@ fastspec_hdu_datamodel["HALPHA_EW_IVAR"] = {
     "unit": "1 / Angstrom2",
     "description": "Inverse variance in HALPHA_EW.",
     "dtype": "float32"
+}
+fastspec_hdu_datamodel["LOG_SFR_HALPHA"] = {
+    "unit": None,
+    "description": (
+        "log10(SFR / (Msun/yr)) from Bauer et al. (2013) Eq. 2 / Kennicutt & Evans (2012) Halpha calibration "
+        "(Chabrier IMF, see calc_SFR_Halpha). Global aperture-corrected SFR using MAIN MAG_R and "
+        "LUMI_DIST_MPC (distance modulus), per-row fiber HALPHA_EW from SPEC_DERIVED."
+    ),
+    "dtype": "float64"
+}
+fastspec_hdu_datamodel["LOG_SFR_HALPHA_ERR"] = {
+    "unit": None,
+    "description": (
+        "1-sigma uncertainty on LOG_SFR_HALPHA in dex, from first-order error propagation in calc_SFR_Halpha. "
+        "With zero assumed errors on redshift, absolute r magnitude, and BD, this reflects Halpha EW uncertainty only "
+        "(HALPHA_EW_IVAR)."
+    ),
+    "dtype": "float64"
+}
+fastspec_hdu_datamodel["LOG_MSTAR_24_FIBER"] = {
+    "unit": None,
+    "description": (
+        "log10(Mstar / Msun) in the fiber aperture only"
+    ),
+    "dtype": "float32",
+}
+fastspec_hdu_datamodel["LOG_HALPHA_SFR_FIBER"] = {
+    "unit": None,
+    "description": (
+        "log10(SFR / (Msun/yr)) in the fiber aperture only"
+    ),
+    "dtype": "float64",
 }
 
 fastspec_hdu_datamodel["FLUX_SYNTH_G"] = {

@@ -4,6 +4,7 @@ import numpy as np
 from tqdm import tqdm
 from nnmf_pca_analysis.nnmf_analysis import deredshift_resample_desi_spectra
 from desi_lowz_funcs import print_stage, check_path_existence
+from mass_and_photo_corrections import DWARF_CATALOG_SPEC_HDU
 import matplotlib.pyplot as plt
 
 ##deredshifting functions
@@ -60,7 +61,7 @@ def load_catalog(filename="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/d
 
     tractor_cat = Table.read(filename, hdu="TRACTOR")
     
-    fspec_cat = Table.read(filename, hdu="FASTSPEC")
+    fspec_cat = Table.read(filename, hdu=DWARF_CATALOG_SPEC_HDU)
 
     print(f"Total catalog size = {len(tot_cat)}")
 

@@ -28,6 +28,7 @@ import h5py
 import cmasher as cmr
 from astropy.cosmology import Planck18
 from desi_lowz_funcs import print_stage
+from mass_and_photo_corrections import DWARF_CATALOG_SPEC_HDU
 from sklearn.preprocessing import StandardScaler
 
 mpl.rcParams['font.family'] = 'serif'
@@ -151,7 +152,7 @@ if __name__ == '__main__':
 
     # load the MAIN extension directly as an Astropy Table
     data_cat = Table.read(filename, hdu="MAIN")
-    fspec_cat = Table.read(filename, hdu="FASTSPEC")
+    fspec_cat = Table.read(filename, hdu=DWARF_CATALOG_SPEC_HDU)
     spec_temp_cat = Table.read(filename, hdu="SPECTRA_TEMPLATE")
 
     keep_mask = spec_temp_cat["SPEC_UMAP_0"] > -50

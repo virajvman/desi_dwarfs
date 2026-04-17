@@ -1317,7 +1317,7 @@ def read_vac_line_info(gal_cat,columns,which_vac = "SPECPHOT",coord_name = "", s
     gal_cat is the catalog we want to match
     columns is the list of columns we will be reading, appending and then returning 
 
-    The which_vac points to what extension to read: FASTSPEC, SPECPHOT are the main ones of interest
+    The which_vac points to what extension to read from the iron fastspec VAC: FASTSPEC, SPECPHOT are the main ones of interest (the dwarf multi-extension catalog uses SPEC_DERIVED for matched fastspec columns).
     '''
     #VAC data upload
     iron_vac = fits.open("/global/cfs/cdirs/desi/public/dr1/vac/dr1/fastspecfit/iron/v3.0/catalogs/fastspec-iron.fits")

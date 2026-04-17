@@ -3,7 +3,7 @@
 
 **Contact:** Viraj Manwadkar ([virajvm@stanford.edu](mailto:virajvm@stanford.edu))
 
-The DESI Extragalactic Dwarf Galaxy Catalog provides spectroscopically confirmed dwarf galaxies from the Dark Energy Spectroscopic Instrument (DESI) Data Release 1. The catalog includes reprocessed photometry, spectral measurements, and value-added properties for low-mass galaxies with $\log(M_\star / M_\odot) < 9.25$. The catalog is stored as a multi-extension FITS file with seven extensions: **MAIN**, **ZCAT**, **TRACTOR**, **FASTSPEC**, **REPROCESS_PHOTO**, **SPECTRA_TEMPLATE**, and **IMG_SSL**.
+The DESI Extragalactic Dwarf Galaxy Catalog provides spectroscopically confirmed dwarf galaxies from the Dark Energy Spectroscopic Instrument (DESI) Data Release 1. The catalog includes reprocessed photometry, spectral measurements, and value-added properties for low-mass galaxies with $\log(M_\star / M_\odot) < 9.25$. The catalog is stored as a multi-extension FITS file with seven extensions: **MAIN**, **ZCAT**, **TRACTOR**, **SPEC_DERIVED**, **REPROCESS_PHOTO**, **SPECTRA_TEMPLATE**, and **IMG_SSL**.
 
 <p align="center">
   <img src="figs/dwarf_example_panel.jpg" width="90%" alt="Example dwarf galaxies from the DESI catalog">
@@ -149,6 +149,8 @@ Original Tractor photometry and morphological parameters from the DESI Legacy Su
 | `BRICK_OBJID` | int32 | | Catalog object number within this brick. Unique when combined with `RELEASE` and `BRICKID` |
 | `EBV` | float32 | mag | Galactic extinction E(B-V) reddening from SFD98 |
 | `FIBERFLUX_R` | float32 | nanomaggy | Predicted *r*-band flux within a 1.5 arcsec diameter fiber under 1 arcsec Gaussian seeing (not extinction corrected) |
+| `FIBERTOTFLUX_G` | float32 | nanomaggy | Total *g*-band flux in the DESI fiber aperture (Tractor; **not** Milky Way extinction corrected). Filled from stacked `_INT_V2.fits` subsample tables via sky match to `RA_TARGET`/`DEC_TARGET` with `TARGETID` agreement within 1 arcsec; NaN if no match |
+| `FIBERTOTFLUX_R` | float32 | nanomaggy | Total *r*-band flux in the DESI fiber aperture (Tractor; **not** Milky Way extinction corrected). Same provenance as `FIBERTOTFLUX_G` |
 | `MASKBITS` | int16 | | Tractor bitwise mask from coadd maskbits maps ([DR9 bitmasks](https://www.legacysurvey.org/dr9/bitmasks/)) |
 | `REF_ID` | int64 | | Reference catalog source ID (Tycho-2 or Gaia DR2) |
 | `REF_CAT` | str | | Reference catalog: `T2` (Tycho-2), `G2` (Gaia DR2), `L3` (large-galaxy imaging reference), or empty |
@@ -197,7 +199,7 @@ Original Tractor photometry and morphological parameters from the DESI Legacy Su
 ---
 
 <details>
-<summary><strong>Extension 4 &mdash; FASTSPEC</strong></summary>
+<summary><strong>Extension 4 &mdash; SPEC_DERIVED</strong></summary>
 
 <br>
 
@@ -263,6 +265,8 @@ Spectral measurements from FastSpecFit: spectral indices, emission-line fluxes, 
 | `HALPHA_BOXFLUX_IVAR` | float32 | 1e+34 cm⁴ s²/erg² | Inverse variance of `HALPHA_BOXFLUX` |
 | `HALPHA_EW` | float32 | Angstrom | Rest-frame equivalent width of H-alpha |
 | `HALPHA_EW_IVAR` | float32 | 1/Angstrom² | Inverse variance of `HALPHA_EW` |
+| `LOG_MSTAR_24_FIBER` | float32 | $\log(M_\odot)$ | Stellar mass in the DESI fiber aperture from Tractor `FIBERTOTFLUX_*` (MAIN), MW extinction corrected, then the SPEC_DERIVED `DELTA_MAG_*` sum (same chain as primary masses) when `MAG_G_FIBER_NOEMI_ERR` and `MAG_R_FIBER_NOEMI_ERR` imply continuum SNR $\geq 10$; otherwise `get_stellar_mass_mia` on those fiber mags with `Z_CMB` and no delta mags. Uses `LUMI_DIST_MPC` |
+| `LOG_HALPHA_SFR_FIBER` | float64 | | log10(SFR / (M$_\odot$/yr)) from the Bauer+13 / Kennicutt prescription (`calc_SFR_Halpha`) using fiber `HALPHA_EW` and the *r*-band magnitude consistent with the `LOG_MSTAR_24_FIBER` photometry path; error not stored |
 | `FLUX_SYNTH_G` | float32 | nanomaggy | *g*-band flux (in the PHOTSYS photometric system) synthesized from the observed spectrum |
 | `FLUX_SYNTH_R` | float32 | nanomaggy | Like `FLUX_SYNTH_G` but for the *r*-band |
 | `FLUX_SYNTH_Z` | float32 | nanomaggy | Like `FLUX_SYNTH_G` but for the *z*-band |
@@ -455,7 +459,7 @@ Example code demonstrating how to read the HDF5 file and visualize the spectra i
 
 The **`SAMPLE`** field on **MAIN** is a **single convenience label** per row, not a full description of every DESI targeting bit that may be set on that `TARGETID`. In DESI, the same target can carry multiple program bits (e.g. overlap between BGS bright/faint, or BGS and ELG). The catalog pipeline assigns one string using **survey construction rules** (stacking subsample inputs, LOWZ de-duplication against other branches before merge). When writing the combined FITS, **`combine_hdus`** enforces **one row per `TARGETID`** (first occurrence in stack order kept) and sets **`SAMPLE`** for **BGS_BRIGHT** / **BGS_FAINT** / **ELG** rows from **ZCAT** targeting bits with priority **BGS_BRIGHT** > **BGS_FAINT** > **ELG** (main survey + SV masks, same spirit as `construct_dwarf_galaxy_catalogs.py`). **LOWZ** entries stay **LOWZ**. Objects on the QSO/SCND supplement path are labeled **`OTHER`** when included (via `load_and_filter_qso_scnd_candidates` in `consolidate_photometry.py`); that branch of the pipeline is not fully finalized. **Do not** assume that `SAMPLE` exhaustively encodes multi-bit membership; use **ZCAT** bits for that.
 
-If you need **your own** sample definition (e.g. all targets with the ELG bit set regardless of this catalog’s single label), use the **ZCAT** extension: it includes **`DESI_TARGET`**, **`BGS_TARGET`**, **`MWS_TARGET`**, **`SCND_TARGET`**, and the **SV1–SV3** `*_DESI_TARGET` / `*_BGS_TARGET` / `*_MWS_TARGET` / `*_SCND_TARGET` columns, row-aligned with **MAIN** by `TARGETID`. Combine those bitmasks with `desitarget` (or your own masks) the same way you would on the spectroscopic zcatalog.
+If you need **your own** sample definition (e.g. all targets with the ELG bit set regardless of this catalog’s single label), use the **ZCAT** extension: it includes **`DESI_TARGET`**, **`BGS_TARGET`**, **`MWS_TARGET`**, **`SCND_TARGET`**, and the **SV1–SV3** `*_DESI_TARGET` / `*_BGS_TARGET` / `*_MWS_TARGET` / `*_SCND_TARGET` columns, row-aligned with **MAIN** by `TARGETID`. Combine those bitmasks with `desitarget` (or your own masks) the same way you would on the spectroscopic zcatalog. For **custom DESI sample selection**, treat these **ZCAT** columns as the authoritative TARGET bitmasks on each row (same as zcatalog usage).
 
 ---
 

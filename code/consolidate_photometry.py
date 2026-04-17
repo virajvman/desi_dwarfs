@@ -38,6 +38,8 @@ from construct_dwarf_galaxy_catalogs import (
 from get_associated_fibers import find_associated_tgids, get_dwarf_primary
 from consolidate_associated_fibers import symmetrize_and_group_associated_tgids, consolidate_associated_fiber_properties
 
+from sfr_and_metallicity import add_sfr_halpha_to_spec_derived
+
 from mass_and_photo_corrections import (
     make_catalog_unmasked,
     safe_read_table,
@@ -50,7 +52,9 @@ from mass_and_photo_corrections import (
     compute_emission_subtracted_photo_errors,
     NEBCORR_DEFAULT_FOLDER,
     NEBCORR_INT_V2_BASENAMES,
+    INT_V2_BASENAMES,
     FASTSPEC_DELTA_MAG_COLS,
+    DWARF_CATALOG_SPEC_HDU,
 )
 
 
@@ -788,10 +792,13 @@ def create_tractor_data_model(catalog,save_name):
     '''
 
     print("Selecting the subset of columns for TRACTOR extension")
-    tractor_tab = catalog[[col for col in tractor_datamodel.keys()]]
+    _fibertot_cols = ("FIBERTOTFLUX_G", "FIBERTOTFLUX_R")
+    _subset_cols = [c for c in tractor_datamodel.keys() if c not in _fibertot_cols]
+    tractor_tab = catalog[_subset_cols]
 
     ##add the fiber fluxes for the LOWZ subset
     tractor_tab = add_lowz_fiberflux(tractor_tab, catalog)
+    tractor_tab = add_fibertotflux_from_int_v2(tractor_tab, catalog)
 
     # 2. Add metadata from tractor_datamodel
     for col in tractor_tab.colnames:
@@ -1303,6 +1310,97 @@ def _targetid_dedup_keep_indices(targetids):
     return np.sort(first_idx)
 
 
+FIBERTOT_MATCH_RADIUS_ARCSEC = 1.0
+_int_v2_stack_for_fibertot_cache = {"key": None, "table": None}
+
+
+def _int_v2_fibertot_cache_key(folder):
+    paths = [os.path.join(folder, b) for b in INT_V2_BASENAMES]
+    return tuple(
+        (p, os.path.getmtime(p) if os.path.isfile(p) else None) for p in paths
+    )
+
+
+def load_stacked_int_v2_for_fibertot(folder=None):
+    """Stack the four subsample _INT_V2.fits tables; dedupe TARGETID (first wins)."""
+    if folder is None:
+        folder = NEBCORR_DEFAULT_FOLDER
+    chunks = []
+    required_cols = ("TARGETID", "RA", "DEC", "FIBERTOTFLUX_G", "FIBERTOTFLUX_R")
+    for basename in INT_V2_BASENAMES:
+        path = os.path.join(folder, basename)
+        if not os.path.isfile(path):
+            raise FileNotFoundError(
+                f"INT_V2 catalog not found (required for TRACTOR FIBERTOTFLUX): {path}"
+            )
+        tab = safe_read_table(path)
+        missing = [c for c in required_cols if c not in tab.colnames]
+        if missing:
+            raise ValueError(f"{path} missing columns {missing}")
+        chunks.append(tab[list(required_cols)])
+    stacked = vstack(chunks)
+    keep = _targetid_dedup_keep_indices(stacked["TARGETID"])
+    stacked = stacked[keep]
+    return stacked
+
+
+def _get_cached_stacked_int_v2_for_fibertot(folder=None):
+    if folder is None:
+        folder = NEBCORR_DEFAULT_FOLDER
+    key = _int_v2_fibertot_cache_key(folder)
+    if _int_v2_stack_for_fibertot_cache["key"] == key:
+        return _int_v2_stack_for_fibertot_cache["table"]
+    tab = load_stacked_int_v2_for_fibertot(folder=folder)
+    _int_v2_stack_for_fibertot_cache["key"] = key
+    _int_v2_stack_for_fibertot_cache["table"] = tab
+    return tab
+
+
+def add_fibertotflux_from_int_v2(tractor_tab, tot_cat, int_v2_folder=None):
+    """
+    Fill FIBERTOTFLUX_G and FIBERTOTFLUX_R by matching to stacked _INT_V2.fits
+    catalogs (sky match + TARGETID agreement within FIBERTOT_MATCH_RADIUS_ARCSEC).
+    """
+    if len(tractor_tab) != len(tot_cat):
+        raise ValueError("Incorrect lengths for tractor_tab and tot_cat tables!")
+
+    int_v2_ref = _get_cached_stacked_int_v2_for_fibertot(folder=int_v2_folder)
+    idx, d2d, _ = match_c_to_catalog(
+        c_cat=tot_cat,
+        catalog_cat=int_v2_ref,
+        c_ra="RA_TARGET",
+        c_dec="DEC_TARGET",
+        catalog_ra="RA",
+        catalog_dec="DEC",
+    )
+    close = d2d.arcsec < FIBERTOT_MATCH_RADIUS_ARCSEC
+    ref_tid = np.asarray(int_v2_ref["TARGETID"].data)[idx]
+    cat_tid = np.asarray(tot_cat["TARGETID"].data)
+    mismatch = close & (ref_tid != cat_tid)
+    if np.any(mismatch):
+        i = int(np.flatnonzero(mismatch)[0])
+        raise ValueError(
+            "FIBERTOT INT_V2 cross-match: TARGETID mismatch for a close sky match "
+            f"(row {i}: catalog TARGETID {cat_tid[i]} vs INT_V2 TARGETID {ref_tid[i]}, "
+            f"d2d={d2d[i].arcsec:.4f} arcsec)"
+        )
+
+    g = np.full(len(tractor_tab), np.nan, dtype=np.float32)
+    r = np.full(len(tractor_tab), np.nan, dtype=np.float32)
+    if np.any(close):
+        g[close] = np.asarray(int_v2_ref["FIBERTOTFLUX_G"].data[idx[close]], dtype=np.float32)
+        r[close] = np.asarray(int_v2_ref["FIBERTOTFLUX_R"].data[idx[close]], dtype=np.float32)
+
+    tractor_tab["FIBERTOTFLUX_G"] = g
+    tractor_tab["FIBERTOTFLUX_R"] = r
+    n_close = int(np.sum(close))
+    print(
+        f"FIBERTOTFLUX from INT_V2: matched {n_close}/{len(tractor_tab)} within "
+        f"{FIBERTOT_MATCH_RADIUS_ARCSEC} arcsec"
+    )
+    return tractor_tab
+
+
 def combine_hdus(hdu_list, base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats",
                  output_file="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dwarfs_combined.fits",
                  extra_prefixes=None):
@@ -1310,7 +1408,7 @@ def combine_hdus(hdu_list, base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs
     Combine multiple HDUs (Astropy tables) into a single multi-extension FITS file.
 
     After stacking clean + shreds (+ optional extras) with identical row order for
-    MAIN, ZCAT, TRACTOR, and FASTSPEC, this function (1) reassigns MAIN ``SAMPLE``
+    MAIN, ZCAT, TRACTOR, and SPEC_DERIVED, this function (1) reassigns MAIN ``SAMPLE``
     from ZCAT targeting bits with priority BGS_BRIGHT > BGS_FAINT > ELG for rows
     whose SAMPLE is BGS_BRIGHT, BGS_FAINT, or ELG; (2) deduplicates on TARGETID (first row
     kept); (3) runs ``finalize_main_hdu`` on MAIN. LOWZ and OTHER are not relabeled.
@@ -1733,7 +1831,7 @@ def add_wrong_redrock_maskbit(cat_path, main_datamodel, bit=16):
 
     # --- Read relevant tables ---
     main_cat = safe_read_table(cat_path, hdu="MAIN")
-    fspec_cat = safe_read_table(cat_path, hdu="FASTSPEC")
+    fspec_cat = safe_read_table(cat_path, hdu=DWARF_CATALOG_SPEC_HDU)
     spec_cat = safe_read_table(cat_path, hdu="SPECTRA_TEMPLATE")
 
     # --- Identify weird/redshift-mismatch objects ---
@@ -1799,10 +1897,10 @@ def add_model_photometry_to_fastspec(
     """
     Read pre-computed fastspec model photometry from
     model_photometry_diffs_{gal_type}.fits files, cross-match by TARGETID,
-    and append 10 model-magnitude columns to the FASTSPEC HDU of the
+    and append 10 model-magnitude columns to the SPEC_DERIVED HDU of the
     multi-extension catalog at *cat_path*.
 
-    New FASTSPEC columns:
+    New SPEC_DERIVED columns:
         MAG_{G,R}_DECAM_MODEL_NOEMI   - DECam model mags, continuum only
         MAG_{G,R}_DECAM_MODEL_WEMI    - DECam model mags, continuum + emission
         MAG_{G,R}_BASS_MODEL_WEMI     - BASS  model mags, continuum + emission
@@ -1810,7 +1908,7 @@ def add_model_photometry_to_fastspec(
         MAG_{G,R}_SDSS_Z0_MODEL_NOEMI - SDSS  z=0 rest-frame model mags, continuum only
     """
     print("=" * 60)
-    print("Adding fastspec model photometry columns to FASTSPEC HDU")
+    print("Adding fastspec model photometry columns to SPEC_DERIVED HDU")
     print("=" * 60)
 
     _COL_MAP = {
@@ -1850,13 +1948,13 @@ def add_model_photometry_to_fastspec(
     if verbose:
         print(f"  Combined model photometry table: {len(model_phot)} unique TARGETIDs")
 
-    # ── 2. Read FASTSPEC HDU from the catalog ──────────────────────────
-    fspec_cat = safe_read_table(cat_path, hdu="FASTSPEC")
+    # ── 2. Read SPEC_DERIVED HDU from the catalog ──────────────────────────
+    fspec_cat = safe_read_table(cat_path, hdu=DWARF_CATALOG_SPEC_HDU)
     n_objects = len(fspec_cat)
     cat_tids = np.asarray(fspec_cat["TARGETID"])
 
     if verbose:
-        print(f"  FASTSPEC HDU has {n_objects} rows")
+        print(f"  SPEC_DERIVED HDU has {n_objects} rows")
 
     # ── 3. Build TARGETID lookup and fill columns ──────────────────────
     model_tid_to_row = {int(t): i for i, t in enumerate(model_phot["TARGETID"])}
@@ -1874,13 +1972,13 @@ def add_model_photometry_to_fastspec(
     if verbose:
         print(f"  Matched {n_matched}/{n_objects} objects to model photometry")
 
-    # ── 4. Rewrite catalog (FASTSPEC only) ─────────────────────────────
+    # ── 4. Rewrite catalog (SPEC_DERIVED only) ─────────────────────────────
     # Same as compute_emission_subtracted_photo_errors: mode="update" after
     # resizing an extension breaks verify on the following HDU (here el. 5).
     # MAIN must use table_to_hdu (not hdu.copy()) so VLAs e.g. ASSOCIATED_TARGETIDS
     # do not hit "Could not find heap data" on copy.
     fspec_hdu_new = fits.table_to_hdu(fspec_cat)
-    fspec_hdu_new.name = "FASTSPEC"
+    fspec_hdu_new.name = DWARF_CATALOG_SPEC_HDU
     fspec_hdu_new.add_checksum()
 
     cat_abs = os.path.abspath(cat_path)
@@ -1893,7 +1991,7 @@ def add_model_photometry_to_fastspec(
         with fits.open(cat_abs, memmap=False) as hdul:
             hdu_names = [hdu.name for hdu in hdul]
             main_idx = hdu_names.index("MAIN")
-            fspec_idx = hdu_names.index("FASTSPEC")
+            fspec_idx = hdu_names.index(DWARF_CATALOG_SPEC_HDU)
             main_tab = safe_read_table(cat_abs, hdu="MAIN")
             main_hdu_preserved = fits.table_to_hdu(main_tab)
             main_hdu_preserved.name = "MAIN"
@@ -1920,7 +2018,7 @@ def add_model_photometry_to_fastspec(
 
     new_cols_str = ", ".join(_COL_MAP.values())
     print(f"Updated {cat_path}:")
-    print(f"  FASTSPEC HDU: added {new_cols_str}")
+    print(f"  SPEC_DERIVED HDU: added {new_cols_str}")
     print("=" * 60)
 
 
@@ -1942,13 +2040,10 @@ if __name__ == '__main__':
     # iii) flagging large k correction or large difference between g and r template corrections, as that will point to something suspicious ...
 
     # then describe how much of a difference in stellar mass between doing the proper transformations, vs. no transofmraitons and using C10 for k correcitons for galaxies where we trust the corrections, this can give us a sense of error and we can add that in quadrature to the error!
-
-    # TODO: split the fastspec into two columns: one that explicity depend or are from fastspec products and then in a different extension we have DERIVED_PROPS: SFR and metallicity. And we quote the literature on halpha based sfr and issues with metallicities, but include direct metallicity as well as a column? for indirect, already have code from shredding paper ... so would be similar in spirit with the LVL catalog paper!!
-                             
-
-    TODO: RENAME THE FASTSPEC EXTENSION TO SPEC_DERIVED
-    TODO: include the DESI targeting bit masks (BGS_TARGET, SV1_DESI_TARGET, SV2_DESI_TARGET, etc.)
-    TODO: in fastspec column, measure the star formation rates (both global and fiber based) and strong line metallicity from Scholte's method in sfr_and_metallicity.py
+                 
+    TODO: add metallicity column! using Scholte's method in sfr_and_metallicity.py. 
+    TODO: Compute in error from tractor in sfr. Confirm that mstar contain mag_g/r error as well?
+    TODO: update the image cutouts download function to selectively update the cutouts for dwarfs that do not exist in the catalog. 
 
     process_shreds = True
     process_clean = True
@@ -2044,7 +2139,7 @@ if __name__ == '__main__':
         ##get the fastspecfit hdu
         if process_fastspec:
             print("Creating the shred fastspecfit hdu")
-            get_fastspec_matched_catalog(tot_shred, save_path + "/shreds_FASTSPEC_hdu.fits", match_method="TARGETID")
+            get_fastspec_matched_catalog(tot_shred, save_path + "/shreds_SPEC_DERIVED_hdu.fits", match_method="TARGETID")
             
         ##get the other hdus
 
@@ -2068,7 +2163,7 @@ if __name__ == '__main__':
         ##get the fastspecfit hdu
         if process_fastspec:
             print("Creating the clean fastspecfit hdu")
-            get_fastspec_matched_catalog(clean_cat, save_path + "/clean_FASTSPEC_hdu.fits", match_method="TARGETID")
+            get_fastspec_matched_catalog(clean_cat, save_path + "/clean_SPEC_DERIVED_hdu.fits", match_method="TARGETID")
 
     if process_qso_scnd:
         qso_scnd_input = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/hidden_dwarf_candidates_qso_mws_scnd.fits"
@@ -2084,11 +2179,11 @@ if __name__ == '__main__':
 
         if process_fastspec:
             print("Creating the QSO/SCND fastspecfit hdu")
-            get_fastspec_matched_catalog(qso_scnd_cat, save_path + "/qso_scnd_FASTSPEC_hdu.fits", match_method="TARGETID")
+            get_fastspec_matched_catalog(qso_scnd_cat, save_path + "/qso_scnd_SPEC_DERIVED_hdu.fits", match_method="TARGETID")
 
     #then we consolidate it all into a multi-ext file!
     #make sure the REPROCESS_PHOTO_CAT is also last in the below list!
-    combine_hdus(["MAIN", "ZCAT", "TRACTOR", "FASTSPEC","REPROCESS_PHOTO"],
+    combine_hdus(["MAIN", "ZCAT", "TRACTOR", DWARF_CATALOG_SPEC_HDU, "REPROCESS_PHOTO"],
                  base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats",
                  output_file=main_cat_outpath,
                  extra_prefixes=["qso_scnd"] if process_qso_scnd else [])
@@ -2115,6 +2210,10 @@ if __name__ == '__main__':
     # columns (LOG_MSTAR_M24_ERR, MSTAR_MASKBIT, DWARF_MASKBIT bits 16 and 18, etc.)
     # are final.
     consolidate_associated_fiber_properties(main_cat_outpath)
+
+    add_sfr_halpha_to_spec_derived(main_cat_outpath)
+
+    #TODO: add error from Mr to sfr error budget as well! We have error for the not-shredded sources, so need to fold that in.
 
 
 

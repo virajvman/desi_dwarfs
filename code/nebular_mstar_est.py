@@ -10,6 +10,8 @@ import h5py
 from astropy.table import Table, hstack
 from astropy.io import fits
 
+from mass_and_photo_corrections import DWARF_CATALOG_SPEC_HDU
+
 
 def load_spectra(h5_file):
     """Load de-redshifted spectra from HDF5 file."""
@@ -103,7 +105,7 @@ N_BINS = 30
 def load_bgs_bright_catalog(catalog_path=CATALOG_PATH):
     """Load the dwarf catalog and select clean BGS_BRIGHT galaxies with HALPHA_EW."""
     main_cat = Table.read(catalog_path, hdu="MAIN")
-    fspec_cat = Table.read(catalog_path, hdu="FASTSPEC")
+    fspec_cat = Table.read(catalog_path, hdu=DWARF_CATALOG_SPEC_HDU)
 
     mask = (
         (main_cat["SAMPLE"] == "BGS_BRIGHT") &

@@ -1,6 +1,17 @@
+import os
+import tempfile
+
 import numpy as np
+import astropy.io.fits as fits
 from astropy.cosmology import Planck18
 from desispec.interpolation import resample_flux
+
+from mass_and_photo_corrections import (
+    DWARF_CATALOG_SPEC_HDU,
+    FASTSPEC_DELTA_MAG_COLS,
+    safe_read_table,
+)
+from desi_lowz_funcs import get_stellar_mass_mia
 
 def line_snr_mask(fastspec_cat, line_names=["HALPHA"], snr_val=3):
     """
@@ -500,7 +511,7 @@ def calc_SFR_Halpha(
     L_Halpha = term1 * term2 * term3  # [W]
 
     # Kennicutt & Evans 2012, Kroupa-native, optionally rescaled to another IMF
-    SFR = L_Halpha * imf_factor / _KENNICUTT_EVANS_12_HA_W
+    SFR = L_Halpha * imf_factor / _KENNICUTT_EVANS_12_HA_W_CHABRIER
 
     with np.errstate(divide="ignore", invalid="ignore"):
         log_SFR = np.log10(SFR)
@@ -562,6 +573,228 @@ def get_halpha_sfrs(cat, halpha_ew, halpha_ew_ivar):
         Mr_err=zeros,
     )
     return log_halpha_sfr
+
+
+def _fiber_tot_mw_mags(flux_g, flux_r, mw_g, mw_r):
+    """Apparent AB mags from Tractor FIBERTOTFLUX and MW transmission (nanomaggy)."""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        fg = np.asarray(flux_g, dtype=np.float64) / np.asarray(mw_g, dtype=np.float64)
+        fr = np.asarray(flux_r, dtype=np.float64) / np.asarray(mw_r, dtype=np.float64)
+    mag_g = np.where(np.isfinite(fg) & (fg > 0), 22.5 - 2.5 * np.log10(fg), np.nan)
+    mag_r = np.where(np.isfinite(fr) & (fr > 0), 22.5 - 2.5 * np.log10(fr), np.nan)
+    return mag_g, mag_r
+
+
+def _spec_derived_delta_corrected_mags(fspec_cat, mag_g_fib, mag_r_fib, low_snr):
+    """
+    Sum SPEC_DERIVED DELTA_MAG_* onto fiber mags (BASS2DECAM already north-masked
+    when columns were written). Rows with low_snr or non-finite deltas are NaN.
+    """
+    n = len(fspec_cat)
+    mag_g_corr = np.full(n, np.nan, dtype=np.float64)
+    mag_r_corr = np.full(n, np.nan, dtype=np.float64)
+    for c in FASTSPEC_DELTA_MAG_COLS:
+        if c not in fspec_cat.colnames:
+            return mag_g_corr, mag_r_corr
+    stacks = np.column_stack(
+        [np.asarray(fspec_cat[c].data, dtype=np.float64) for c in FASTSPEC_DELTA_MAG_COLS]
+    )
+    all_finite = np.all(np.isfinite(stacks), axis=1)
+    g_sum = stacks[:, 0] + stacks[:, 2] + stacks[:, 4] + stacks[:, 6]
+    r_sum = stacks[:, 1] + stacks[:, 3] + stacks[:, 5] + stacks[:, 7]
+    ok = (~low_snr) & all_finite
+    mag_g_corr[ok] = mag_g_fib[ok] + g_sum[ok]
+    mag_r_corr[ok] = mag_r_fib[ok] + r_sum[ok]
+    return mag_g_corr, mag_r_corr
+
+
+def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
+    """
+    Append LOG_SFR_HALPHA, LOG_SFR_HALPHA_ERR, LOG_MSTAR_24_FIBER, and
+    LOG_HALPHA_SFR_FIBER to the SPEC_DERIVED HDU.
+
+    Must run after consolidate_associated_fiber_properties so MAIN MAG_R and
+    LUMI_DIST_MPC are group-consolidated; HALPHA_EW(_IVAR) remain per-fiber from
+    SPEC_DERIVED. TARGETID order must match between MAIN and SPEC_DERIVED.
+
+    Fiber mass and SFR use per-target FIBERTOTFLUX (MAIN), MW-corrected to
+    apparent mags, then either summed SPEC_DERIVED DELTA_MAG_* (continuum SNR
+    >= 10 in MAG_*_FIBER_NOEMI_ERR) or get_stellar_mass_mia fallback with Z_CMB.
+    """
+    if verbose:
+        print("=" * 60)
+        print("Adding LOG_SFR_HALPHA and fiber Mstar/SFR columns to SPEC_DERIVED HDU")
+        print("=" * 60)
+
+    main_cat = safe_read_table(cat_path, hdu="MAIN")
+    fspec_cat = safe_read_table(cat_path, hdu=DWARF_CATALOG_SPEC_HDU)
+    n_main = len(main_cat)
+    n_fspec = len(fspec_cat)
+    if n_main != n_fspec:
+        raise ValueError(
+            f"MAIN ({n_main} rows) and {DWARF_CATALOG_SPEC_HDU} ({n_fspec} rows) length mismatch"
+        )
+    tid_main = np.asarray(main_cat["TARGETID"])
+    tid_fspec = np.asarray(fspec_cat["TARGETID"])
+    if not np.all(tid_main == tid_fspec):
+        raise ValueError(
+            f"TARGETID mismatch between MAIN and {DWARF_CATALOG_SPEC_HDU}"
+        )
+
+    z = np.asarray(main_cat["Z"].data, dtype=float)
+    mag_r = np.asarray(main_cat["MAG_R"].data, dtype=float)
+    lumi_dist = np.asarray(main_cat["LUMI_DIST_MPC"].data, dtype=float)
+    absm_r = mag_r + 5.0 - 5.0 * np.log10(1e6 * lumi_dist)
+
+    halpha_ew = np.asarray(fspec_cat["HALPHA_EW"].data, dtype=float)
+    halpha_ew_ivar = np.asarray(fspec_cat["HALPHA_EW_IVAR"].data, dtype=float)
+
+    zeros = np.zeros_like(z, dtype=float)
+    log_sfr, log_sfr_err = calc_SFR_Halpha(
+        EW_Halpha=halpha_ew,
+        EW_Halpha_ivar=halpha_ew_ivar,
+        spec_z=z,
+        spec_z_err=zeros,
+        Mr=absm_r,
+        Mr_err=zeros,
+        EWc=0.0,
+        BD=3.25,
+        BD_err=0.0,
+        imf_factor=1.0,
+    )
+    fspec_cat["LOG_SFR_HALPHA"] = log_sfr
+    fspec_cat["LOG_SFR_HALPHA_ERR"] = log_sfr_err
+
+    # --- Fiber-aperture stellar mass and Halpha SFR (per plan) ---
+    required_main = (
+        "FIBERTOTFLUX_G",
+        "FIBERTOTFLUX_R",
+        "MW_TRANSMISSION_G",
+        "MW_TRANSMISSION_R",
+        "Z_CMB",
+    )
+    missing_main = [c for c in required_main if c not in main_cat.colnames]
+    if missing_main:
+        raise ValueError(
+            f"add_sfr_halpha_to_spec_derived: MAIN missing columns {missing_main} "
+            "needed for LOG_MSTAR_24_FIBER / LOG_HALPHA_SFR_FIBER"
+        )
+
+    mag_g_fib, mag_r_fib = _fiber_tot_mw_mags(
+        main_cat["FIBERTOTFLUX_G"].data,
+        main_cat["FIBERTOTFLUX_R"].data,
+        main_cat["MW_TRANSMISSION_G"].data,
+        main_cat["MW_TRANSMISSION_R"].data,
+    )
+    z_cmb = np.asarray(main_cat["Z_CMB"].data, dtype=float)
+
+    mag_err_limit = 1.0857 / 10.0
+    if (
+        "MAG_G_FIBER_NOEMI_ERR" in fspec_cat.colnames
+        and "MAG_R_FIBER_NOEMI_ERR" in fspec_cat.colnames
+    ):
+        g_err = np.asarray(fspec_cat["MAG_G_FIBER_NOEMI_ERR"].data, dtype=float)
+        r_err = np.asarray(fspec_cat["MAG_R_FIBER_NOEMI_ERR"].data, dtype=float)
+        low_snr = (
+            ~np.isfinite(g_err)
+            | ~np.isfinite(r_err)
+            | (g_err >= mag_err_limit)
+            | (r_err >= mag_err_limit)
+        )
+    else:
+        low_snr = np.ones(n_fspec, dtype=bool)
+        if verbose:
+            print(
+                "  WARNING: MAG_G_FIBER_NOEMI_ERR / MAG_R_FIBER_NOEMI_ERR missing; "
+                "all rows use low-SNR fallback (no DELTA_MAG) for fiber mass/SFR."
+            )
+
+    mag_g_corr, mag_r_corr = _spec_derived_delta_corrected_mags(
+        fspec_cat, mag_g_fib, mag_r_fib, low_snr
+    )
+
+    z_zero = np.zeros(n_fspec, dtype=float)
+    log_m_hi = get_stellar_mass_mia(
+        mag_g_corr - mag_r_corr,
+        mag_g_corr,
+        z_zero,
+        d_in_mpc=lumi_dist,
+        input_zred=False,
+    )
+    log_m_lo = get_stellar_mass_mia(
+        mag_g_fib - mag_r_fib,
+        mag_g_fib,
+        z_cmb,
+        d_in_mpc=lumi_dist,
+        input_zred=False,
+    )
+    log_m_hi = np.asarray(log_m_hi, dtype=np.float64)
+    log_m_lo = np.asarray(log_m_lo, dtype=np.float64)
+    log_mstar_fiber = np.where(low_snr, log_m_lo, log_m_hi).astype(np.float32)
+
+    mag_r_sfr = np.where(low_snr, mag_r_fib, mag_r_corr)
+    absm_r_fiber = mag_r_sfr + 5.0 - 5.0 * np.log10(1e6 * lumi_dist)
+    log_sfr_fiber, _ = calc_SFR_Halpha(
+        EW_Halpha=halpha_ew,
+        EW_Halpha_ivar=halpha_ew_ivar,
+        spec_z=z,
+        spec_z_err=zeros,
+        Mr=absm_r_fiber,
+        Mr_err=zeros,
+        EWc=0.0,
+        BD=3.25,
+        BD_err=0.0,
+        imf_factor=1.0,
+    )
+    fspec_cat["LOG_MSTAR_24_FIBER"] = log_mstar_fiber
+    fspec_cat["LOG_HALPHA_SFR_FIBER"] = log_sfr_fiber
+
+    fspec_hdu_new = fits.table_to_hdu(fspec_cat)
+    fspec_hdu_new.name = DWARF_CATALOG_SPEC_HDU
+    fspec_hdu_new.add_checksum()
+
+    cat_abs = os.path.abspath(cat_path)
+    cat_dir = os.path.dirname(cat_abs) or "."
+    fd, tmp_path = tempfile.mkstemp(
+        suffix=".fits", prefix="log_sfr_halpha_", dir=cat_dir
+    )
+    os.close(fd)
+    try:
+        with fits.open(cat_abs, memmap=False) as hdul:
+            hdu_names = [hdu.name for hdu in hdul]
+            main_idx = hdu_names.index("MAIN")
+            fspec_idx = hdu_names.index(DWARF_CATALOG_SPEC_HDU)
+            main_tab = safe_read_table(cat_abs, hdu="MAIN")
+            main_hdu_preserved = fits.table_to_hdu(main_tab)
+            main_hdu_preserved.name = "MAIN"
+            main_hdu_preserved.add_checksum()
+            new_hdus = []
+            for i, hdu in enumerate(hdul):
+                if i == main_idx:
+                    new_hdus.append(main_hdu_preserved)
+                elif i == fspec_idx:
+                    new_hdus.append(fspec_hdu_new)
+                else:
+                    new_hdus.append(hdu.copy())
+            new_hdul = fits.HDUList(new_hdus)
+            new_hdul[0].add_checksum()
+            new_hdul.writeto(tmp_path, overwrite=True)
+        os.replace(tmp_path, cat_abs)
+    except BaseException:
+        if os.path.isfile(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        raise
+
+    if verbose:
+        print(f"Updated {cat_path}:")
+        print(
+            "  SPEC_DERIVED HDU: added LOG_SFR_HALPHA, LOG_SFR_HALPHA_ERR, "
+            "LOG_MSTAR_24_FIBER, LOG_HALPHA_SFR_FIBER"
+        )
+        print("=" * 60)
 
 
 #### include the old funcs from saga ..
