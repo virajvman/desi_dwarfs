@@ -62,6 +62,203 @@ def print_catalog_overlap_diagnostics(path_v2, path_old):
     print(f"    In old also in V2: {in_both} | In old not in V2: {in_old_not_new}")
 
 
+def run_nebular_correction_int_v2(
+    save_folder,
+    save_filename,
+    gal_type,
+    ncore_neb=16,
+    overwrite=True,
+):
+    """
+    Read ``{save_filename}`` as ``*_INT_V2.fits`` under ``save_folder``, run FastSpec model
+    photometry and the full photometric correction chain, apply the corrected
+    stellar-mass cut (LOGM_M24_FIDU_CORR < 9.25), and write ``*_INT_V2_NEBCORR.fits``.
+
+    Used for BGS/LOWZ/ELG/OTHER intermediate catalogs. ``gal_type`` labels cache and
+    diagnostic outputs (e.g. ``model_photometry_diffs_{gal_type}.fits``).
+
+    Parameters
+    ----------
+    save_folder : str
+        Directory containing the INT_V2 table and receiving outputs.
+    save_filename : str
+        Base catalog name (e.g. ``iron_other_qso_scnd_candidates.fits``); INT_V2 path is
+        derived via ``.replace('.fits', '_INT_V2.fits')``.
+    gal_type : str
+        Sample label for logging and sidecar filenames.
+    ncore_neb : int
+        Parallel workers for ``compute_photometry_catalog``.
+    overwrite : bool
+        If False, reuse ``model_photometry_diffs_{gal_type}.fits`` when TARGETIDs match.
+    """
+    from fastspec_funcs import (
+        compute_photometry_catalog,
+        apply_photometric_corrections,
+        plot_neb_correction_diagnostic,
+    )
+    from desi_lowz_funcs import save_table
+
+    int_v2_path = save_folder + "/" + save_filename.replace(".fits", "_INT_V2.fits")
+    print(f"\n{'='*60}")
+    print(f"Nebular emission correction for {gal_type}")
+    print(f"Reading {int_v2_path}")
+
+    if not os.path.exists(int_v2_path):
+        print(f"  SKIP: INT_V2 file not found for {gal_type}: {int_v2_path}")
+        return
+
+    samp_i_cat_full = Table.read(int_v2_path)
+    print(f"{gal_type}: Number of sources in INT_V2 catalog = {len(samp_i_cat_full)}")
+
+    precut_mask = (samp_i_cat_full["LOGM_M24_FIDU"] < 9.5) & (
+        samp_i_cat_full["LOGM_M24_FIDU"] > -90
+    )
+    samp_i_cat = samp_i_cat_full[precut_mask]
+    print(
+        f"{gal_type}: After LOGM_M24_FIDU < 9.5 pre-filter = {len(samp_i_cat)} "
+        f"(removed {np.sum(~precut_mask)})"
+    )
+
+    neb_photo_path = save_folder + f"/model_photometry_diffs_{gal_type}.fits"
+
+    if os.path.exists(neb_photo_path) and not overwrite:
+        print(f"Loading existing nebular photometry from {neb_photo_path}")
+        result_samp_i = Table.read(neb_photo_path)
+        cat_tids = set(samp_i_cat["TARGETID"].data)
+        res_tids = set(result_samp_i["TARGETID"].data)
+        if cat_tids != res_tids:
+            print("WARNING: TARGETIDs mismatch between catalog and cached result. Recomputing...")
+            result_samp_i = compute_photometry_catalog(
+                samp_i_cat,
+                compute_data_photometry=False,
+                save_path=neb_photo_path,
+                ncore=ncore_neb,
+            )
+    else:
+        result_samp_i = compute_photometry_catalog(
+            samp_i_cat,
+            compute_data_photometry=False,
+            save_path=neb_photo_path,
+            ncore=ncore_neb,
+        )
+
+    result_tid_to_idx = {tid: idx for idx, tid in enumerate(result_samp_i["TARGETID"].data)}
+    reorder_idx = np.array([result_tid_to_idx[tid] for tid in samp_i_cat["TARGETID"].data])
+    result_samp_i = result_samp_i[reorder_idx]
+    assert np.array_equal(samp_i_cat["TARGETID"].data, result_samp_i["TARGETID"].data), (
+        "TARGETID ordering mismatch after reordering!"
+    )
+
+    print(f"{gal_type}: Applying full photometric correction chain...")
+    corrections = apply_photometric_corrections(samp_i_cat, result_samp_i)
+
+    mag_g_final = corrections["mag_g_sdss_z0"]
+    mag_r_final = corrections["mag_r_sdss_z0"]
+    mag_g_err_final = corrections["mag_g_sdss_z0_err"]
+    mag_r_err_final = corrections["mag_r_sdss_z0_err"]
+    gr_final = mag_g_final - mag_r_final
+    halpha_ew = corrections["halpha_ew"]
+    halpha_ew_ivar = corrections["halpha_ew_ivar"]
+
+    diag_plot_path = save_folder + f"/neb_correction_diagnostic_{gal_type}.png"
+    plot_neb_correction_diagnostic(
+        halpha_ew,
+        corrections["delta_neb_g"],
+        corrections["delta_neb_r"],
+        save_path=diag_plot_path,
+        gal_type=gal_type,
+    )
+
+    zred_mask = samp_i_cat["Z"].data < 0.5
+
+    logm_corr = -99.0 * np.ones(len(samp_i_cat))
+    logm_corr_err = np.nan * np.ones(len(samp_i_cat))
+    mstars_new, mstars_new_err = get_stellar_mass_mia(
+        gr_final[zred_mask],
+        mag_g_final[zred_mask],
+        zred=np.zeros(np.sum(zred_mask)),
+        d_in_mpc=samp_i_cat["DIST_MPC_FIDU"][zred_mask].data,
+        input_zred=False,
+        mag_g_err=mag_g_err_final[zred_mask],
+        mag_r_err=mag_r_err_final[zred_mask],
+    )
+    logm_corr[zred_mask] = mstars_new
+    logm_corr_err[zred_mask] = mstars_new_err
+
+    logm_old = samp_i_cat["LOGM_M24_FIDU"].data
+    valid_old = logm_old > 0
+    valid_new = logm_corr > 0
+
+    n_old_pass = np.sum(logm_old[valid_old] < 9.25)
+    n_new_pass = np.sum(logm_corr[valid_new] < 9.25)
+    print(f"{gal_type}: Objects with log(M*) < 9.25 using OLD photometry: {n_old_pass}")
+    print(
+        f"{gal_type}: Objects with log(M*) < 9.25 using NEW (fully corrected) photometry: {n_new_pass}"
+    )
+    print(f"{gal_type}: Additional objects removed by corrected stellar mass: {n_old_pass - n_new_pass}")
+
+    keep_mask = (logm_corr < 9.25) & (logm_corr > 0)
+    n_before = len(samp_i_cat)
+    samp_i_cat_cut = samp_i_cat[keep_mask]
+
+    print(
+        f"{gal_type}: N before corrected mass cut = {n_before}, "
+        f"N after = {len(samp_i_cat_cut)}, removed = {n_before - len(samp_i_cat_cut)}"
+    )
+
+    samp_i_cat_cut["DELTA_MAG_G_BASS2DECAM"] = corrections["delta_bass2decam_g"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_R_BASS2DECAM"] = corrections["delta_bass2decam_r"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_G_NEB"] = corrections["delta_neb_g"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_R_NEB"] = corrections["delta_neb_r"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_G_NEB_ERR"] = corrections["delta_neb_g_err"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_R_NEB_ERR"] = corrections["delta_neb_r_err"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_G_DECAM2SDSS"] = corrections["delta_decam2sdss_g"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_R_DECAM2SDSS"] = corrections["delta_decam2sdss_r"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_G_KCORR"] = corrections["delta_kcorr_g"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_R_KCORR"] = corrections["delta_kcorr_r"][keep_mask]
+    samp_i_cat_cut["MAG_G_SDSS_Z0"] = mag_g_final[keep_mask]
+    samp_i_cat_cut["MAG_R_SDSS_Z0"] = mag_r_final[keep_mask]
+    samp_i_cat_cut["MAG_G_SDSS_Z0_ERR"] = mag_g_err_final[keep_mask]
+    samp_i_cat_cut["MAG_R_SDSS_Z0_ERR"] = mag_r_err_final[keep_mask]
+
+    samp_i_cat_cut["LOGM_M24_FIDU_CORR"] = logm_corr[keep_mask]
+    samp_i_cat_cut["LOGM_M24_FIDU_CORR_ERR"] = logm_corr_err[keep_mask]
+
+    samp_i_cat_cut["HALPHA_EW"] = halpha_ew[keep_mask]
+    samp_i_cat_cut["HALPHA_EW_IVAR"] = halpha_ew_ivar[keep_mask]
+
+    samp_i_cat_cut["MAG_G_DECAM_MODEL_NOEMI"] = result_samp_i["g_model_no_emi"][keep_mask]
+    samp_i_cat_cut["MAG_R_DECAM_MODEL_NOEMI"] = result_samp_i["r_model_no_emi"][keep_mask]
+    samp_i_cat_cut["MAG_G_DECAM_MODEL_WEMI"] = result_samp_i["g_model_w_emi"][keep_mask]
+    samp_i_cat_cut["MAG_R_DECAM_MODEL_WEMI"] = result_samp_i["r_model_w_emi"][keep_mask]
+    samp_i_cat_cut["MAG_G_BASS_MODEL_WEMI"] = result_samp_i["g_bass_w_emi"][keep_mask]
+    samp_i_cat_cut["MAG_R_BASS_MODEL_WEMI"] = result_samp_i["r_bass_w_emi"][keep_mask]
+    samp_i_cat_cut["MAG_G_SDSS_MODEL_NOEMI"] = result_samp_i["g_sdss_no_emi"][keep_mask]
+    samp_i_cat_cut["MAG_R_SDSS_MODEL_NOEMI"] = result_samp_i["r_sdss_no_emi"][keep_mask]
+    samp_i_cat_cut["MAG_G_SDSS_Z0_MODEL_NOEMI"] = result_samp_i["g_sdss_z0_no_emi"][keep_mask]
+    samp_i_cat_cut["MAG_R_SDSS_Z0_MODEL_NOEMI"] = result_samp_i["r_sdss_z0_no_emi"][keep_mask]
+
+    d_in_pc = np.asarray(samp_i_cat_cut["DIST_MPC_FIDU"].data, dtype=float) * 1e6
+    valid_mg = (d_in_pc > 0) & np.isfinite(d_in_pc) & np.isfinite(
+        samp_i_cat_cut["MAG_G_SDSS_Z0"].data
+    )
+    Mg = samp_i_cat_cut["MAG_G_SDSS_Z0"].data + 5 - 5 * np.log10(d_in_pc)
+    n_tot = np.sum(valid_mg)
+    n_bright = np.sum(valid_mg & (Mg < -18.5))
+    if n_tot > 0:
+        print(
+            f"{gal_type}: Objects with Mg < -18.5 (fully corrected): N = {n_bright}, "
+            f"fraction = {n_bright / n_tot:.4f} (total with valid distance = {n_tot})"
+        )
+    else:
+        print(f"{gal_type}: No objects with valid distance for Mg summary.")
+
+    path_nebcorr = save_folder + "/" + save_filename.replace(".fits", "_INT_V2_NEBCORR.fits")
+    path_int_old = save_folder + "/" + save_filename.replace(".fits", "_INT.fits")
+    save_table(samp_i_cat_cut, path_nebcorr, comment="")
+    print_catalog_overlap_diagnostics(path_nebcorr, path_int_old)
+
+
 def get_sv_bgs_mask(catalog, bgs_class = "BGS_BRIGHT"):
     '''
     Get the mask to select BGS objects in SV. Note that this function is supposed to be run on the zpix catalog
@@ -1136,7 +1333,8 @@ if __name__ == '__main__':
     save_filenames = {"BGS_BRIGHT":  "iron_bgs_bright_filter_zsucc_zrr02_allfracflux.fits", 
                       "BGS_FAINT": "iron_bgs_faint_filter_zsucc_zrr03_allfracflux.fits",
                        "LOWZ":  "iron_lowz_filter_zsucc_zrr03.fits" ,
-                       "ELG": "iron_elg_filter_zsucc_zrr05_allfracflux.fits"}
+                       "ELG": "iron_elg_filter_zsucc_zrr05_allfracflux.fits",
+                       "OTHER": "iron_other_qso_scnd_candidates.fits"}
 
 
     
@@ -1435,171 +1633,17 @@ if __name__ == '__main__':
 
 
     if run_neb_correction:
-        from fastspec_funcs import (compute_photometry_catalog,
-                                     apply_photometric_corrections,
-                                     plot_neb_correction_diagnostic)
-
-        overwrite = True
-
-        for gal_type in gal_types:
+        overwrite_neb = True
+        gal_types_neb = gal_types + ["OTHER"]
+        for gal_type in gal_types_neb:
             save_filename = save_filenames[gal_type]
-
-            int_v2_path = save_folder + "/" + save_filename.replace(".fits", "_INT_V2.fits")
-            print(f"\n{'='*60}")
-            print(f"Nebular emission correction for {gal_type}")
-            print(f"Reading {int_v2_path}")
-
-            samp_i_cat_full = Table.read(int_v2_path)
-            print(f"{gal_type}: Number of sources in INT_V2 catalog = {len(samp_i_cat_full)}")
-
-            # Light pre-filter: only process objects with LOGM_M24_FIDU < 9.5.
-            # The 0.25 dex margin above the final 9.25 cut accommodates objects whose
-            # mass will decrease after nebular correction and should enter the catalog.
-            precut_mask = (samp_i_cat_full["LOGM_M24_FIDU"] < 9.5) & (samp_i_cat_full["LOGM_M24_FIDU"] > -90)
-            samp_i_cat = samp_i_cat_full[precut_mask]
-            print(f"{gal_type}: After LOGM_M24_FIDU < 9.5 pre-filter = {len(samp_i_cat)} "
-                  f"(removed {np.sum(~precut_mask)})")
-
-            neb_photo_path = save_folder + f"/model_photometry_diffs_{gal_type}.fits"
-
-            if os.path.exists(neb_photo_path) and not overwrite:
-                print(f"Loading existing nebular photometry from {neb_photo_path}")
-                result_samp_i = Table.read(neb_photo_path)
-                cat_tids = set(samp_i_cat["TARGETID"].data)
-                res_tids = set(result_samp_i["TARGETID"].data)
-                if cat_tids != res_tids:
-                    print("WARNING: TARGETIDs mismatch between catalog and cached result. Recomputing...")
-                    result_samp_i = compute_photometry_catalog(
-                        samp_i_cat,
-                        compute_data_photometry=False,
-                        save_path=neb_photo_path,
-                        ncore=ncore_neb,
-                    )
-            else:
-                result_samp_i = compute_photometry_catalog(
-                    samp_i_cat,
-                    compute_data_photometry=False,
-                    save_path=neb_photo_path,
-                    ncore=ncore_neb,
-                )
-
-            # Reorder result to match samp_i_cat row ordering
-            result_tid_to_idx = {tid: idx for idx, tid in enumerate(result_samp_i["TARGETID"].data)}
-            reorder_idx = np.array([result_tid_to_idx[tid] for tid in samp_i_cat["TARGETID"].data])
-            result_samp_i = result_samp_i[reorder_idx]
-            assert np.array_equal(samp_i_cat["TARGETID"].data, result_samp_i["TARGETID"].data), \
-                "TARGETID ordering mismatch after reordering!"
-
-
-            # Apply the full photometric correction chain:
-            # BASS->DECam (if north) -> nebular removal -> DECam->SDSS -> k-correction
-            print(f"{gal_type}: Applying full photometric correction chain...")
-            corrections = apply_photometric_corrections(samp_i_cat, result_samp_i)
-
-            mag_g_final = corrections["mag_g_sdss_z0"]
-            mag_r_final = corrections["mag_r_sdss_z0"]
-            mag_g_err_final = corrections["mag_g_sdss_z0_err"]
-            mag_r_err_final = corrections["mag_r_sdss_z0_err"]
-            gr_final = mag_g_final - mag_r_final
-            halpha_ew = corrections["halpha_ew"]
-            halpha_ew_ivar = corrections["halpha_ew_ivar"]
-
-            # Diagnostic plot for the nebular correction step
-            diag_plot_path = save_folder + f"/neb_correction_diagnostic_{gal_type}.png"
-            plot_neb_correction_diagnostic(
-                halpha_ew, corrections["delta_neb_g"], corrections["delta_neb_r"],
-                save_path=diag_plot_path, gal_type=gal_type,
+            run_nebular_correction_int_v2(
+                save_folder,
+                save_filename,
+                gal_type,
+                ncore_neb=ncore_neb,
+                overwrite=overwrite_neb,
             )
-
-            # Compute stellar mass using SDSS z=0 continuum-only photometry.
-            # Pass zred=0 so the polynomial k-correction inside get_stellar_mass_mia
-            # evaluates to zero (model-derived k-correction is already applied).
-            zred_mask = (samp_i_cat["Z"].data < 0.5)
-
-            logm_corr = -99.0 * np.ones(len(samp_i_cat))
-            logm_corr_err = np.nan * np.ones(len(samp_i_cat))
-            mstars_new, mstars_new_err = get_stellar_mass_mia(
-                gr_final[zred_mask],
-                mag_g_final[zred_mask],
-                zred=np.zeros(np.sum(zred_mask)),
-                d_in_mpc=samp_i_cat["DIST_MPC_FIDU"][zred_mask].data,
-                input_zred=False,
-                mag_g_err=mag_g_err_final[zred_mask],
-                mag_r_err=mag_r_err_final[zred_mask],
-            )
-            logm_corr[zred_mask] = mstars_new
-            logm_corr_err[zred_mask] = mstars_new_err
-
-            # Compare old vs new stellar mass cut
-            logm_old = samp_i_cat["LOGM_M24_FIDU"].data
-            valid_old = logm_old > 0
-            valid_new = logm_corr > 0
-
-            n_old_pass = np.sum(logm_old[valid_old] < 9.25)
-            n_new_pass = np.sum(logm_corr[valid_new] < 9.25)
-            print(f"{gal_type}: Objects with log(M*) < 9.25 using OLD photometry: {n_old_pass}")
-            print(f"{gal_type}: Objects with log(M*) < 9.25 using NEW (fully corrected) photometry: {n_new_pass}")
-            print(f"{gal_type}: Additional objects removed by corrected stellar mass: {n_old_pass - n_new_pass}")
-
-            # Apply 9.25 stellar mass cut with the corrected masses
-            keep_mask = (logm_corr < 9.25) & (logm_corr > 0)
-            n_before = len(samp_i_cat)
-            samp_i_cat_cut = samp_i_cat[keep_mask]
-
-            print(f"{gal_type}: N before corrected mass cut = {n_before}, "
-                  f"N after = {len(samp_i_cat_cut)}, removed = {n_before - len(samp_i_cat_cut)}")
-
-            # Attach all correction columns (do NOT overwrite MAG_G / MAG_R)
-            samp_i_cat_cut["DELTA_MAG_G_BASS2DECAM"] = corrections["delta_bass2decam_g"][keep_mask]
-            samp_i_cat_cut["DELTA_MAG_R_BASS2DECAM"] = corrections["delta_bass2decam_r"][keep_mask]
-            samp_i_cat_cut["DELTA_MAG_G_NEB"] = corrections["delta_neb_g"][keep_mask]
-            samp_i_cat_cut["DELTA_MAG_R_NEB"] = corrections["delta_neb_r"][keep_mask]
-            samp_i_cat_cut["DELTA_MAG_G_NEB_ERR"] = corrections["delta_neb_g_err"][keep_mask]
-            samp_i_cat_cut["DELTA_MAG_R_NEB_ERR"] = corrections["delta_neb_r_err"][keep_mask]
-            samp_i_cat_cut["DELTA_MAG_G_DECAM2SDSS"] = corrections["delta_decam2sdss_g"][keep_mask]
-            samp_i_cat_cut["DELTA_MAG_R_DECAM2SDSS"] = corrections["delta_decam2sdss_r"][keep_mask]
-            samp_i_cat_cut["DELTA_MAG_G_KCORR"] = corrections["delta_kcorr_g"][keep_mask]
-            samp_i_cat_cut["DELTA_MAG_R_KCORR"] = corrections["delta_kcorr_r"][keep_mask]
-            samp_i_cat_cut["MAG_G_SDSS_Z0"] = mag_g_final[keep_mask]
-            samp_i_cat_cut["MAG_R_SDSS_Z0"] = mag_r_final[keep_mask]
-            samp_i_cat_cut["MAG_G_SDSS_Z0_ERR"] = mag_g_err_final[keep_mask]
-            samp_i_cat_cut["MAG_R_SDSS_Z0_ERR"] = mag_r_err_final[keep_mask]
-            
-            samp_i_cat_cut["LOGM_M24_FIDU_CORR"] = logm_corr[keep_mask]
-            samp_i_cat_cut["LOGM_M24_FIDU_CORR_ERR"] = logm_corr_err[keep_mask]
-            
-            samp_i_cat_cut["HALPHA_EW"] = halpha_ew[keep_mask]
-            samp_i_cat_cut["HALPHA_EW_IVAR"] = halpha_ew_ivar[keep_mask]
-
-            # Attach raw fastspec model photometry in each filter system
-            samp_i_cat_cut["MAG_G_DECAM_MODEL_NOEMI"] = result_samp_i["g_model_no_emi"][keep_mask]
-            samp_i_cat_cut["MAG_R_DECAM_MODEL_NOEMI"] = result_samp_i["r_model_no_emi"][keep_mask]
-            samp_i_cat_cut["MAG_G_DECAM_MODEL_WEMI"]  = result_samp_i["g_model_w_emi"][keep_mask]
-            samp_i_cat_cut["MAG_R_DECAM_MODEL_WEMI"]  = result_samp_i["r_model_w_emi"][keep_mask]
-            samp_i_cat_cut["MAG_G_BASS_MODEL_WEMI"]   = result_samp_i["g_bass_w_emi"][keep_mask]
-            samp_i_cat_cut["MAG_R_BASS_MODEL_WEMI"]   = result_samp_i["r_bass_w_emi"][keep_mask]
-            samp_i_cat_cut["MAG_G_SDSS_MODEL_NOEMI"]  = result_samp_i["g_sdss_no_emi"][keep_mask]
-            samp_i_cat_cut["MAG_R_SDSS_MODEL_NOEMI"]  = result_samp_i["r_sdss_no_emi"][keep_mask]
-            samp_i_cat_cut["MAG_G_SDSS_Z0_MODEL_NOEMI"] = result_samp_i["g_sdss_z0_no_emi"][keep_mask]
-            samp_i_cat_cut["MAG_R_SDSS_Z0_MODEL_NOEMI"] = result_samp_i["r_sdss_z0_no_emi"][keep_mask]
-
-            # Summary: absolute g-band mag using fully corrected SDSS z=0 photometry
-            d_in_pc = np.asarray(samp_i_cat_cut["DIST_MPC_FIDU"].data, dtype=float) * 1e6
-            valid_mg = (d_in_pc > 0) & np.isfinite(d_in_pc) & np.isfinite(samp_i_cat_cut["MAG_G_SDSS_Z0"].data)
-            Mg = samp_i_cat_cut["MAG_G_SDSS_Z0"].data + 5 - 5 * np.log10(d_in_pc)
-            n_tot = np.sum(valid_mg)
-            n_bright = np.sum(valid_mg & (Mg < -18.5))
-            if n_tot > 0:
-                print(f"{gal_type}: Objects with Mg < -18.5 (fully corrected): N = {n_bright}, "
-                      f"fraction = {n_bright / n_tot:.4f} (total with valid distance = {n_tot})")
-            else:
-                print(f"{gal_type}: No objects with valid distance for Mg summary.")
-
-            # Save the corrected catalog
-            path_nebcorr = save_folder + "/" + save_filename.replace(".fits", "_INT_V2_NEBCORR.fits")
-            path_int_old = save_folder + "/" + save_filename.replace(".fits", "_INT.fits")
-            save_table(samp_i_cat_cut, path_nebcorr, comment="")
-            print_catalog_overlap_diagnostics(path_nebcorr, path_int_old)
 
     if False:
         

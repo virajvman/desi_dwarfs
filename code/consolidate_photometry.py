@@ -987,16 +987,26 @@ def apply_emission_line_snr_cuts(fastspec_cat, snr_threshold=3.0):
     return passing
 
 
-def load_and_filter_qso_scnd_candidates(input_path = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/hidden_dwarf_candidates_qso_mws_scnd.fits", snr_threshold=3.0):
+def load_and_filter_qso_scnd_candidates(
+    input_path="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_other_qso_scnd_candidates_INT_V2_NEBCORR.fits",
+    snr_threshold=3.0,
+):
     """
-    Load hidden dwarf candidates from QSO/SCND target selections, deduplicate,
-    remove MWS objects, match to FastSpecFit, and apply emission-line SNR cuts
-    to ensure robust redshifts.
+    Load QSO/SCND dwarf candidates after nebular correction and corrected stellar-mass
+    filtering, then deduplicate, remove MWS objects, match to FastSpecFit, and apply
+    emission-line SNR cuts for robust redshifts.
+
+    The default ``input_path`` is ``iron_other_qso_scnd_candidates_INT_V2_NEBCORR.fits``,
+    produced by ``construct_other_dwarf_catalog`` (INT_V2) followed by
+    ``run_nebular_correction_int_v2`` / ``construct_dwarf_galaxy_catalogs`` nebular step.
+    Rows include ``LOGM_M24_FIDU_CORR`` and ``DELTA_MAG_*`` so ``create_main_data_model``
+    (``clean_cat=True``) uses corrected masses without a separate NEBCORR lookup.
 
     Parameters
     ----------
     input_path : str
-        Path to the hidden_dwarf_candidates_qso_mws_scnd.fits file.
+        Path to the post-nebular candidate table (NEBCORR FITS). The legacy wider
+        ``hidden_dwarf_candidates_qso_mws_scnd.fits`` may be passed explicitly if needed.
     snr_threshold : float
         Minimum SNR required on Halpha, Hbeta, and OIII 5007 (all three must pass).
 
@@ -2161,7 +2171,7 @@ if __name__ == '__main__':
             get_fastspec_matched_catalog(clean_cat, save_path + "/clean_SPEC_DERIVED_hdu.fits", match_method="TARGETID")
 
     if process_qso_scnd:
-        qso_scnd_input = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/hidden_dwarf_candidates_qso_mws_scnd.fits"
+        qso_scnd_input = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_other_qso_scnd_candidates_INT_V2_NEBCORR.fits"
         qso_scnd_cat = load_and_filter_qso_scnd_candidates(qso_scnd_input, snr_threshold=3.0)
 
         print("Creating the QSO/SCND main hdu")

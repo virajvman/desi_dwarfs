@@ -528,3 +528,8 @@ Each bit in `MSTAR_MASKBIT` describes the stellar-mass pipeline used for `LOG_MS
 See Manwadkar et al. 2026a for details.
 
 </details>
+
+### OTHER sample (`SAMPLE = "OTHER"`)
+
+Rows with `SAMPLE = "OTHER"` are dwarf galaxies selected from **QSO** and **SCND** DESI targets that are **not** already in the primary dwarf sample (**BGS_BRIGHT**, **BGS_FAINT**, **LOWZ**, **ELG**). The discovery table is built with [`code/construct_other_dwarf_catalog.py`](code/construct_other_dwarf_catalog.py): the same maskbit, proper-motion, FRACFLUX (“shred”), RCHISQ, and SIGMA_GOOD cuts as before, plus **`NOBS_G` / `NOBS_R` / `NOBS_Z` exposure cuts** matching the primary INT_V2 pipeline, then NAM + independent distance updates, **`LOGM_M24_FIDU`**, sweeps, and bright-star flags. Intermediate output is **`iron_other_qso_scnd_candidates_INT_V2.fits`** (and the legacy combined file **`hidden_dwarf_candidates_qso_mws_scnd.fits`**); nebular correction follows the same **`iron_*_INT_V2_NEBCORR.fits`** pattern as other samples. When merging into the release catalog, [`load_and_filter_qso_scnd_candidates`](code/consolidate_photometry.py) deduplicates by `TARGETID`, **drops MWS**, matches FastSpecFit, and requires emission-line flux SNR cuts on Hα, Hβ, and [OIII] 5007.
+

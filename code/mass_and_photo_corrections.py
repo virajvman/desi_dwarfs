@@ -30,6 +30,7 @@ NEBCORR_INT_V2_BASENAMES = (
     "iron_bgs_bright_filter_zsucc_zrr02_allfracflux_INT_V2_NEBCORR.fits",
     "iron_bgs_faint_filter_zsucc_zrr03_allfracflux_INT_V2_NEBCORR.fits",
     "iron_elg_filter_zsucc_zrr05_allfracflux_INT_V2_NEBCORR.fits",
+    "iron_other_qso_scnd_candidates_INT_V2_NEBCORR.fits",
 )
 
 INT_V2_BASENAMES = tuple(
