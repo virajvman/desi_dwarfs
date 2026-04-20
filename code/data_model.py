@@ -1508,6 +1508,15 @@ fastspec_hdu_datamodel["LOG_HALPHA_SFR_FIBER"] = {
     ),
     "dtype": "float64",
 }
+fastspec_hdu_datamodel["Z_GAS_R23_N2"] = {
+    "unit": None,
+    "description": (
+        "Gas-phase strong-line metallicity from R23+N2 (see Scholte et al. 2024) "
+        "using SPEC_DERIVED Gaussian line fluxes; internal dust correction when Halpha/Hbeta > 2.86. "
+        "Filled where all seven lines pass line_snr (SNR > 3, flux > 0); NaN otherwise. "
+    ),
+    "dtype": "float64",
+}
 
 fastspec_hdu_datamodel["FLUX_SYNTH_G"] = {
     "unit": "nanomaggy",

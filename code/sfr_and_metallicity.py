@@ -11,7 +11,7 @@ from mass_and_photo_corrections import (
     FASTSPEC_DELTA_MAG_COLS,
     safe_read_table,
 )
-from desi_lowz_funcs import get_stellar_mass_mia
+from desi_lowz_funcs import get_stellar_mass_mia, r_kcorr
 
 def line_snr_mask(fastspec_cat, line_names=["HALPHA"], snr_val=3):
     """
@@ -64,7 +64,29 @@ def line_snr(cat, line_flux):
 
     return (snr_val > 3) & (cat[line_flux+ "_FLUX"].data > 0)
 
-    
+
+# Line stems for Z_R23_N2 (OII3726/3729, Hβ, OIII, Hα, NII6584) in FastSpec column names.
+_R23_N2_LINE_STEMS = (
+    "OII_3726",
+    "OII_3729",
+    "HBETA",
+    "OIII_4959",
+    "OIII_5007",
+    "HALPHA",
+    "NII_6584",
+)
+
+
+def r23_n2_line_snr_mask(fastspec_cat):
+    """
+    True where all seven emission lines used by Z_R23_N2 pass line_snr (SNR > 3, flux > 0).
+    """
+    mask = np.ones(len(fastspec_cat), dtype=bool)
+    for stem in _R23_N2_LINE_STEMS:
+        mask &= line_snr(fastspec_cat, stem)
+    return mask
+
+
 def return_metallicity_estimates_PG16(R2, R3, N2):
     """
     function estimates the metallicity using the PG16 calibrations
@@ -287,25 +309,15 @@ def Z_R23_N2(
 
 def get_metallicity_S22(fastspec_cat):
 
-    oii_mask_1 = line_snr(fastspec_cat, "OII_3726")
-    oii_mask_2 = line_snr(fastspec_cat, "OII_3729")
-
-    oiii_mask_1 = line_snr(fastspec_cat, "OIII_4959")
-    oiii_mask_2 = line_snr(fastspec_cat, "OIII_5007")
-
-    hbeta_mask = line_snr(fastspec_cat, "HBETA")
-    halpha_mask = line_snr(fastspec_cat, "HALPHA")
-
-    nii_mask = line_snr(fastspec_cat, "NII_6584")
-    
+    snr_r23_n2 = r23_n2_line_snr_mask(fastspec_cat)
     nii_mask_2 = line_snr(fastspec_cat, "NII_6548")
 
     #apply cuts
-    sf_Ka03_mask = (np.log10(fastspec_cat["OIII_5007_FLUX"]/fastspec_cat["HBETA_FLUX"]) <= 0.61*(np.log10(fastspec_cat["NII_6584_FLUX"]/fastspec_cat["HALPHA_FLUX"]) - 0.05)**-1 + 1.3) & (np.log10(fastspec_cat["NII_6584_FLUX"]/fastspec_cat["HALPHA_FLUX"]) < 0.0)
+    # sf_Ka03_mask = (np.log10(fastspec_cat["OIII_5007_FLUX"]/fastspec_cat["HBETA_FLUX"]) <= 0.61*(np.log10(fastspec_cat["NII_6584_FLUX"]/fastspec_cat["HALPHA_FLUX"]) - 0.05)**-1 + 1.3) & (np.log10(fastspec_cat["NII_6584_FLUX"]/fastspec_cat["HALPHA_FLUX"]) < 0.0)
     
-    sf_Ke01_mask = (np.log10(fastspec_cat["OIII_5007_FLUX"]/fastspec_cat["HBETA_FLUX"]) <= 0.61*(np.log10(fastspec_cat["NII_6584_FLUX"]/fastspec_cat["HALPHA_FLUX"]) - 0.47)**-1 + 1.19) & (np.log10(fastspec_cat["NII_6584_FLUX"]/fastspec_cat["HALPHA_FLUX"]) < 1.0)
+    # sf_Ke01_mask = (np.log10(fastspec_cat["OIII_5007_FLUX"]/fastspec_cat["HBETA_FLUX"]) <= 0.61*(np.log10(fastspec_cat["NII_6584_FLUX"]/fastspec_cat["HALPHA_FLUX"]) - 0.47)**-1 + 1.19) & (np.log10(fastspec_cat["NII_6584_FLUX"]/fastspec_cat["HALPHA_FLUX"]) < 1.0)
 
-    tot_mask = oii_mask_1 & oii_mask_2 & oiii_mask_1 & oiii_mask_2 & hbeta_mask & halpha_mask & nii_mask & nii_mask_2 & sf_Ke01_mask & sf_Ka03_mask
+    tot_mask = snr_r23_n2 & nii_mask_2 #& sf_Ke01_mask & sf_Ka03_mask
 
     print(f"Satisyfing line snr+ratio mask = {np.sum(tot_mask)/len(tot_mask)}")
 
@@ -585,10 +597,12 @@ def _fiber_tot_mw_mags(flux_g, flux_r, mw_g, mw_r):
     return mag_g, mag_r
 
 
-def _spec_derived_delta_corrected_mags(fspec_cat, mag_g_fib, mag_r_fib, low_snr):
+def _spec_derived_delta_corrected_mags(fspec_cat, mag_g_base, mag_r_base, low_snr):
     """
-    Sum SPEC_DERIVED DELTA_MAG_* onto fiber mags (BASS2DECAM already north-masked
-    when columns were written). Rows with low_snr or non-finite deltas are NaN.
+    Sum SPEC_DERIVED DELTA_MAG_* onto arbitrary apparent mags (MAIN totals or
+    FIBERTOT fiber mags). BASS2DECAM is already north-masked when columns were
+    written. Rows with low_snr or non-finite deltas leave NaN in the corrected
+    arrays (caller uses low-SNR Mr path instead).
     """
     n = len(fspec_cat)
     mag_g_corr = np.full(n, np.nan, dtype=np.float64)
@@ -603,27 +617,63 @@ def _spec_derived_delta_corrected_mags(fspec_cat, mag_g_fib, mag_r_fib, low_snr)
     g_sum = stacks[:, 0] + stacks[:, 2] + stacks[:, 4] + stacks[:, 6]
     r_sum = stacks[:, 1] + stacks[:, 3] + stacks[:, 5] + stacks[:, 7]
     ok = (~low_snr) & all_finite
-    mag_g_corr[ok] = mag_g_fib[ok] + g_sum[ok]
-    mag_r_corr[ok] = mag_r_fib[ok] + r_sum[ok]
+    mag_g_base = np.asarray(mag_g_base, dtype=np.float64)
+    mag_r_base = np.asarray(mag_r_base, dtype=np.float64)
+    mag_g_corr[ok] = mag_g_base[ok] + g_sum[ok]
+    mag_r_corr[ok] = mag_r_base[ok] + r_sum[ok]
     return mag_g_corr, mag_r_corr
+
+
+def _mr_for_halpha_sfr(mag_r_base, gr_for_kcorr, mag_r_corr_high, low_snr, z_cmb, lumi_dist_mpc):
+    """
+    Absolute r mag for Bauer/Kennicutt-style Hα SFR: high-SNR uses
+    emission-model k-term via mag_r_corr_high; low-SNR uses polynomial r_kcorr.
+    """
+    d_pc = np.asarray(lumi_dist_mpc, dtype=np.float64) * 1.0e6
+    with np.errstate(divide="ignore", invalid="ignore"):
+        dist_term = 5.0 - 5.0 * np.log10(d_pc)
+    mr_hi = np.asarray(mag_r_corr_high, dtype=np.float64) + dist_term
+    z_cmb = np.asarray(z_cmb, dtype=np.float64)
+    gr = np.asarray(gr_for_kcorr, dtype=np.float64)
+    mag_r_b = np.asarray(mag_r_base, dtype=np.float64)
+    kr = r_kcorr(gr, z_cmb)
+    mr_lo = mag_r_b + dist_term - kr
+    return np.where(low_snr, mr_lo, mr_hi)
 
 
 def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
     """
-    Append LOG_SFR_HALPHA, LOG_SFR_HALPHA_ERR, LOG_MSTAR_24_FIBER, and
-    LOG_HALPHA_SFR_FIBER to the SPEC_DERIVED HDU.
+    Append LOG_SFR_HALPHA, LOG_SFR_HALPHA_ERR, LOG_MSTAR_24_FIBER,
+    LOG_HALPHA_SFR_FIBER, and Z_GAS_R23_N2 to the SPEC_DERIVED HDU.
 
     Must run after consolidate_associated_fiber_properties so MAIN MAG_R and
     LUMI_DIST_MPC are group-consolidated; HALPHA_EW(_IVAR) remain per-fiber from
     SPEC_DERIVED. TARGETID order must match between MAIN and SPEC_DERIVED.
 
-    Fiber mass and SFR use per-target FIBERTOTFLUX (MAIN), MW-corrected to
-    apparent mags, then either summed SPEC_DERIVED DELTA_MAG_* (continuum SNR
-    >= 10 in MAG_*_FIBER_NOEMI_ERR) or get_stellar_mass_mia fallback with Z_CMB.
+    Global and fiber Hα SFR share the same continuum-SNR split from
+    MAG_{G,R}_FIBER_NOEMI_ERR (threshold SNR 10). High SNR: sum SPEC_DERIVED
+    DELTA_MAG_* (nebular, filter, template k-term) onto MAIN mags (global) or
+    FIBERTOT mags (fiber). Low SNR: skip deltas and use Chilingarian r_kcorr
+    with MAIN g−r (global) or FIBERTOT g−r (fiber). MAG_R_FIBER_NOEMI_ERR is
+    passed as Mr_err on the high-SNR branch only (DELTA_MAG terms exact in
+    propagation). Fiber-derived DELTA_MAG values applied to MAIN totals for
+    global SFR assumes those corrections represent the whole galaxy.
+
+    Stellar mass LOG_MSTAR_24_FIBER uses the same high/low SNR split as before
+    (DELTA_MAG on FIBERTOT vs get_stellar_mass_mia with Z_CMB).
+
+    Z_GAS_R23_N2 is gas metallicity from Z_R23_N2 using SPEC_DERIVED line
+    fluxes; per-line SNR > 3 (r23_n2_line_snr_mask) with no BPT cuts; NaN
+    otherwise or if the fit fails.
+
+    r_kcorr in desi_lowz_funcs is nominally valid for z < 0.5.
     """
     if verbose:
         print("=" * 60)
-        print("Adding LOG_SFR_HALPHA and fiber Mstar/SFR columns to SPEC_DERIVED HDU")
+        print(
+            "Adding LOG_SFR_HALPHA, fiber Mstar/SFR, and Z_GAS_R23_N2 to "
+            "SPEC_DERIVED HDU"
+        )
         print("=" * 60)
 
     main_cat = safe_read_table(cat_path, hdu="MAIN")
@@ -642,12 +692,50 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
         )
 
     z = np.asarray(main_cat["Z"].data, dtype=float)
+    mag_g = np.asarray(main_cat["MAG_G"].data, dtype=float)
     mag_r = np.asarray(main_cat["MAG_R"].data, dtype=float)
     lumi_dist = np.asarray(main_cat["LUMI_DIST_MPC"].data, dtype=float)
-    absm_r = mag_r + 5.0 - 5.0 * np.log10(1e6 * lumi_dist)
+    z_cmb = np.asarray(main_cat["Z_CMB"].data, dtype=float)
 
     halpha_ew = np.asarray(fspec_cat["HALPHA_EW"].data, dtype=float)
     halpha_ew_ivar = np.asarray(fspec_cat["HALPHA_EW_IVAR"].data, dtype=float)
+
+    mag_err_limit = 1.0857 / 10.0
+    if (
+        "MAG_G_FIBER_NOEMI_ERR" in fspec_cat.colnames
+        and "MAG_R_FIBER_NOEMI_ERR" in fspec_cat.colnames
+    ):
+        g_err = np.asarray(fspec_cat["MAG_G_FIBER_NOEMI_ERR"].data, dtype=float)
+        r_err_noemi = np.asarray(
+            fspec_cat["MAG_R_FIBER_NOEMI_ERR"].data, dtype=float
+        )
+        low_snr = (
+            ~np.isfinite(g_err)
+            | ~np.isfinite(r_err_noemi)
+            | (g_err >= mag_err_limit)
+            | (r_err_noemi >= mag_err_limit)
+        )
+    else:
+        low_snr = np.ones(n_fspec, dtype=bool)
+        r_err_noemi = np.zeros(n_fspec, dtype=float)
+        if verbose:
+            print(
+                "  WARNING: MAG_G_FIBER_NOEMI_ERR / MAG_R_FIBER_NOEMI_ERR missing; "
+                "all rows use low-SNR fallback (no DELTA_MAG) for Hα SFR / fiber mass."
+            )
+
+    mag_g_corr_main, mag_r_corr_main = _spec_derived_delta_corrected_mags(
+        fspec_cat, mag_g, mag_r, low_snr
+    )
+    mr_global = _mr_for_halpha_sfr(
+        mag_r,
+        mag_g - mag_r,
+        mag_r_corr_main,
+        low_snr,
+        z_cmb,
+        lumi_dist,
+    )
+    mr_err = np.where(low_snr, 0.0, r_err_noemi)
 
     zeros = np.zeros_like(z, dtype=float)
     log_sfr, log_sfr_err = calc_SFR_Halpha(
@@ -655,8 +743,8 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
         EW_Halpha_ivar=halpha_ew_ivar,
         spec_z=z,
         spec_z_err=zeros,
-        Mr=absm_r,
-        Mr_err=zeros,
+        Mr=mr_global,
+        Mr_err=mr_err,
         EWc=0.0,
         BD=3.25,
         BD_err=0.0,
@@ -665,7 +753,7 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
     fspec_cat["LOG_SFR_HALPHA"] = log_sfr
     fspec_cat["LOG_SFR_HALPHA_ERR"] = log_sfr_err
 
-    # --- Fiber-aperture stellar mass and Halpha SFR (per plan) ---
+    # --- Fiber-aperture stellar mass and fiber Hα SFR ---
     required_main = (
         "FIBERTOTFLUX_G",
         "FIBERTOTFLUX_R",
@@ -686,37 +774,15 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
         main_cat["MW_TRANSMISSION_G"].data,
         main_cat["MW_TRANSMISSION_R"].data,
     )
-    z_cmb = np.asarray(main_cat["Z_CMB"].data, dtype=float)
 
-    mag_err_limit = 1.0857 / 10.0
-    if (
-        "MAG_G_FIBER_NOEMI_ERR" in fspec_cat.colnames
-        and "MAG_R_FIBER_NOEMI_ERR" in fspec_cat.colnames
-    ):
-        g_err = np.asarray(fspec_cat["MAG_G_FIBER_NOEMI_ERR"].data, dtype=float)
-        r_err = np.asarray(fspec_cat["MAG_R_FIBER_NOEMI_ERR"].data, dtype=float)
-        low_snr = (
-            ~np.isfinite(g_err)
-            | ~np.isfinite(r_err)
-            | (g_err >= mag_err_limit)
-            | (r_err >= mag_err_limit)
-        )
-    else:
-        low_snr = np.ones(n_fspec, dtype=bool)
-        if verbose:
-            print(
-                "  WARNING: MAG_G_FIBER_NOEMI_ERR / MAG_R_FIBER_NOEMI_ERR missing; "
-                "all rows use low-SNR fallback (no DELTA_MAG) for fiber mass/SFR."
-            )
-
-    mag_g_corr, mag_r_corr = _spec_derived_delta_corrected_mags(
+    mag_g_corr_fib, mag_r_corr_fib = _spec_derived_delta_corrected_mags(
         fspec_cat, mag_g_fib, mag_r_fib, low_snr
     )
 
     z_zero = np.zeros(n_fspec, dtype=float)
     log_m_hi = get_stellar_mass_mia(
-        mag_g_corr - mag_r_corr,
-        mag_g_corr,
+        mag_g_corr_fib - mag_r_corr_fib,
+        mag_g_corr_fib,
         z_zero,
         d_in_mpc=lumi_dist,
         input_zred=False,
@@ -732,15 +798,21 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
     log_m_lo = np.asarray(log_m_lo, dtype=np.float64)
     log_mstar_fiber = np.where(low_snr, log_m_lo, log_m_hi).astype(np.float32)
 
-    mag_r_sfr = np.where(low_snr, mag_r_fib, mag_r_corr)
-    absm_r_fiber = mag_r_sfr + 5.0 - 5.0 * np.log10(1e6 * lumi_dist)
+    mr_fiber = _mr_for_halpha_sfr(
+        mag_r_fib,
+        mag_g_fib - mag_r_fib,
+        mag_r_corr_fib,
+        low_snr,
+        z_cmb,
+        lumi_dist,
+    )
     log_sfr_fiber, _ = calc_SFR_Halpha(
         EW_Halpha=halpha_ew,
         EW_Halpha_ivar=halpha_ew_ivar,
         spec_z=z,
         spec_z_err=zeros,
-        Mr=absm_r_fiber,
-        Mr_err=zeros,
+        Mr=mr_fiber,
+        Mr_err=mr_err,
         EWc=0.0,
         BD=3.25,
         BD_err=0.0,
@@ -748,6 +820,36 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
     )
     fspec_cat["LOG_MSTAR_24_FIBER"] = log_mstar_fiber
     fspec_cat["LOG_HALPHA_SFR_FIBER"] = log_sfr_fiber
+
+    required_z = [
+        f"{stem}_{suffix}"
+        for stem in _R23_N2_LINE_STEMS
+        for suffix in ("FLUX", "FLUX_IVAR")
+    ]
+    missing_z = [c for c in required_z if c not in fspec_cat.colnames]
+    if missing_z:
+        raise ValueError(
+            f"add_sfr_halpha_to_spec_derived: SPEC_DERIVED missing columns {missing_z} "
+            "needed for Z_GAS_R23_N2"
+        )
+
+    z_gas = np.full(n_fspec, np.nan, dtype=np.float64)
+    mask_z = r23_n2_line_snr_mask(fspec_cat)
+    for i in np.flatnonzero(mask_z):
+        try:
+            z_i = Z_R23_N2(
+                fspec_cat["OII_3726_FLUX"].data[i],
+                fspec_cat["OII_3729_FLUX"].data[i],
+                fspec_cat["HBETA_FLUX"].data[i],
+                fspec_cat["OIII_4959_FLUX"].data[i],
+                fspec_cat["OIII_5007_FLUX"].data[i],
+                fspec_cat["HALPHA_FLUX"].data[i],
+                fspec_cat["NII_6584_FLUX"].data[i],
+            )
+            z_gas[i] = z_i[0]
+        except Exception:
+            pass
+    fspec_cat["Z_GAS_R23_N2"] = z_gas
 
     fspec_hdu_new = fits.table_to_hdu(fspec_cat)
     fspec_hdu_new.name = DWARF_CATALOG_SPEC_HDU
@@ -792,7 +894,7 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
         print(f"Updated {cat_path}:")
         print(
             "  SPEC_DERIVED HDU: added LOG_SFR_HALPHA, LOG_SFR_HALPHA_ERR, "
-            "LOG_MSTAR_24_FIBER, LOG_HALPHA_SFR_FIBER"
+            "LOG_MSTAR_24_FIBER, LOG_HALPHA_SFR_FIBER, Z_GAS_R23_N2"
         )
         print("=" * 60)
 

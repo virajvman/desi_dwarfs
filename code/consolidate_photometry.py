@@ -2041,9 +2041,7 @@ if __name__ == '__main__':
 
     # then describe how much of a difference in stellar mass between doing the proper transformations, vs. no transofmraitons and using C10 for k correcitons for galaxies where we trust the corrections, this can give us a sense of error and we can add that in quadrature to the error!
                  
-    TODO: add metallicity column! using Scholte's method in sfr_and_metallicity.py. 
-    TODO: Compute in error from tractor in sfr. Confirm that mstar contain mag_g/r error as well?
-    TODO: update the image cutouts download function to selectively update the cutouts for dwarfs that do not exist in the catalog. 
+    # TODO: update the image cutouts download function to selectively update the cutouts for dwarfs that do not exist in the catalog. 
 
     process_shreds = True
     process_clean = True
