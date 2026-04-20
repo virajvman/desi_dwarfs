@@ -678,6 +678,10 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
 
     main_cat = safe_read_table(cat_path, hdu="MAIN")
     fspec_cat = safe_read_table(cat_path, hdu=DWARF_CATALOG_SPEC_HDU)
+    tractor_cat = safe_read_table(cat_path, hdu="TRACTOR")
+
+    print("Finished reading tables!")
+    
     n_main = len(main_cat)
     n_fspec = len(fspec_cat)
     if n_main != n_fspec:
@@ -727,6 +731,9 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
     mag_g_corr_main, mag_r_corr_main = _spec_derived_delta_corrected_mags(
         fspec_cat, mag_g, mag_r, low_snr
     )
+
+    print("Collected the delta mags!")
+    
     mr_global = _mr_for_halpha_sfr(
         mag_r,
         mag_g - mag_r,
@@ -738,6 +745,9 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
     mr_err = np.where(low_snr, 0.0, r_err_noemi)
 
     zeros = np.zeros_like(z, dtype=float)
+
+    print("Computing SFR now!")
+    
     log_sfr, log_sfr_err = calc_SFR_Halpha(
         EW_Halpha=halpha_ew,
         EW_Halpha_ivar=halpha_ew_ivar,
@@ -754,30 +764,18 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
     fspec_cat["LOG_SFR_HALPHA_ERR"] = log_sfr_err
 
     # --- Fiber-aperture stellar mass and fiber Hα SFR ---
-    required_main = (
-        "FIBERTOTFLUX_G",
-        "FIBERTOTFLUX_R",
-        "MW_TRANSMISSION_G",
-        "MW_TRANSMISSION_R",
-        "Z_CMB",
-    )
-    missing_main = [c for c in required_main if c not in main_cat.colnames]
-    if missing_main:
-        raise ValueError(
-            f"add_sfr_halpha_to_spec_derived: MAIN missing columns {missing_main} "
-            "needed for LOG_MSTAR_24_FIBER / LOG_HALPHA_SFR_FIBER"
-        )
-
     mag_g_fib, mag_r_fib = _fiber_tot_mw_mags(
-        main_cat["FIBERTOTFLUX_G"].data,
-        main_cat["FIBERTOTFLUX_R"].data,
-        main_cat["MW_TRANSMISSION_G"].data,
-        main_cat["MW_TRANSMISSION_R"].data,
+        tractor_cat["FIBERTOTFLUX_G"].data,
+        tractor_cat["FIBERTOTFLUX_R"].data,
+        tractor_cat["MW_TRANSMISSION_G"].data,
+        tractor_cat["MW_TRANSMISSION_R"].data,
     )
 
     mag_g_corr_fib, mag_r_corr_fib = _spec_derived_delta_corrected_mags(
         fspec_cat, mag_g_fib, mag_r_fib, low_snr
     )
+
+    print("Collected the delta mags for fiber-based!")
 
     z_zero = np.zeros(n_fspec, dtype=float)
     log_m_hi = get_stellar_mass_mia(

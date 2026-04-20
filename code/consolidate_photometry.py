@@ -1376,14 +1376,17 @@ def add_fibertotflux_from_int_v2(tractor_tab, tot_cat, int_v2_folder=None):
     close = d2d.arcsec < FIBERTOT_MATCH_RADIUS_ARCSEC
     ref_tid = np.asarray(int_v2_ref["TARGETID"].data)[idx]
     cat_tid = np.asarray(tot_cat["TARGETID"].data)
-    mismatch = close & (ref_tid != cat_tid)
-    if np.any(mismatch):
-        i = int(np.flatnonzero(mismatch)[0])
-        raise ValueError(
-            "FIBERTOT INT_V2 cross-match: TARGETID mismatch for a close sky match "
-            f"(row {i}: catalog TARGETID {cat_tid[i]} vs INT_V2 TARGETID {ref_tid[i]}, "
-            f"d2d={d2d[i].arcsec:.4f} arcsec)"
-        )
+    # mismatch = close & (ref_tid != cat_tid)
+
+    #it is possible that there is not a perfect match as sometimes there are same sources in DESI with two different targetids.
+    #matching by distance (within 1 arcsec is good enough for fiber tot flux purposes!
+    # if np.any(mismatch):
+    #     i = int(np.flatnonzero(mismatch)[0])
+    #     raise ValueError(
+    #         "FIBERTOT INT_V2 cross-match: TARGETID mismatch for a close sky match "
+    #         f"(row {i}: catalog TARGETID {cat_tid[i]} vs INT_V2 TARGETID {ref_tid[i]}, "
+    #         f"d2d={d2d[i].arcsec:.4f} arcsec)"
+    #     )
 
     g = np.full(len(tractor_tab), np.nan, dtype=np.float32)
     r = np.full(len(tractor_tab), np.nan, dtype=np.float32)
@@ -2030,18 +2033,12 @@ if __name__ == '__main__':
 
     save_path = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats"
 
-    # TODO: increase SNR in spectra mag no emi to 10 in both g and r! In paper, quote the approximate median SNR per pixel this corresponds to
-    # if the snr cut is not robust, we disregard the corrections and just do a straight photometry based stellar mass
-    # no filter transformations as those are not robust as spectra too nosiy... 
-    # then we will add a column for stellar mass maskbit flag, this is separate from dwarfmaskbit flag:
-    # we want to separate the stellar maskbit from dwarf_maskbit as dwarf_mask are like catastrophic errors, while mstar is not very catastrophic
-    # i) Mg0 < -18.5 will be in dwarf_maskbit as relation is not well calibrated there so catastrophic
-    # ii) low SNR in spectra mag, and so we default to no corrections type of photometry
+    #need to add to mstar_maskbit ..     
     # iii) flagging large k correction or large difference between g and r template corrections, as that will point to something suspicious ...
 
-    # then describe how much of a difference in stellar mass between doing the proper transformations, vs. no transofmraitons and using C10 for k correcitons for galaxies where we trust the corrections, this can give us a sense of error and we can add that in quadrature to the error!
-                 
     # TODO: update the image cutouts download function to selectively update the cutouts for dwarfs that do not exist in the catalog. 
+
+    #TODO: think about the new columns we are adding if they are nans, are they masked columns then?
 
     process_shreds = True
     process_clean = True
