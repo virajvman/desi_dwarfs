@@ -666,6 +666,11 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
     fluxes; per-line SNR > 3 (r23_n2_line_snr_mask) with no BPT cuts; NaN
     otherwise or if the fit fails.
 
+    LOG_SFR_HALPHA, LOG_SFR_HALPHA_ERR, and LOG_HALPHA_SFR_FIBER are only set
+    for rows with finite HALPHA_FLUX > 0, HALPHA_EW > 0, and HALPHA_EW SNR > 3
+    (EW × sqrt(EW_IVAR)); otherwise those entries are NaN. This is independent
+    of the continuum-SNR split from MAG_*_FIBER_NOEMI_ERR above.
+
     r_kcorr in desi_lowz_funcs is nominally valid for z < 0.5.
     """
     if verbose:
@@ -703,6 +708,19 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
 
     halpha_ew = np.asarray(fspec_cat["HALPHA_EW"].data, dtype=float)
     halpha_ew_ivar = np.asarray(fspec_cat["HALPHA_EW_IVAR"].data, dtype=float)
+    halpha_flux = np.asarray(fspec_cat["HALPHA_FLUX"].data, dtype=float)
+    with np.errstate(invalid="ignore"):
+        halpha_ew_snr = halpha_ew * np.sqrt(halpha_ew_ivar)
+    ok_halpha_for_sfr = (
+        np.isfinite(halpha_flux)
+        & (halpha_flux > 0)
+        & np.isfinite(halpha_ew)
+        & (halpha_ew > 0)
+        & np.isfinite(halpha_ew_ivar)
+        & (halpha_ew_ivar > 0)
+        & np.isfinite(halpha_ew_snr)
+        & (halpha_ew_snr > 3.0)
+    )
 
     mag_err_limit = 1.0857 / 10.0
     if (
@@ -760,6 +778,8 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
         BD_err=0.0,
         imf_factor=1.0,
     )
+    log_sfr = np.where(ok_halpha_for_sfr, log_sfr, np.nan)
+    log_sfr_err = np.where(ok_halpha_for_sfr, log_sfr_err, np.nan)
     fspec_cat["LOG_SFR_HALPHA"] = log_sfr
     fspec_cat["LOG_SFR_HALPHA_ERR"] = log_sfr_err
 
@@ -816,6 +836,7 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
         BD_err=0.0,
         imf_factor=1.0,
     )
+    log_sfr_fiber = np.where(ok_halpha_for_sfr, log_sfr_fiber, np.nan)
     fspec_cat["LOG_MSTAR_24_FIBER"] = log_mstar_fiber
     fspec_cat["LOG_HALPHA_SFR_FIBER"] = log_sfr_fiber
 
