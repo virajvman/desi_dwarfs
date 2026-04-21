@@ -2048,17 +2048,17 @@ if __name__ == '__main__':
 
     # TODO: update the image cutouts download function to selectively update the cutouts for dwarfs that do not exist in the catalog. 
 
-    #TODO: think about the new columns we are adding if they are nans, are they masked columns then?
-
     process_shreds = True
     process_clean = True
     compute_mstar_err = True
     add_model_phot = True
-    process_qso_scnd = False
+    process_qso_scnd = True
     process_post_hdu = False
 
     #make sure the get_fastspec_fit_catalog_V2 function is run before hand in case there are any new columns added
     process_fastspec=True
+
+    add_sfrs_zmet = True
 
     main_cat_outpath = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits"
 
@@ -2211,14 +2211,14 @@ if __name__ == '__main__':
         #update the dwarf_maskbit with some weird spectra masks
         add_wrong_redrock_maskbit(main_cat_outpath, main_datamodel)
 
-    # Associated fiber consolidation: must be the very last step so all
-    # columns (LOG_MSTAR_M24_ERR, MSTAR_MASKBIT, DWARF_MASKBIT bits 16 and 18, etc.)
-    # are final.
     consolidate_associated_fiber_properties(main_cat_outpath)
 
-    add_sfr_halpha_to_spec_derived(main_cat_outpath)
 
-    #TODO: add error from Mr to sfr error budget as well! We have error for the not-shredded sources, so need to fold that in.
+    TODO: add snr cut to halpha_ew when estimating the sfr!!
+
+    if add_sfrs_zmet:
+        add_sfr_halpha_to_spec_derived(main_cat_outpath)
+
 
 
 

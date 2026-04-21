@@ -3,6 +3,7 @@ python3 desi_dwarfs/code/download_spectra.py -random -nchunks 50 -save_name desi
 
 python3 download_spectra.py -nchunks 10 -append_sample OTHER -existing_h5 /pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/data/desi_dr1_dwarf_catalog_spectra.h5
 
+python3 download_spectra.py -nchunks 10 -save_name desi_dr1_dwarf_catalog_spectra
 
 '''
 
@@ -278,6 +279,8 @@ if __name__ == '__main__':
         h5_path = file_template + ".h5"
 
         overwrite = args.overwrite
+
+        print(h5_path)
 
         if overwrite or not os.path.exists(h5_path):
             ##########################################################
