@@ -2213,9 +2213,6 @@ if __name__ == '__main__':
 
     consolidate_associated_fiber_properties(main_cat_outpath)
 
-
-    TODO: add snr cut to halpha_ew when estimating the sfr!!
-
     if add_sfrs_zmet:
         add_sfr_halpha_to_spec_derived(main_cat_outpath)
 
