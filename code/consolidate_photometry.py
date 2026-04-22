@@ -530,9 +530,23 @@ def consolidate_positions_and_shapes(catalog):
     return catalog
 
 
-
-# _load_nebcorr_is_south_lookup, _bass2decam_apply_mask, _apply_delta_mag_corrections
-# are imported from mass_and_photo_corrections
+def fix_zwarn(catalog_main):
+    """
+    Set ZWARN on MAIN to an integer column matching main_datamodel so FITS
+    is written with an integer TFORM (e.g. J for int32), not logical (L) / bool.
+    """
+    if "ZWARN" not in catalog_main.colnames:
+        return
+    meta = main_datamodel["ZWARN"]
+    target_dtype = np.dtype(meta["dtype"])
+    a = np.asarray(catalog_main["ZWARN"])
+    a = np.asarray(a, dtype=np.int64, order="C")
+    a = a.astype(target_dtype, copy=False)
+    catalog_main["ZWARN"] = a
+    if meta.get("description"):
+        catalog_main["ZWARN"].description = meta["description"]
+    if meta.get("unit") is not None:
+        catalog_main["ZWARN"].unit = meta["unit"]
 
 
 def create_main_data_model(catalog, save_name, clean_cat=False):
@@ -708,6 +722,8 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
                 col_data[bad] = blank_val
                 catalog_main[col] = col_data
 
+    fix_zwarn(catalog_main)
+
     #save to fits file
     catalog_main.write(save_name, overwrite=True)
 
@@ -782,6 +798,8 @@ def finalize_main_hdu(catalog_main):
             bad = np.isnan(col_data)
             col_data[bad] = blank_val
             catalog_main[col] = col_data
+
+    fix_zwarn(catalog_main)
 
     return catalog_main
 
@@ -2210,7 +2228,6 @@ if __name__ == '__main__':
         #update the dwarf_maskbit with some weird spectra masks
         add_wrong_redrock_maskbit(main_cat_outpath, main_datamodel)
 
-    # TODO: fix the ZWARN flag, why is it bool and not a bit?
     # TODO: need to confirm if the pruning and appending in ssl datasets is working fine and the data exists!
 
     consolidate_associated_fiber_properties(main_cat_outpath)

@@ -51,7 +51,7 @@ main_datamodel = {
     "ZWARN": {
         "unit": None,
         "description": "Redrock zwarning bit",
-        "dtype": "int8"
+        "dtype": "int32"
     },
     "Z_CMB": {
         "unit": None,
