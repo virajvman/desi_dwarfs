@@ -9,13 +9,13 @@ cd DESI2_LOWZ/desi_dwarfs/code
 import os
 import numpy as np
 import torch
-from ssl_legacysurvey.utils import load_data # Loading galaxy catalogue and image data from hdf5 file(s)
-from ssl_legacysurvey.utils import plotting_tools as plt_tools # Plotting images or catalogue info
+from ssl_legacysurvey.utils import load_data
+from ssl_legacysurvey.utils import plotting_tools as plt_tools
 
-from ssl_legacysurvey.data_loaders import datamodules # Pytorch dataloaders and datamodules
-from ssl_legacysurvey.data_loaders import decals_augmentations # Augmentations for training
+from ssl_legacysurvey.data_loaders import datamodules
+from ssl_legacysurvey.data_loaders import decals_augmentations
 
-from ssl_legacysurvey.data_analysis import dimensionality_reduction # PCA/UMAP functionality
+from ssl_legacysurvey.data_analysis import dimensionality_reduction
 import matplotlib.pyplot as plt
 
 import numpy as np
@@ -48,11 +48,16 @@ def _data_chunk_index(path):
 
 if __name__ == '__main__':
 
-    ##load the model! This checkpoint file was obtained from the Globus endpoint. See the github for more info
     checkpoint_path = '/pscratch/sd/v/virajvm/ssl-legacysurvey-dwarfs/resnet50.ckpt'
-    model = Moco_v2.load_from_checkpoint(
-        checkpoint_path=checkpoint_path
-        )
+    model = Moco_v2.load_from_checkpoint(checkpoint_path=checkpoint_path)
+
+    # --- pick device and move model once, outside the chunk loop ---
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Using device: {device}")
+    model = model.to(device).eval()
+
+    # sanity check
+    print("encoder_q device:", next(model.encoder_q.parameters()).device)
 
     print("Model finished loading!")
 
@@ -64,79 +69,60 @@ if __name__ == '__main__':
         print(h5_data_path)
         
         DDL = load_data.DecalsDataLoader(image_dir=h5_data_path, npix_in=152)
-        gals = DDL.get_data(-1, fields=DDL.fields_available,npix_out=152) # -1 to load all galaxies
+        gals = DDL.get_data(-1, fields=DDL.fields_available, npix_out=152)
         print("Available keys & data shapes:")
 
-        ngals =  gals[f'images'].shape[0]
-
+        ngals = gals['images'].shape[0]
         print(ngals)
             
-        class Args: # In general codes in this project use argparse. Args() simplifies this for this example 
-            # Data location and GPU availability 
+        class Args:
             data_path = h5_data_path
-            gpu = True # Use GPU?
-            gpus = 1 # Number of gpus to use
+            gpu = True
+            gpus = 1
             num_nodes = 1
             ngals_tot = gals['images'].shape[0]
-            # Training
             verbose = True
             ssl_training = True
             batch_size = ngals_tot
             learning_rate = 0.03
             max_epochs = 5
-            max_num_samples= ngals_tot
-            
-            check_val_every_n_epoch = 999 # We haven't provided validation set, so don't use it!
+            max_num_samples = ngals_tot
+            check_val_every_n_epoch = 999
             num_sanity_val_steps = 0
-        
             augmentations = 'grrrssgbjcgnrg'
             jitter_lim = 7
-            
-            strategy = 'dp' # Distributed training strategy,  ddp does not work in ipython notebook, only dp does
+            strategy = 'dp'
             seed = 13579
-        
             checkpoint_every_n_epochs = 1
-            num_workers = 1 # Number of workers for data loader
-        
-            # Model architecture and settings
-            backbone = 'resnet50' # Encoder architecture to use, Can use any in torchvision, i.e. ['resnet18', 'resnet34', 'resnet50', 'resnet152', .....]
-            use_mlp = True # use projection head
-        
-            emb_dim = 128 # Dimensionality where loss is calculated
-            num_negatives = 16 #Number of negative samples to keep in queue for Mocov2
-            
-            # needed for predict.py script
+            num_workers = 1
+            backbone = 'resnet50'
+            use_mlp = True
+            emb_dim = 128
+            num_negatives = 16
             out_dir = '/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/representations'
-            
             extract_representations = True
             checkpoint_path = '/pscratch/sd/v/virajvm/ssl-legacysurvey-dwarfs/resnet50.ckpt'
             use_mlp_representation = True
             overwrite = True
             file_head = '/pscratch/sd/v/virajvm/ssl-legacysurvey-dwarfs/'
-            chunksize= ngals_tot
-            batch_size_per_gpu = int(gals['images'].shape[0]/4)
+            chunksize = ngals_tot
+            batch_size_per_gpu = int(gals['images'].shape[0] / 4)
             num_gpus = 1
             data_dim = 2048
             predict_batch_size = ngals_tot
             representation_directory = '/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/representations'
             representation_file_head = file_head
             umap_file_head = '/pscratch/sd/v/virajvm/ssl-legacysurvey-dwarfs/umap_representations'
-            
             train_umap = True
-            
-            #For dimensionality reduction script
             n_samples = ngals
             sample_dimensionality = 100
             n_pca_components = 8
             n_umap_components = 2
             umap_embedding_file_path = os.path.join(out_dir, f"{umap_file_head}_{gals['images'].shape[0]}_embedding.npz")
             umap_transform_file_path = os.path.join(out_dir, f"{umap_file_head}_{gals['images'].shape[0]}_transform.pkl")
-        
-            #for similarity search:
             use_faiss = True
             use_gpu = True
             norm = True
-            
             rep_dir = '/pscratch/sd/v/virajvm/ssl-legacysurvey-dwarfs/'
             output_dir = '/pscratch/sd/v/virajvm/ssl-legacysurvey-dwarfs/'
             knearest = 25
@@ -145,68 +131,58 @@ if __name__ == '__main__':
             survey = 'south'
             rep_file_head = file_head
             chunksize_similarity = ngals_tot
-            sim_chunksize= ngals_tot
+            sim_chunksize = ngals_tot
             rep_dim = 128
-            nchunks = int(math.ceil(ngals_tot/chunksize))
-            nchunks_similarity = int(math.ceil(ngals_tot/chunksize_similarity))
+            nchunks = int(math.ceil(ngals_tot / chunksize))
+            nchunks_similarity = int(math.ceil(ngals_tot / chunksize_similarity))
             supervised_training = True
             
-        params = vars(Args)
-        p = {}
-        for k, v in params.items():
-            p[k] = v
-        params = p
-    
-    
+        params = {k: v for k, v in vars(Args).items()}
+
         backbone = model.encoder_q
-    
-        # Remove the MLP projection head from the model, so output is now the representaion for each galaxy
         backbone.fc = torch.nn.Identity()
-        
+        # backbone is already on `device` because model was moved above,
+        # but being explicit doesn't hurt:
+        backbone = backbone.to(device).eval()
+
         params['ssl_training'] = False
         params['jitter_lim'] = 0
-        params['augmentations'] = 'rrjc'#adjust to whatever parameters you want
-        
-        # Load all images as one batch
-        
-        transform = datamodules.DecalsTransforms(
-            params['augmentations'],
-            params
-        )
-        
-        
+        params['augmentations'] = 'rrjc'
+
+        transform = datamodules.DecalsTransforms(params['augmentations'], params)
+
         decals_dataloader = datamodules.DecalsDataset(
             h5_data_path,
             None,
             transform,
             params,
         )
-        
-        ngals =  gals['images'].shape[0]
+
+        ngals = gals['images'].shape[0]
         im, label = decals_dataloader.__getitem__(0)
-        images = torch.empty((ngals, im.shape[0], im.shape[1], im.shape[2]), dtype=im.dtype)
+
+        # stage all images on CPU, pinned if GPU is available
+        images = torch.empty(
+            (ngals, im.shape[0], im.shape[1], im.shape[2]),
+            dtype=im.dtype,
+            pin_memory=(device.type == 'cuda'),
+        )
         for i in range(ngals):
             images[i], _ = decals_dataloader.__getitem__(i)
-            
-        # Run images through model to get representations
-        representations = backbone(images)
-        
-        if params['gpu']:
-           representations = representations.detach()
-            
-        representations = representations.numpy()
-            
+
+        # --- mini-batched GPU inference ---
+        mb = 128  # drop to 64 or 32 if you OOM on a shared GPU
+        reps = []
+        with torch.no_grad():
+            for start in range(0, ngals, mb):
+                batch = images[start:start + mb].to(device, non_blocking=True)
+                reps.append(backbone(batch).cpu())
+
+        representations = torch.cat(reps, dim=0).numpy()
+
         print(f"Representations shape = {representations.shape}")
-        
+
         save_rep = f'/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/representations/represent_chunk_{file_i}.npy'
-
         print(f"Saving file = {save_rep}")
-                
-        #save this array
-        np.save( save_rep, representations )
-            
-        
-
-
-        
+        np.save(save_rep, representations)
         

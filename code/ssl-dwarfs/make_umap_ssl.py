@@ -157,8 +157,8 @@ if __name__ == '__main__':
     #load all the data and representation arrays
 
     generate_inputs = True
-    generate_umap = True
-    generate_pca = True
+    generate_umap = False
+    generate_pca = False
     N_PCA = 50
 
     # for img_type in ["recon","org"]:
@@ -171,49 +171,49 @@ if __name__ == '__main__':
         print(f"Total representations array shape = {np.shape(all_repr_array)}")
 
     #instead of going from 2048 straight to 2 dim for UMAP, it might be easier to go to 50 dim using PCA and then UMAP to 2
-    if generate_pca:
-        # Optional but recommended for PCA
-        scaler = StandardScaler(with_mean=True, with_std=True)
-        all_repr_scaled = scaler.fit_transform(all_repr_array)
+    # if generate_pca:
+    #     # Optional but recommended for PCA
+    #     scaler = StandardScaler(with_mean=True, with_std=True)
+    #     all_repr_scaled = scaler.fit_transform(all_repr_array)
 
-        pca = PCA(n_components=N_PCA, random_state=42)
-        repr_pca = pca.fit_transform(all_repr_scaled)
+    #     pca = PCA(n_components=N_PCA, random_state=42)
+    #     repr_pca = pca.fit_transform(all_repr_scaled)
 
-        print(f"PCA output shape = {repr_pca.shape}")
-        print(
-            f"Explained variance (first {N_PCA} comps) = "
-            f"{np.sum(pca.explained_variance_ratio_):.3f}"
-        )
+    #     print(f"PCA output shape = {repr_pca.shape}")
+    #     print(
+    #         f"Explained variance (first {N_PCA} comps) = "
+    #         f"{np.sum(pca.explained_variance_ratio_):.3f}"
+    #     )
 
-        np.save(
-            f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/pca/"
-            f"total_repr_pca_{N_PCA}.npy",
-            repr_pca,
-        )
+    #     np.save(
+    #         f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/pca/"
+    #         f"total_repr_pca_{N_PCA}.npy",
+    #         repr_pca,
+    #     )
 
-    else:
-        repr_pca = np.load(
-            f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/pca/"
-            f"total_repr_pca_{N_PCA}.npy"
-        )
+    # else:
+    #     repr_pca = np.load(
+    #         f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/pca/"
+    #         f"total_repr_pca_{N_PCA}.npy"
+    #     )
 
-        print(f"PCA output shape = {repr_pca.shape}")
+    #     print(f"PCA output shape = {repr_pca.shape}")
 
     ########
 
-    if generate_umap:
-        #make the UMAP now!   
-        print(f"UMAP input shape = {repr_pca.shape}")
+    # if generate_umap:
+    #     #make the UMAP now!   
+    #     print(f"UMAP input shape = {repr_pca.shape}")
         
-        umap_embedding_cos, umap_trans_cos = dimensionality_reduction.umap_transform(repr_pca, n_components=2, metric='cosine')
+    #     umap_embedding_cos, umap_trans_cos = dimensionality_reduction.umap_transform(repr_pca, n_components=2, metric='cosine')
 
-        print(f"Total umap embedding array shape = {np.shape(umap_embedding_cos)}")
+    #     print(f"Total umap embedding array shape = {np.shape(umap_embedding_cos)}")
         
-        np.save(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/umap/total_umap_embedding_2d.npy",  umap_embedding_cos )
-    else:
-        umap_embedding_cos = np.load(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/umap/total_umap_embedding_2d.npy")
+    #     np.save(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/umap/total_umap_embedding_2d.npy",  umap_embedding_cos )
+    # else:
+    #     umap_embedding_cos = np.load(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/umap/total_umap_embedding_2d.npy")
 
-        print(f"Total umap embedding array shape = {np.shape(umap_embedding_cos)}")
+    #     print(f"Total umap embedding array shape = {np.shape(umap_embedding_cos)}")
             
     # #UMAP plot!
     # make_umap_plot(umap_embedding_cos)

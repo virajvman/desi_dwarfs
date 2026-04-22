@@ -1708,13 +1708,13 @@ def create_image_ssl_hdu(file_path):
     sim_tgids = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/similarity_search_magb/all_similarity_targetids_total.npy")
 
     # Load UMAP 2D coordinates and their associated TARGETIDs
-    umaps_dwarfs = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/umap/total_umap_embedding_2d.npy")
+    # umaps_dwarfs = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/umap/total_umap_embedding_2d.npy")
     tgid_vals = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/dwarf_dr1/total_targetids_arr.npy")
 
     print(f"Similarity arrays shape: scores={sim_scores.shape}, tgids={sim_tgids.shape}")
-    print(f"UMAP array shape: {umaps_dwarfs.shape}, tgid_vals length: {len(tgid_vals)}")
+    # print(f"UMAP array shape: {umaps_dwarfs.shape}, tgid_vals length: {len(tgid_vals)}")
 
-    assert umaps_dwarfs.shape[0] == len(tgid_vals), "UMAP rows and tgid_vals length mismatch"
+    # assert umaps_dwarfs.shape[0] == len(tgid_vals), "UMAP rows and tgid_vals length mismatch"
     assert sim_scores.shape == sim_tgids.shape, "sim_scores and sim_tgids shape mismatch"
 
     n_sim = 10
@@ -1724,11 +1724,11 @@ def create_image_ssl_hdu(file_path):
     sim_tgid_to_row = {int(sim_tgids[i, 0]): i for i in range(sim_tgids.shape[0])}
 
     # Build lookup: TARGETID -> row index in UMAP arrays
-    umap_tgid_to_idx = {int(tgid_vals[i]): i for i in range(len(tgid_vals))}
+    # umap_tgid_to_idx = {int(tgid_vals[i]): i for i in range(len(tgid_vals))}
 
     # Prepare output columns
-    img_umap_0 = np.full(n_objects, -99.0, dtype=np.float64)
-    img_umap_1 = np.full(n_objects, -99.0, dtype=np.float64)
+    # img_umap_0 = np.full(n_objects, -99.0, dtype=np.float64)
+    # img_umap_1 = np.full(n_objects, -99.0, dtype=np.float64)
 
     sim_targetid_cols = np.full((n_objects, n_sim), -99, dtype=np.int64)
     sim_score_cols = np.full((n_objects, n_sim), -99.0, dtype=np.float64)
@@ -1737,10 +1737,10 @@ def create_image_ssl_hdu(file_path):
         tgid_int = int(tgid)
 
         # UMAP coordinates
-        if tgid_int in umap_tgid_to_idx:
-            uidx = umap_tgid_to_idx[tgid_int]
-            img_umap_0[i] = umaps_dwarfs[uidx, 0]
-            img_umap_1[i] = umaps_dwarfs[uidx, 1]
+        # if tgid_int in umap_tgid_to_idx:
+        #     uidx = umap_tgid_to_idx[tgid_int]
+        #     img_umap_0[i] = umaps_dwarfs[uidx, 0]
+            # img_umap_1[i] = umaps_dwarfs[uidx, 1]
 
         # Similarity: skip self (column 0), take next 10
         if tgid_int in sim_tgid_to_row:
@@ -1753,8 +1753,8 @@ def create_image_ssl_hdu(file_path):
     new_table = Table()
     new_table["TARGETID"] = main_tgids
 
-    new_table["IMG_UMAP_0"] = img_umap_0
-    new_table["IMG_UMAP_1"] = img_umap_1
+    # new_table["IMG_UMAP_0"] = img_umap_0
+    # new_table["IMG_UMAP_1"] = img_umap_1
 
     for j in range(n_sim):
         new_table[f"SIM_TARGETID_{j}"] = sim_targetid_cols[:, j]
@@ -1767,10 +1767,10 @@ def create_image_ssl_hdu(file_path):
         hdul.append(new_hdu)
         hdul.flush()
 
-    n_matched_umap = np.sum(img_umap_0 != -99.0)
+    # n_matched_umap = np.sum(img_umap_0 != -99.0)
     n_matched_sim = np.sum(sim_targetid_cols[:, 0] != -99)
     print(f"Added IMG_SSL extension to {file_path} (length = {n_objects})")
-    print(f"  UMAP matched: {n_matched_umap}/{n_objects}")
+    # print(f"  UMAP matched: {n_matched_umap}/{n_objects}")
     print(f"  Similarity matched: {n_matched_sim}/{n_objects}")
 
     return
@@ -2067,7 +2067,7 @@ if __name__ == '__main__':
 
     process_shreds = True
     process_clean = True
-    compute_mstar_err = False
+    compute_mstar_err = True
     add_model_phot = True
     process_qso_scnd = True
     process_post_hdu = True
@@ -2075,7 +2075,7 @@ if __name__ == '__main__':
     #make sure the get_fastspec_fit_catalog_V2 function is run before hand in case there are any new columns added
     process_fastspec=True
 
-    add_sfrs_zmet = False
+    add_sfrs_zmet = True
 
     main_cat_outpath = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits"
 
@@ -2218,23 +2218,20 @@ if __name__ == '__main__':
         add_model_photometry_to_fastspec(main_cat_outpath)
         add_delta_mag_to_fastspec(main_cat_outpath)
 
-    if process_post_hdu:
-        ##add the spectra NMF+PCA information!!
-        create_spectra_hdu(main_cat_outpath)
-
-        ##add image SSL UMAP + similarity information
-        # create_image_ssl_hdu(main_cat_outpath)
-
-        #update the dwarf_maskbit with some weird spectra masks
-        add_wrong_redrock_maskbit(main_cat_outpath, main_datamodel)
-
-    # TODO: need to confirm if the pruning and appending in ssl datasets is working fine and the data exists!
-
     consolidate_associated_fiber_properties(main_cat_outpath)
 
     if add_sfrs_zmet:
         add_sfr_halpha_to_spec_derived(main_cat_outpath)
 
+    if process_post_hdu:
+        ##add the spectra NMF+PCA information!!
+        create_spectra_hdu(main_cat_outpath)
+
+        ##add image SSL UMAP + similarity information
+        create_image_ssl_hdu(main_cat_outpath)
+
+        #update the dwarf_maskbit with some weird spectra masks
+        add_wrong_redrock_maskbit(main_cat_outpath, main_datamodel)
 
 
 
