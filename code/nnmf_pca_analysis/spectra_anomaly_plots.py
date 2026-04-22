@@ -74,7 +74,7 @@ class PCA(nn.Module):
 
 if __name__ == '__main__':
 
-    compute_norm_resis = True
+    compute_norm_resis = False
 
     on_gpu_node=True
     #if we are not on a gpu node, the below are just effectivelt False    
@@ -127,7 +127,7 @@ if __name__ == '__main__':
         
             # Randomly split into half for fitting PCA
             n_total = X_full.shape[0]
-            n_subset = n_total #// 2
+            n_subset = n_total
             perm = torch.randperm(n_total, device=device)
             subset_idx = perm[:n_subset]
             X_subset = X_full[subset_idx]

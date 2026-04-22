@@ -209,13 +209,13 @@ if __name__ == '__main__':
     h5_glob = os.path.join(h5_dir, "data_chunk_*.h5")
     # Prune: drop H5 rows not in the current (filtered) catalog. Export FITS of catalog rows that are
     # missing from H5 and whose cutout file is not on disk.
-    prune_h5_against_catalog = True
-    write_need_image_download_fits = True
+    prune_h5_against_catalog = False
+    write_need_image_download_fits = False
     need_image_download_fits = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/ssl_need_image_download.fits"
     prune_dry_run = False
     # Append-only: new data_chunk_N.h5 with N = 1+max existing index; never overwrites. Mutually
     # exclusive with full create_from_scratch below; use when cutouts for new objects exist.
-    append_new_h5_chunks = False
+    append_new_h5_chunks = True
     # Full (re)build from chunk 0 — ignored if append_new_h5_chunks is True
     create_clean_chunks = False
     create_shred_chunks = False

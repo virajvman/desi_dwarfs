@@ -13,21 +13,21 @@ from mass_and_photo_corrections import (
 )
 from desi_lowz_funcs import get_stellar_mass_mia, r_kcorr
 
-def line_snr_mask(fastspec_cat, line_names=["HALPHA"], snr_val=3):
+def line_snr_mask(fastspec_cat, line_names=["HALPHA"], snr_val=3, min_lines=3):
     """
     Returns a boolean mask selecting objects with line flux SNR > snr_val
-    for the specified emission lines.
+    in at least `min_lines` of the specified emission lines.
     """
-    mask = np.ones(len(fastspec_cat), dtype=bool)
-
+    # Count how many lines pass the SNR cut for each object
+    n_pass = np.zeros(len(fastspec_cat), dtype=int)
     for li in line_names:
         flux = fastspec_cat[f"{li}_FLUX"]
         ivar = fastspec_cat[f"{li}_FLUX_IVAR"]
         
         snr = flux * np.sqrt(ivar)
-        mask &= (snr > snr_val) & (flux > 1) 
-
-    return mask
+        n_pass += ((snr > snr_val) & (flux > 0)).astype(int)
+    
+    return n_pass >= min_lines
 
 
 def compute_o32(fastspec):

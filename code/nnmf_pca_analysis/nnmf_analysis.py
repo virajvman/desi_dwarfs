@@ -362,7 +362,7 @@ if __name__ == '__main__':
                 W_nearly[:, :(i + 1)] = W_itr
                     
             #optimize them all together now
-            H_nearly, W_nearly, chi_nearly = nmf.nearly_NMF(all_fluxs_train_cp, all_flux_ivars_train_cp, H_start, W_start, n_iter=1000, return_chi_2=True)
+            H_nearly, W_nearly, chi_nearly = nmf.nearly_NMF(all_fluxs_train_cp, all_flux_ivars_train_cp, H_nearly, W_nearly, n_iter=1000, return_chi_2=True)
         
         
             ##plot all these templates for reference!

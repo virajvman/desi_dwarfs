@@ -478,32 +478,29 @@ def inspect_anomalies(spec_cat, umap_x_cen, umap_y_cen, radius_cut = 0.1):
     
     return mask
 
+from sfr_and_metallicity import line_snr_mask
+
 def flag_weird_spectra(spec_cat, main_cat, fspec_cat):
     '''
     Function that constructs maskbits for weird spectra, likely wrong redrock redshifts
     '''
 
-    ##MASK_1 ARE SOME WEIRD SPECTRA DATA ANOMALIES, like poor sky subtraction etc.
-    mask_1 = inspect_anomalies(spec_cat, 2.8,6, radius_cut = 2)
-    
-    #MASK 2 is also unclear, appear like weird spectra or wrong redrock redshifts 
-    mask_2 = inspect_anomalies(spec_cat, 5.8,6.7, radius_cut = 1)
-    
-    mask_3 = inspect_anomalies(spec_cat,6.7,7, radius_cut = 0.3)
-    ##for the mask_3 we want them to be only ELG objects that we remove!!
-    mask_3 = mask_3 & (main_cat["SAMPLE"] == "ELG")
+    mask_1 = inspect_anomalies(spec_cat, 9,7, radius_cut = 0.5)
 
-    ## identify objects with confident strong lines
-    halpha_snr  = np.array(fspec_cat["HALPHA_FLUX"].data) * np.sqrt(np.array(fspec_cat["HALPHA_FLUX_IVAR"].data))
-    hbeta_snr  = np.array(fspec_cat["HBETA_FLUX"]) * np.sqrt(np.array(fspec_cat["HBETA_FLUX_IVAR"]))
-    oiii_snr  = np.array(fspec_cat["OIII_5007_FLUX"]) * np.sqrt(np.array(fspec_cat["OIII_5007_FLUX_IVAR"]))
-    strong_line_conf = (halpha_snr > 3) & (hbeta_snr > 3) & (oiii_snr > 3)
+    mask_2 = inspect_anomalies(spec_cat, 8.5,8.5, radius_cut = 0.2)
     
-    weird_mask = (mask_1 | mask_2 | mask_3) & (~strong_line_conf)
+    mask_3 = inspect_anomalies(spec_cat,8.125,8.75, radius_cut = 0.1)
+    
+    mask_4 = inspect_anomalies(spec_cat,6.5,7.5, radius_cut = 0.5)
+
+    mask_6 = inspect_anomalies(spec_cat,3.5,13.5, radius_cut = 0.5)
+    
+    #get a mask of objects where we have fairly confident emission lines! At least three well detected lines!
+    good_line_mask = line_snr_mask(fspec_cat,line_names=["HALPHA","HBETA","OIII_5007","OIII_4959", "OII_3726", "OII_3729","SII_6716"], min_lines=3)
+    
+    weird_mask = (mask_1 | mask_2 | mask_3 | mask_4 | mask_6) & (~good_line_mask)
 
     print(f"Total weird identified = {np.sum(weird_mask)}")
-
-    #we can check that there are no significant emission lines 
 
     return weird_mask
 

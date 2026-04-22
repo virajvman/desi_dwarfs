@@ -116,7 +116,9 @@ def plan(comm=None,outdir_data='.', mp=1):
         rank, size = comm.rank, comm.size
         
     ## let us read the file to get ra, dec info     
-    clean_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4.fits")
+    # clean_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v4.fits")
+    clean_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/ssl_need_image_download.fits")
+    
     #subselect:
     print(f"Total number = {len(clean_cat)}")
     

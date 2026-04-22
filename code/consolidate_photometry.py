@@ -1904,7 +1904,7 @@ def add_wrong_redrock_maskbit(cat_path, main_datamodel, bit=16):
 def add_model_photometry_to_fastspec(
     cat_path,
     model_phot_dir="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs",
-    gal_types=("LOWZ", "BGS_FAINT", "BGS_BRIGHT", "ELG"),
+    gal_types=("LOWZ", "BGS_FAINT", "BGS_BRIGHT", "ELG", "OTHER"),
     verbose=True,
 ):
     """
@@ -2038,7 +2038,6 @@ def add_model_photometry_to_fastspec(
 # _load_nebcorr_delta_mag_table and add_delta_mag_to_fastspec
 # are imported from mass_and_photo_corrections
 
-
 if __name__ == '__main__':
 
     save_path = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats"
@@ -2050,15 +2049,15 @@ if __name__ == '__main__':
 
     process_shreds = True
     process_clean = True
-    compute_mstar_err = True
+    compute_mstar_err = False
     add_model_phot = True
     process_qso_scnd = True
-    process_post_hdu = False
+    process_post_hdu = True
 
     #make sure the get_fastspec_fit_catalog_V2 function is run before hand in case there are any new columns added
     process_fastspec=True
 
-    add_sfrs_zmet = True
+    add_sfrs_zmet = False
 
     main_cat_outpath = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits"
 
@@ -2206,10 +2205,13 @@ if __name__ == '__main__':
         create_spectra_hdu(main_cat_outpath)
 
         ##add image SSL UMAP + similarity information
-        create_image_ssl_hdu(main_cat_outpath)
+        # create_image_ssl_hdu(main_cat_outpath)
 
         #update the dwarf_maskbit with some weird spectra masks
         add_wrong_redrock_maskbit(main_cat_outpath, main_datamodel)
+
+    # TODO: fix the ZWARN flag, why is it bool and not a bit?
+    # TODO: need to confirm if the pruning and appending in ssl datasets is working fine and the data exists!
 
     consolidate_associated_fiber_properties(main_cat_outpath)
 
