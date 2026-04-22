@@ -50,17 +50,15 @@ def _deredshift_one_spectrum(args):
     wave, flux, ivar, zred, wave_out = args
     rest_wave = wave / (1 + zred)
     
-    # flux_rest = flux * (1 + zred)
-    # ivar_rest = ivar / (1 + zred)**2
+    flux_rest = flux * (1 + zred)
+    ivar_rest = ivar / (1 + zred)**2
     
     # flux_out = resample_flux(wave_out, rest_wave, flux_rest, ivar=None)
-    # flux_out, ivar_out = resample_flux(wave_out, rest_wave, flux_rest, ivar=ivar_rest)
+    flux_out, ivar_out = resample_flux(wave_out, rest_wave, flux_rest, ivar=ivar_rest)
 
     #this is the original way!
-    flux_out, ivar_out = resample_flux(wave_out, rest_wave, flux, ivar=ivar)
-    
-    # print("HERE!!!")
-    
+    # flux_out, ivar_out = resample_flux(wave_out, rest_wave, flux, ivar=ivar)
+        
     return flux_out, ivar_out
 
 
@@ -120,6 +118,7 @@ if __name__ == '__main__':
 
     only_deredshift = False
     train_nnmf = True
+    overwrite=False
 
     print("Starting the work!!")
 
@@ -130,9 +129,9 @@ if __name__ == '__main__':
     ##################
     print_stage("Loading the DESI spectra")
 
-    save_dered = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_y1_dwarf_combine_deredshift_OG.h5"
+    save_dered = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_y1_dwarf_combine_deredshift_NEW.h5"
 
-    if os.path.exists(save_dered):
+    if os.path.exists(save_dered) and overwrite==False:
         print("Reading existing deredshited spectra file!")
         
         with h5py.File(save_dered, "r") as f:
@@ -243,11 +242,11 @@ if __name__ == '__main__':
             W_nearly = cp.asnumpy( W_nearly )
             
             #saving the templates themselves
-            np.save("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/nnmf_templates/normalization_templates_dwarfs_OG.npy", W_nearly)
+            np.save("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/nnmf_templates/normalization_templates_dwarfs_NEW.npy", W_nearly)
     
         else:
             print("Reading in the saved normalization spectra!!")
-            W_nearly = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/nnmf_templates/normalization_templates_dwarfs_OG.npy")
+            W_nearly = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/nnmf_templates/normalization_templates_dwarfs_NEW.npy")
     
         #fit the templates to ALL the spectra data to get the normalization factors!
         V_X =  np.sqrt(all_flux_ivars_out) * all_fluxs_out
@@ -280,7 +279,7 @@ if __name__ == '__main__':
         fig, ax = plt.subplots(1, 1, figsize=(11, 5), layout="constrained")
         ax.plot(cp.asnumpy(wave_rest), W_nearly[:, 0], label=f"Nearly-NMF Template 1/1",color = "r",lw = 2)
         ax.set_xlim([ 3600,9000])
-        plt.savefig("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/average_nnmf_OG.pdf",bbox_inches="tight")
+        plt.savefig("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/average_nnmf_NEW.pdf",bbox_inches="tight")
         plt.close()
     
         print(np.shape(W_nearly))
@@ -369,11 +368,11 @@ if __name__ == '__main__':
             ##plot all these templates for reference!
         
             #saving the templates themselves
-            np.save("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/nnmf_templates/templates_dwarfs_OG.npy", cp.asnumpy(W_nearly) )
+            np.save("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/nnmf_templates/templates_dwarfs_NEW.npy", cp.asnumpy(W_nearly) )
             
         else:
             print("Loading in existing NNMF templates")
-            W_nearly = cp.array(np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/nnmf_templates/templates_dwarfs_OG.npy"))
+            W_nearly = cp.array(np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/nnmf_templates/templates_dwarfs_NEW.npy"))
     
         
         fig, ax = plt.subplots(n_templates, 1, figsize=(20, 20), layout="constrained")
@@ -385,7 +384,7 @@ if __name__ == '__main__':
             if i != 9:
                 ax[i].set_xticks([])
             
-        plt.savefig("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/all_nnmf_templates_OG.pdf",bbox_inches="tight")
+        plt.savefig("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/all_nnmf_templates_NEW.pdf",bbox_inches="tight")
         plt.close()
     
         ##################
@@ -426,7 +425,7 @@ if __name__ == '__main__':
         print(np.shape(scaling_factors))
         print(np.shape(coeffs_spectra))
         
-        save_final = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_dr1_dwarf_catalog_nnmf_OG.h5"
+        save_final = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_dr1_dwarf_catalog_nnmf_NEW.h5"
     
         #note that this will overwrite the file
         with h5py.File(save_final, "w") as f:

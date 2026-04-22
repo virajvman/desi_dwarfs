@@ -230,6 +230,8 @@ if __name__ == '__main__':
     # load the MAIN extension directly as an Astropy Table
     data_cat = Table.read(filename, hdu="MAIN")
 
+    print(f"Size of total catalog = {len(data_cat)}")
+
     #as that is the regime the data is trained on!
     data_cat = data_cat[(data_cat["MAG_Z"] < 20)]
 
@@ -245,7 +247,7 @@ if __name__ == '__main__':
     #now we need the image paths of these objects!!
     temp_clean = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v5.fits")["TARGETID","IMAGE_PATH","STARDIST_DEG"]
     temp_shred = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v5.fits")["TARGETID","IMAGE_PATH","STARDIST_DEG"]
-    temp_sga = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_SGA_matched_dwarfs_REPROCESS.fits")["TARGETID","IMAGE_PATH","STARDIST_DEG"]
+    temp_sga = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_SGA_matched_dwarfs_REPROCESS_V2.fits")["TARGETID","IMAGE_PATH","STARDIST_DEG"]
     
     # Combine and remove duplicate TARGETIDs
     tot_temp = vstack([temp_clean, temp_shred, temp_sga])
@@ -253,6 +255,8 @@ if __name__ == '__main__':
 
     create_clean_chunks=False
     create_shred_chunks=True
+
+    NEED CODE TO GO THROUGH EXIST CHUNKS IF THEY EXIST AND MODIFY THEM?
     
     if create_clean_chunks:
         print("Creating chunks for the clean catalog subset!!")
