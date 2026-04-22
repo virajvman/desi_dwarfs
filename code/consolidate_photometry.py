@@ -1776,6 +1776,54 @@ def create_image_ssl_hdu(file_path):
     return
 
 
+def _fold_fits_str(s):
+    """Replace non-ASCII in strings for FITS headers (avoids astropy '?' substitution warnings)."""
+    if s is None:
+        return None
+    if not isinstance(s, str):
+        s = str(s)
+    return s.encode("ascii", "replace").decode("ascii")
+
+
+def _replace_main_extension_atomic(cat_path, new_main_hdu):
+    """
+    Replace the MAIN bintable by rewriting the full multi-extension FITS file.
+
+    In-place ``mode='update'`` + ``hdul[main_idx] = ...`` + ``flush()`` can leave
+    later HDUs with wrong file offsets, causing VerifyError
+    (``element 2 is not an extension HDU``, etc.); see
+    ``compute_emission_subtracted_photo_errors`` in mass_and_photo_corrections.
+    *new_main_hdu* must be a :class:`fits.BinTableHDU` with name MAIN and
+    checksums already set (``name``, ``add_checksum()``).
+    """
+    cat_abs = os.path.abspath(cat_path)
+    cat_dir = os.path.dirname(cat_abs) or "."
+    fd, tmp_path = tempfile.mkstemp(
+        suffix=".fits", prefix="main_replace_", dir=cat_dir
+    )
+    os.close(fd)
+    try:
+        with fits.open(cat_abs, memmap=False) as hdul:
+            hdu_names = [hdu.name for hdu in hdul]
+            if "MAIN" not in hdu_names:
+                raise KeyError(f'No extension named "MAIN" in {cat_path!r}')
+            main_idx = hdu_names.index("MAIN")
+            new_hdus = [
+                new_main_hdu if i == main_idx else hdu.copy() for i, hdu in enumerate(hdul)
+            ]
+            new_hdul = fits.HDUList(new_hdus)
+            new_hdul[0].add_checksum()
+            new_hdul.writeto(tmp_path, overwrite=True)
+        os.replace(tmp_path, cat_abs)
+    except BaseException:
+        if os.path.isfile(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        raise
+
+
 def add_too_bright_maskbit(cat_path, bit=18, mag_cut=-18.5):
     """
     Flag sources whose corrected absolute g-band magnitude is brighter than
@@ -1833,16 +1881,10 @@ def add_too_bright_maskbit(cat_path, bit=18, mag_cut=-18.5):
         pct = 100.0 * n_flag / n_samp if n_samp > 0 else 0.0
         print(f"  {sample}: {n_flag}/{n_samp} ({pct:.1f}%)")
 
-    buf = BytesIO()
-    main_cat.write(buf, format="fits")
-    buf.seek(0)
-    main_hdu = fits.open(buf)[1]
-    main_hdu.name = "MAIN"
-    main_hdu.add_checksum()
-
-    with fits.open(cat_path, mode="update") as hdul:
-        hdul[1] = main_hdu
-        hdul.flush()
+    main_hdu_new = fits.table_to_hdu(main_cat)
+    main_hdu_new.name = "MAIN"
+    main_hdu_new.add_checksum()
+    _replace_main_extension_atomic(cat_path, main_hdu_new)
 
 
 def add_wrong_redrock_maskbit(cat_path, main_datamodel, bit=16):
@@ -1888,9 +1930,9 @@ def add_wrong_redrock_maskbit(cat_path, main_datamodel, bit=16):
         if main_cat[col].dtype != desired_dtype:
             main_cat[col] = main_cat[col].astype(desired_dtype)
 
-        # Set description
+        # Set description (ASCII-fold for valid FITS card strings)
         if meta.get("description"):
-            main_cat[col].description = meta["description"]
+            main_cat[col].description = _fold_fits_str(meta["description"])
 
         # Set unit
         if meta.get("unit") is not None:
@@ -1903,18 +1945,10 @@ def add_wrong_redrock_maskbit(cat_path, main_datamodel, bit=16):
             col_data[bad] = blank_val
             main_cat[col] = col_data
 
-    # --- Write MAIN HDU to a temporary HDU ---
-    buf = BytesIO()
-    main_cat.write(buf, format="fits")
-    buf.seek(0)
-    main_hdu = fits.open(buf)[1]
-    main_hdu.name = "MAIN"
-    main_hdu.add_checksum()
-
-    # --- Open original file and replace MAIN HDU ---
-    with fits.open(cat_path, mode="update") as hdul:
-        hdul[1] = main_hdu  # HDU[1] is MAIN in your multi-extension file
-        hdul.flush()
+    main_hdu_new = fits.table_to_hdu(main_cat)
+    main_hdu_new.name = "MAIN"
+    main_hdu_new.add_checksum()
+    _replace_main_extension_atomic(cat_path, main_hdu_new)
 
     print(f"Set DWARF_MASKBIT bit {bit} for {weird_mask.sum()} objects (MAIN HDU updated).")
 
