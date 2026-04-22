@@ -6,15 +6,23 @@ cd DESI2_LOWZ/desi_dwarfs/code
 /global/u1/v/virajvm/miniforge3/envs/ssl-pl/bin/python ssl-dwarfs/make_umap_ssl.py
 '''
 
+import os
 from ssl_legacysurvey.data_analysis import dimensionality_reduction
 from ssl_legacysurvey.utils import plotting_tools as plt_tools # Plotting images or catalogue info
 from matplotlib.colors import LogNorm
 import numpy as np
 import matplotlib.pyplot as plt
 import glob
+import re
 from ssl_legacysurvey.utils import load_data # Loading galaxy catalogue and image data from hdf5 file(s)
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
+
+
+def _data_chunk_index(path):
+    m = re.search(r"data_chunk_(\d+)\.h5$", path)
+    return int(m.group(1)) if m else -1
+
 
 def load_all_data(save = False, img_type=None):
     '''
@@ -24,8 +32,11 @@ def load_all_data(save = False, img_type=None):
     Much more efficient!!
     '''
         
-    all_files = glob.glob(f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/representations/represent_chunk_*")
-    print(f"A total of {len(all_files)} representations files to be read!")
+    h5_dir = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/h5_datasets"
+    h5_files = sorted(
+        glob.glob(f"{h5_dir}/data_chunk_*.h5"), key=_data_chunk_index
+    )
+    print(f"A total of {len(h5_files)} data chunk files to align with representations!")
 
     all_image_array = []
     
@@ -42,10 +53,8 @@ def load_all_data(save = False, img_type=None):
     
     all_zreds_array = []
     
-    #we have the data split across different chunks and so we will load them one by one!
-    for file_i in range(len(all_files)):
-
-        h5_data_path = f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/h5_datasets/data_chunk_{file_i}.h5"
+    rep_dir = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/representations"
+    for file_i, h5_data_path in enumerate(h5_files):
         print(f"Reading file: {h5_data_path}")
         DDL = load_data.DecalsDataLoader(image_dir=h5_data_path, npix_in=152)
         gals = DDL.get_data(-1, fields=DDL.fields_available,npix_out=152) # -1 to load all galaxies
@@ -67,7 +76,7 @@ def load_all_data(save = False, img_type=None):
         print(f"IMAGE SHAPE = {gals['images'].shape}")
         all_image_array.append(gals["images"])
 
-        repres_path = f'/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/representations/represent_chunk_{file_i}.npy'
+        repres_path = os.path.join(rep_dir, f"represent_chunk_{file_i}.npy")
         repres_arr = np.load(repres_path)
         print(f"REPRESENTATION SHAPE = {repres_arr.shape}")
         

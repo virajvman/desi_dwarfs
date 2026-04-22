@@ -6,10 +6,17 @@ from astropy.io import fits
 from tqdm import trange
 from tqdm import tqdm
 import multiprocessing as mp
-from astropy.table import vstack, join, unique
+from astropy.table import vstack, unique
 from astropy.wcs import WCS
 import glob
 import sys
+
+from ssl_h5_catalog_sync import (
+    matching_image_paths,
+    next_data_chunk_index,
+    run_prune_and_need_image_report,
+    scan_h5_targetid_union,
+)
 
 rootdir = '/global/u1/v/virajvm/'
 sys.path.append(os.path.join(rootdir, 'DESI2_LOWZ/desi_dwarfs/code'))
@@ -192,38 +199,26 @@ def make_dataset_shred_chunk(h5_file_path, all_imgs=None, all_tgids=None, all_zr
 
 
 
-def matching_image_paths(target_cat, img_table):
-    """
-    Returns matched rows between target_cat and img_table based on TARGETID,
-    after ensuring img_table has unique TARGETIDs.
-    """
-    print(f"Initial catalog size = {len(target_cat)}")
-
-    # Ensure img_table has unique TARGETIDs
-    img_table_unique = unique(img_table, keys="TARGETID")
-
-    # Perform inner join
-    matched_cat = join(
-        target_cat,
-        img_table_unique,
-        keys="TARGETID",
-        join_type="inner"
-    )
-
-    print(f"Objects with images = {len(matched_cat)}")
-
-    # Optionally, check for any unmatched TARGETIDs
-    unmatched_mask = ~np.isin(target_cat["TARGETID"], matched_cat["TARGETID"])
-    unmatched_cat = target_cat[unmatched_mask]
-    print(f"Objects without images = {len(unmatched_cat)}")
-
-    return matched_cat, unmatched_cat
-
-
-    
 if __name__ == '__main__':
 
-    #we need the image cutout generation different for the TRACTOR_OG vs not as the cutout center is different now!!
+    # Image cutout generation differs for TRACTOR_OG vs updated photometry (shreds): cutout center differs.
+    # Sync workflow: optional prune H5s vs catalog, write ssl_need_image_download.fits, fetch cutouts,
+    # then append_new_h5_chunks to add only missing TARGETIDs without overwriting existing data_chunk_*.h5.
+
+    h5_dir = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/h5_datasets"
+    h5_glob = os.path.join(h5_dir, "data_chunk_*.h5")
+    # Prune: drop H5 rows not in the current (filtered) catalog. Export FITS of catalog rows that are
+    # missing from H5 and whose cutout file is not on disk.
+    prune_h5_against_catalog = True
+    write_need_image_download_fits = True
+    need_image_download_fits = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/ssl_need_image_download.fits"
+    prune_dry_run = False
+    # Append-only: new data_chunk_N.h5 with N = 1+max existing index; never overwrites. Mutually
+    # exclusive with full create_from_scratch below; use when cutouts for new objects exist.
+    append_new_h5_chunks = False
+    # Full (re)build from chunk 0 — ignored if append_new_h5_chunks is True
+    create_clean_chunks = False
+    create_shred_chunks = False
 
     filename = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits"
 
@@ -232,8 +227,8 @@ if __name__ == '__main__':
 
     print(f"Size of total catalog = {len(data_cat)}")
 
-    #as that is the regime the data is trained on!
-    data_cat = data_cat[(data_cat["MAG_Z"] < 20)]
+    #as that is the regime the data is trained on! We also only want unique dwarfs so that we do not just match to same dwarf!
+    data_cat = data_cat[(data_cat["MAG_Z"] < 20) & (data_cat["DWARF_PRIMARY"] == 1)]
 
     print(f"Size of catalog at z<20 = {len(data_cat)}")
 
@@ -253,131 +248,239 @@ if __name__ == '__main__':
     tot_temp = vstack([temp_clean, temp_shred, temp_sga])
     tot_temp = unique(tot_temp, keys="TARGETID")
 
-    create_clean_chunks=False
-    create_shred_chunks=True
+    if prune_h5_against_catalog or write_need_image_download_fits:
+        run_prune_and_need_image_report(
+            h5_glob,
+            data_cat,
+            tot_temp,
+            need_image_fits_path=need_image_download_fits
+            if (write_need_image_download_fits and need_image_download_fits)
+            else "",
+            do_prune=prune_h5_against_catalog,
+            write_need_fits=write_need_image_download_fits,
+            dry_run=prune_dry_run,
+        )
 
-    NEED CODE TO GO THROUGH EXIST CHUNKS IF THEY EXIST AND MODIFY THEM?
-    
-    if create_clean_chunks:
+    if append_new_h5_chunks:
+        if create_clean_chunks or create_shred_chunks:
+            print(
+                "append_new_h5_chunks: skipping full create_clean_chunks / create_shred_chunks "
+                "from scratch; only appending rows missing from existing H5s."
+            )
+        in_h5 = scan_h5_targetid_union(h5_glob)
+        in_arr = (
+            np.fromiter(in_h5, dtype=np.int64)
+            if in_h5
+            else np.array([], dtype=np.int64)
+        )
+        chunk_num = next_data_chunk_index(h5_glob)
+        # --- append clean (PHOTOMETRY_UPDATED == False) ---
+        data_cat_og_m, _ = matching_image_paths(data_cat_og, tot_temp)
+        to_og = data_cat_og_m[
+            ~np.isin(data_cat_og_m["TARGETID"], in_arr)
+        ]
+        if len(to_og):
+            on_disk = np.array(
+                [os.path.isfile(p) for p in to_og["IMAGE_PATH"]], dtype=bool
+            )
+            to_og = to_og[on_disk]
+        if len(to_og):
+            print(f"Appending {len(to_og)} clean (OG) rows not yet in H5 (images on disk).")
+            chunk_size = 2000
+            for count_low in trange(0, len(to_og), chunk_size):
+                count_hi = min(count_low + chunk_size, len(to_og))
+                print(count_low, count_hi)
+                sub = to_og[count_low:count_hi]
+                image_paths = sub["IMAGE_PATH"]
+                h5_file_path = os.path.join(
+                    h5_dir, f"data_chunk_{chunk_num}.h5"
+                )
+                if os.path.isfile(h5_file_path):
+                    raise FileExistsError(
+                        f"refuse to overwrite in append mode: {h5_file_path}"
+                    )
+                num_workers = min(8, mp.cpu_count())
+                with mp.Pool(processes=num_workers) as pool:
+                    img_data_list = list(
+                        tqdm(
+                            pool.imap(read_fits, image_paths),
+                            total=len(image_paths),
+                        )
+                    )
+                print(np.shape(img_data_list))
+                img_data_list = np.array(img_data_list, dtype=np.float32)
+                make_dataset_clean_chunk(
+                    h5_file_path,
+                    sub,
+                    img_data_list,
+                    count_low=0,
+                    count_hi=len(sub),
+                )
+                chunk_num += 1
+        in_h5 = scan_h5_targetid_union(h5_glob)
+        in_arr = (
+            np.fromiter(in_h5, dtype=np.int64)
+            if in_h5
+            else np.array([], dtype=np.int64)
+        )
+        # --- append shreds (after clean so chunk indices continue) ---
+        to_sh, _ = matching_image_paths(data_cat_shreds, tot_temp)
+        to_sh = to_sh[~np.isin(to_sh["TARGETID"], in_arr)]
+        if len(to_sh):
+            on_disk = np.array(
+                [os.path.isfile(p) for p in to_sh["IMAGE_PATH"]], dtype=bool
+            )
+            to_sh = to_sh[on_disk]
+        if len(to_sh):
+            print(f"Appending {len(to_sh)} shred rows not yet in H5 (images on disk).")
+            all_org_imgs = []
+            all_gmag = []
+            all_rmag = []
+            all_zmag = []
+            all_mstar = []
+            all_stardist = []
+            all_zred = []
+            all_tgid = []
+            for i in trange(len(to_sh)):
+                org_img = process_shred_imgs(to_sh, i)
+                if np.shape(org_img) != (3, 152, 152):
+                    print(np.shape(org_img))
+                    print("--")
+                else:
+                    all_org_imgs.append(org_img.astype(np.float32))
+                    all_tgid.append(to_sh["TARGETID"][i])
+                    all_zred.append(to_sh["Z"][i])
+                    all_mstar.append(to_sh["LOG_MSTAR_M24"][i])
+                    all_stardist.append(to_sh["STARDIST_DEG"][i])
+                    all_gmag.append(to_sh["MAG_G"][i])
+                    all_rmag.append(to_sh["MAG_R"][i])
+                    all_zmag.append(to_sh["MAG_Z"][i])
+            chunk_size = 2000
+            for i in trange(0, len(all_org_imgs), chunk_size):
+                h5_org_path = os.path.join(
+                    h5_dir, f"data_chunk_{chunk_num}.h5"
+                )
+                if os.path.isfile(h5_org_path):
+                    raise FileExistsError(
+                        f"refuse to overwrite in append mode: {h5_org_path}"
+                    )
+                assert len(all_org_imgs[i : i + chunk_size]) == len(
+                    all_tgid[i : i + chunk_size]
+                )
+                make_dataset_shred_chunk(
+                    h5_org_path,
+                    all_imgs=all_org_imgs[i : i + chunk_size],
+                    all_tgids=all_tgid[i : i + chunk_size],
+                    all_zreds=all_zred[i : i + chunk_size],
+                    all_gmags=all_gmag[i : i + chunk_size],
+                    all_rmags=all_rmag[i : i + chunk_size],
+                    all_zmags=all_zmag[i : i + chunk_size],
+                    all_mstar=all_mstar[i : i + chunk_size],
+                    all_stardist=all_stardist[i : i + chunk_size],
+                    img_type="org",
+                )
+                print(
+                    f"Wrote chunk {chunk_num} with indices [{i}:{i + chunk_size}]"
+                )
+                chunk_num += 1
+    elif create_clean_chunks:
         print("Creating chunks for the clean catalog subset!!")
-    
-        ##get the matching image paths for just data_cat_og
         data_cat_og, _ = matching_image_paths(data_cat_og, tot_temp)
-    
         chunk_size = 2000
-        
         chunk_num = 0
-        for count_low in trange(0, len(data_cat_og),chunk_size):
-            
+        for count_low in trange(0, len(data_cat_og), chunk_size):
             count_hi = min(count_low + chunk_size, len(data_cat_og))
             print(count_low, count_hi)
-            
-            ##read all the images for this specific chunk! 
-            image_paths = data_cat_og["IMAGE_PATH"][count_low : count_hi]
-            
+            image_paths = data_cat_og["IMAGE_PATH"][count_low:count_hi]
             num_workers = min(8, mp.cpu_count())
             with mp.Pool(processes=num_workers) as pool:
-                # Wrap with tqdm for progress tracking
-                img_data_list = list(tqdm(pool.imap(read_fits, image_paths), total=len(image_paths)) )
-                
+                img_data_list = list(
+                    tqdm(
+                        pool.imap(read_fits, image_paths), total=len(image_paths)
+                    )
+                )
             print(np.shape(img_data_list))
-             
             img_data_list = np.array(img_data_list)
             img_data_list = img_data_list.astype(np.float32)
-
-
-            h5_file_path = f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/h5_datasets/data_chunk_{chunk_num}.h5"
-            
-            make_dataset_clean_chunk(h5_file_path, data_cat_og, img_data_list, count_low = count_low, count_hi = count_hi)
-            
+            h5_file_path = os.path.join(h5_dir, f"data_chunk_{chunk_num}.h5")
+            make_dataset_clean_chunk(
+                h5_file_path,
+                data_cat_og,
+                img_data_list,
+                count_low=count_low,
+                count_hi=count_hi,
+            )
             chunk_num += 1
     else:
-        chunk_num = len(glob.glob("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/h5_datasets/data_chunk_*.h5"))
-        print(f"Clean {chunk_num} chunks  already created!")
-
-    ####
-    
-    if create_shred_chunks:
-
-        bgsb_shred = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_BGS_BRIGHT_shreds_catalog_w_aper_mags.fits")["TARGETID","IMAGE_PATH","FILE_PATH","STARDIST_DEG"]
-        bgsf_shred = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_BGS_FAINT_shreds_catalog_w_aper_mags.fits")["TARGETID","IMAGE_PATH","FILE_PATH","STARDIST_DEG"]
-        lowz_shred = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_LOWZ_shreds_catalog_w_aper_mags.fits")["TARGETID","IMAGE_PATH","FILE_PATH","STARDIST_DEG"]
-        elg_shred = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_ELG_shreds_catalog_w_aper_mags.fits")["TARGETID","IMAGE_PATH","FILE_PATH","STARDIST_DEG"]
-        sga_shred = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_SGA_sga_catalog_w_aper_mags.fits")["TARGETID","IMAGE_PATH","FILE_PATH","STARDIST_DEG"]
-
-        tot_shred_temp = vstack([bgsb_shred, bgsf_shred, lowz_shred, elg_shred, sga_shred])
-
+        chunk_num = next_data_chunk_index(h5_glob)
+        n_existing = len(glob.glob(h5_glob))
+        print(
+            f"Skip full clean build. Next data_chunk index = {chunk_num} "
+            f"({n_existing} files match {h5_glob})."
+        )
+    if create_shred_chunks and not append_new_h5_chunks:
+        bgsb_shred = Table.read(
+            "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_BGS_BRIGHT_shreds_catalog_w_aper_mags.fits"
+        )["TARGETID", "IMAGE_PATH", "FILE_PATH", "STARDIST_DEG"]
+        bgsf_shred = Table.read(
+            "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_BGS_FAINT_shreds_catalog_w_aper_mags.fits"
+        )["TARGETID", "IMAGE_PATH", "FILE_PATH", "STARDIST_DEG"]
+        lowz_shred = Table.read(
+            "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_LOWZ_shreds_catalog_w_aper_mags.fits"
+        )["TARGETID", "IMAGE_PATH", "FILE_PATH", "STARDIST_DEG"]
+        elg_shred = Table.read(
+            "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_ELG_shreds_catalog_w_aper_mags.fits"
+        )["TARGETID", "IMAGE_PATH", "FILE_PATH", "STARDIST_DEG"]
+        sga_shred = Table.read(
+            "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_SGA_sga_catalog_w_aper_mags.fits"
+        )["TARGETID", "IMAGE_PATH", "FILE_PATH", "STARDIST_DEG"]
+        tot_shred_temp = vstack(
+            [bgsb_shred, bgsf_shred, lowz_shred, elg_shred, sga_shred]
+        )
         tot_shred_temp = unique(tot_shred_temp, keys="TARGETID")
-        
-        ##get the matching image paths for just data_cat_og
         data_cat_shreds, _ = matching_image_paths(data_cat_shreds, tot_temp)
-                
         all_org_imgs = []
-        
         all_gmag = []
         all_rmag = []
         all_zmag = []
-        
         all_mstar = []
         all_stardist = []
-
         all_zred = []
         all_tgid = []
-
         print(data_cat_shreds.keys())
-        
-        
         for i in trange(len(data_cat_shreds)):
-
             org_img = process_shred_imgs(data_cat_shreds, i)
-            
-            if np.shape(org_img) != (3,152,152):
-                #if this happens, if the galaxy is on the edge, we just do not consider it all together
-                #let us just at the end add some zeroes to its representation! this happens rarely so not a big deal if we miss a few
+            if np.shape(org_img) != (3, 152, 152):
                 print(np.shape(org_img))
                 print("--")
             else:
-                ##we will then save this?
-                all_org_imgs.append(org_img.astype(np.float32))   
-                
-                all_tgid.append( data_cat_shreds["TARGETID"][i])
-                all_zred.append( data_cat_shreds["Z"][i])
-                all_mstar.append( data_cat_shreds["LOG_MSTAR_M24"][i])
-                all_stardist.append( data_cat_shreds["STARDIST_DEG"][i])
-                
-                all_gmag.append( data_cat_shreds["MAG_G"][i])
-                all_rmag.append( data_cat_shreds["MAG_R"][i])
-                all_zmag.append( data_cat_shreds["MAG_Z"][i])
-                
-        
-        #now we add all these data arrays in h5 chunks
-        #for naming consistency start from the earlier chunk number
-
+                all_org_imgs.append(org_img.astype(np.float32))
+                all_tgid.append(data_cat_shreds["TARGETID"][i])
+                all_zred.append(data_cat_shreds["Z"][i])
+                all_mstar.append(data_cat_shreds["LOG_MSTAR_M24"][i])
+                all_stardist.append(data_cat_shreds["STARDIST_DEG"][i])
+                all_gmag.append(data_cat_shreds["MAG_G"][i])
+                all_rmag.append(data_cat_shreds["MAG_R"][i])
+                all_zmag.append(data_cat_shreds["MAG_Z"][i])
         chunk_size = 2000
-        for i in trange(0, len(all_org_imgs),chunk_size):
-
-            h5_org_path = f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/h5_datasets/data_chunk_{chunk_num}.h5"
-
-            assert len(all_org_imgs[i:i+chunk_size]) == len(all_tgid[i:i+chunk_size])
-
-            make_dataset_shred_chunk(h5_org_path, 
-                                     all_imgs=all_org_imgs[i:i + chunk_size], 
-                                     all_tgids=all_tgid[i:i + chunk_size], 
-                                     all_zreds=all_zred[i:i + chunk_size], 
-                                     all_gmags=all_gmag[i:i + chunk_size],
-                                     all_rmags=all_rmag[i:i + chunk_size], 
-                                     all_zmags=all_zmag[i:i + chunk_size], 
-                                     all_mstar=all_mstar[i:i + chunk_size], 
-                                     all_stardist=all_stardist[i:i + chunk_size], 
-                                     img_type="org")
-        
-            print(f"Wrote chunk {chunk_num} with indices [{i}:{i + chunk_size}]")
-
+        for i in trange(0, len(all_org_imgs), chunk_size):
+            h5_org_path = os.path.join(h5_dir, f"data_chunk_{chunk_num}.h5")
+            assert len(all_org_imgs[i : i + chunk_size]) == len(
+                all_tgid[i : i + chunk_size]
+            )
+            make_dataset_shred_chunk(
+                h5_org_path,
+                all_imgs=all_org_imgs[i : i + chunk_size],
+                all_tgids=all_tgid[i : i + chunk_size],
+                all_zreds=all_zred[i : i + chunk_size],
+                all_gmags=all_gmag[i : i + chunk_size],
+                all_rmags=all_rmag[i : i + chunk_size],
+                all_zmags=all_zmag[i : i + chunk_size],
+                all_mstar=all_mstar[i : i + chunk_size],
+                all_stardist=all_stardist[i : i + chunk_size],
+                img_type="org",
+            )
+            print(
+                f"Wrote chunk {chunk_num} with indices [{i}:{i + chunk_size}]"
+            )
             chunk_num += 1
-
-        
-
-    
-
-
-    

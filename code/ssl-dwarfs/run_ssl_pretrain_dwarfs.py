@@ -28,6 +28,7 @@ from pathlib import Path
 import sys
 import glob
 import math
+import re
 
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.plugins import DDPPlugin
@@ -39,6 +40,12 @@ from scripts import predict
 from ssl_legacysurvey.finetune import extract_model_outputs
 from scripts import similarity_search_nxn
 
+
+def _data_chunk_index(path):
+    m = re.search(r"data_chunk_(\d+)\.h5$", path)
+    return int(m.group(1)) if m else -1
+
+
 if __name__ == '__main__':
 
     ##load the model! This checkpoint file was obtained from the Globus endpoint. See the github for more info
@@ -49,13 +56,11 @@ if __name__ == '__main__':
 
     print("Model finished loading!")
 
-    all_files = glob.glob("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/h5_datasets/data_chunk*")
-    print(f"A total of {len(all_files)} data chunk files to be read!")
-    
-    #we have the data split across different chunks and so we will load them one by one!
-    for file_i in range(len(all_files)):
-    
-        h5_data_path = f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/h5_datasets/data_chunk_{file_i}.h5"
+    h5_glob = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/h5_datasets/data_chunk_*.h5"
+    h5_data_paths = sorted(glob.glob(h5_glob), key=_data_chunk_index)
+    print(f"A total of {len(h5_data_paths)} data chunk files to be read!")
+
+    for file_i, h5_data_path in enumerate(h5_data_paths):
         print(h5_data_path)
         
         DDL = load_data.DecalsDataLoader(image_dir=h5_data_path, npix_in=152)
