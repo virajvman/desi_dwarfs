@@ -1519,48 +1519,54 @@ from mpl_toolkits.axes_grid1 import Divider, Size
 import matplotlib
 import matplotlib.pyplot as plt
 
-def make_subplots(ncol = 3, nrow = 1, row_spacing = 1.1,col_spacing=1.1, label_font_size = 17,plot_size = 3,direction = "horizontal",return_fig=False):
-    '''
-    This function is my plotting function that returns me all the axes
-    '''
+# Margin conventions (inches) — tuned once, then frozen
+MARGIN_LABEL  = 0.9   # edge with axis label + tick labels
+MARGIN_TICKS  = 0.45  # edge with only tick labels (no axis label)
+MARGIN_PAD    = 0.2   # edge with nothing
+MARGIN_SHARED = 0.1   # gap between panels sharing an axis
+MARGIN_SPLIT  = 0.9   # gap between panels with independent axes
+MARGIN_CBAR   = 1.1   # edge with a colorbar
 
-    tot_len = int(12 + 5*col_spacing)
-    tot_height = 6 * nrow
-        
+def make_subplots(ncol=3, nrow=1, row_spacing=1.1, col_spacing=1.1, plot_size=2, direction="horizontal",
+                  return_fig=False):
+    # Normalize to lists: nrow+1 vertical gaps, ncol+1 horizontal gaps
+    if np.isscalar(row_spacing):
+        row_spacing = [row_spacing] * (nrow + 1)
+    if np.isscalar(col_spacing):
+        col_spacing = [col_spacing] * (ncol + 1)
+    assert len(row_spacing) == nrow + 1, f"need {nrow+1} row spacings, got {len(row_spacing)}"
+    assert len(col_spacing) == ncol + 1, f"need {ncol+1} col spacings, got {len(col_spacing)}"
+
+    tot_len    = plot_size * ncol + sum(col_spacing)
+    tot_height = plot_size * nrow + sum(row_spacing)
+
     fig = plt.figure(figsize=(tot_len, tot_height))
-    
-    h = []
-    for i in range(ncol):
-        h.append(Size.Fixed(col_spacing))
-        h.append( Size.Fixed(plot_size))
 
-    #then we end
-    h.append(Size.Fixed(col_spacing))
+    h = []
+    for j in range(ncol):
+        h.append(Size.Fixed(col_spacing[j]))
+        h.append(Size.Fixed(plot_size))
+    h.append(Size.Fixed(col_spacing[-1]))
 
     v = []
-    for j in range(nrow):
-        v.append(Size.Fixed(row_spacing))
+    for i in range(nrow):
+        v.append(Size.Fixed(row_spacing[i]))
         v.append(Size.Fixed(plot_size))
-                     
-    v.append(Size.Fixed(row_spacing))
-    #this used to be 0.5 at start and end
-    
-    divider = Divider(fig, (0, 0, 1, 1), h, v, aspect=False)
-    
-    all_axes = []
+    v.append(Size.Fixed(row_spacing[-1]))
 
+    divider = Divider(fig, (0, 0, 1, 1), h, v, aspect=False)
+
+    all_axes = []
     for i in range(nrow):
         for j in range(ncol):
             axi = fig.add_axes(
-            divider.get_position(),
-            axes_locator=divider.new_locator(nx=2*j + 1, ny=2*i + 1))
-
+                divider.get_position(),
+                axes_locator=divider.new_locator(nx=2*j + 1, ny=2*i + 1))
             all_axes.append(axi)
 
     if return_fig:
-        return fig,all_axes
-    else:
-        return all_axes
+        return fig, all_axes
+    return all_axes
     
 def get_mags(vac_data_bgs, band="R"):
     vac_fluxr = vac_data_bgs["FLUX_" + band]

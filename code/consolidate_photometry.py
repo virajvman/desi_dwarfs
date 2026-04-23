@@ -2094,8 +2094,6 @@ if __name__ == '__main__':
 
     save_path = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats"
 
-    #need to add to mstar_maskbit ..     
-    # iii) flagging large k correction or large difference between g and r template corrections, as that will point to something suspicious ...
 
     # TODO: update the image cutouts download function to selectively update the cutouts for dwarfs that do not exist in the catalog. 
 
@@ -2256,6 +2254,11 @@ if __name__ == '__main__':
 
     if add_sfrs_zmet:
         add_sfr_halpha_to_spec_derived(main_cat_outpath)
+
+    #TODO: add a mstar maskbit where we compare C10 k correction in r and g band and compare it against our measurement. if off by 0.2, then we consider it to be uncertain! for those objects, we revert to the C10 k correction!
+
+    # TODO: there are some objects with stellar masses above 9.25 in final catalog, how? even if in associated fiber step, 
+    # they should all be less than 9.25? confirm if all the associated fibers have to be in catalog, I do not think so, but just to confirm
 
     if process_post_hdu:
         ##add the spectra NMF+PCA information!!
