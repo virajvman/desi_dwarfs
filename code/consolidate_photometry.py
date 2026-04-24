@@ -1283,6 +1283,142 @@ def _assert_targetid_aligned(tab_ref, tab_other, name_ref, name_other):
         raise ValueError(f"TARGETID mismatch between {name_ref} and {name_other}")
 
 
+def apply_post_emission_mstar_dwarf_cut(
+    cat_path,
+    logm_max=9.25,
+    verbose=True,
+):
+    """
+    Drop rows with LOG_MSTAR_M24 >= logm_max after the low-SNR stellar-mass
+    fallback in compute_emission_subtracted_photo_errors (same criterion as
+    create_main_data_model).
+
+    Subsets MAIN, ZCAT, TRACTOR, and SPEC_DERIVED with a common boolean mask;
+    filters REPROCESS_PHOTO to retained TARGETIDs when that column exists;
+    re-runs get_dwarf_primary so DWARF_PRIMARY_TARGETID cannot point at a
+    removed row. Other extensions are copied unchanged.
+
+    Parameters
+    ----------
+    cat_path : str
+        Path to the multi-extension FITS catalog.
+    logm_max : float
+        Keep rows strictly below this log stellar mass (default 9.25).
+    verbose : bool
+        Print counts of dropped rows.
+    """
+    cat_abs = os.path.abspath(cat_path)
+    main_cat = safe_read_table(cat_abs, hdu="MAIN")
+    if "LOG_MSTAR_M24" not in main_cat.colnames:
+        raise KeyError(f"{cat_abs}: MAIN HDU has no LOG_MSTAR_M24 column")
+
+    lm = np.asarray(main_cat["LOG_MSTAR_M24"], dtype=np.float64)
+    keep = np.isfinite(lm) & (lm < float(logm_max))
+    n_before = len(main_cat)
+    n_after = int(np.sum(keep))
+    n_drop = n_before - n_after
+
+    if verbose:
+        print("=" * 60)
+        print("apply_post_emission_mstar_dwarf_cut")
+        print("=" * 60)
+        print(
+            f"  LOG_MSTAR_M24 < {logm_max}: keep {n_after}/{n_before} rows "
+            f"({n_drop} dropped)"
+        )
+
+    if n_drop == 0:
+        return
+
+    zcat_cat = safe_read_table(cat_abs, hdu="ZCAT")
+    tractor_cat = safe_read_table(cat_abs, hdu="TRACTOR")
+    fspec_cat = safe_read_table(cat_abs, hdu=DWARF_CATALOG_SPEC_HDU)
+
+    _assert_targetid_aligned(main_cat, zcat_cat, "MAIN", "ZCAT")
+    _assert_targetid_aligned(main_cat, tractor_cat, "MAIN", "TRACTOR")
+    _assert_targetid_aligned(main_cat, fspec_cat, "MAIN", DWARF_CATALOG_SPEC_HDU)
+
+    main_sub = main_cat[keep]
+    main_sub = get_dwarf_primary(main_sub)
+    zcat_sub = zcat_cat[keep]
+    tractor_sub = tractor_cat[keep]
+    fspec_sub = fspec_cat[keep]
+
+    _assert_targetid_aligned(main_sub, zcat_sub, "MAIN", "ZCAT")
+    _assert_targetid_aligned(main_sub, tractor_sub, "MAIN", "TRACTOR")
+    _assert_targetid_aligned(main_sub, fspec_sub, "MAIN", DWARF_CATALOG_SPEC_HDU)
+
+    main_sub = make_catalog_unmasked(main_sub)
+    zcat_sub = make_catalog_unmasked(zcat_sub)
+    tractor_sub = make_catalog_unmasked(tractor_sub)
+    fspec_sub = make_catalog_unmasked(fspec_sub)
+
+    kept_tids = np.asarray(main_sub["TARGETID"])
+
+    cat_dir = os.path.dirname(cat_abs) or "."
+    fd, tmp_path = tempfile.mkstemp(
+        suffix=".fits", prefix="post_mstar_cut_", dir=cat_dir
+    )
+    os.close(fd)
+    try:
+        with fits.open(cat_abs, memmap=False) as hdul:
+            new_hdus = []
+            for hdu in hdul:
+                name = hdu.name
+                if name == "MAIN":
+                    hdu_new = fits.table_to_hdu(main_sub)
+                    hdu_new.name = "MAIN"
+                    new_hdus.append(hdu_new)
+                elif name == "ZCAT":
+                    hdu_new = fits.table_to_hdu(zcat_sub)
+                    hdu_new.name = "ZCAT"
+                    new_hdus.append(hdu_new)
+                elif name == "TRACTOR":
+                    hdu_new = fits.table_to_hdu(tractor_sub)
+                    hdu_new.name = "TRACTOR"
+                    new_hdus.append(hdu_new)
+                elif name == DWARF_CATALOG_SPEC_HDU:
+                    hdu_new = fits.table_to_hdu(fspec_sub)
+                    hdu_new.name = DWARF_CATALOG_SPEC_HDU
+                    new_hdus.append(hdu_new)
+                elif name == "REPROCESS_PHOTO":
+                    rp = safe_read_table(cat_abs, hdu="REPROCESS_PHOTO")
+                    if "TARGETID" in rp.colnames:
+                        rp = rp[
+                            np.isin(
+                                np.asarray(rp["TARGETID"]),
+                                kept_tids,
+                            )
+                        ]
+                    rp = make_catalog_unmasked(rp)
+                    hdu_new = fits.table_to_hdu(rp)
+                    hdu_new.name = "REPROCESS_PHOTO"
+                    new_hdus.append(hdu_new)
+                else:
+                    new_hdus.append(hdu.copy())
+
+            hdul_out = fits.HDUList(new_hdus)
+            hdul_out[0].add_checksum()
+            for h in hdul_out:
+                if h.name not in (None, "", "PRIMARY") and isinstance(
+                    h, (fits.BinTableHDU, fits.TableHDU)
+                ):
+                    h.add_checksum()
+            hdul_out.writeto(tmp_path, overwrite=True)
+        os.replace(tmp_path, cat_abs)
+    except BaseException:
+        if os.path.isfile(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        raise
+
+    if verbose:
+        print(f"  Wrote updated catalog to {cat_abs}")
+        print("=" * 60)
+
+
 def _reassign_sample_from_zcat(main_tab, zcat_tab):
     """
     Set MAIN.SAMPLE from ZCAT targeting bits (main survey + SV), same logic as
@@ -1577,9 +1713,12 @@ def combine_hdus(hdu_list, base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs
 
 def create_spectra_hdu(file_path):
     """
-    Create a new Astropy Table (HDU) for the NMF+PCA coefficients, normalization factors, 
-    and UMAP 2D coordinates. The table has the same TARGETIDs/order as MAIN HDU in file_path,
-    with missing TARGETIDs filled with zeros (-99 for UMAP).
+    Create SPECTRA_TEMPLATE: NMF+PCA coefficients, normalization, NNMF residual, and 2D UMAP.
+
+    The extension has exactly len(MAIN) rows. The TARGETID column matches MAIN in order. External
+    HDF5 data may list additional TARGETIDs not present in MAIN; those entries are not written as
+    extra rows. Each MAIN target is looked up in the HDF5 by TARGETID; when absent, float columns
+    use -99.0 and UMAP uses -99.0 in SPEC_UMAP_0/1.
     """
 
     # Load main catalog
@@ -1624,6 +1763,14 @@ def create_spectra_hdu(file_path):
     assert len(norm_facs) == n, "Norm factor length mismatch"
     assert spec_umap_2d.shape[0] == n, "UMAP length mismatch"
     assert len(nnmf_rnorm) == n, "NNMF RNORM mismatch"
+
+    n_tgids_h5 = len(tgids)
+    n_unique_h5 = len(np.unique(tgids))
+    if n_unique_h5 < n_tgids_h5:
+        print(
+            f"Warning: HDF5 has duplicate TARGETID entries "
+            f"({n_tgids_h5} rows, {n_unique_h5} unique); last index wins per key."
+        )
     
     # Create TGID -> index mapping
     tgid_to_idx = {tgid: i for i, tgid in enumerate(tgids)}
@@ -1690,12 +1837,14 @@ def create_spectra_hdu(file_path):
 
 def create_image_ssl_hdu(file_path):
     """
-    Create and append an IMG_SSL HDU containing image-based SSL UMAP 2D
-    coordinates and the top-10 most similar TARGETIDs (with cosine similarity
-    scores) for every object in the MAIN HDU.
+    Create and append an IMG_SSL HDU: top-10 most similar TARGETIDs and cosine scores per query
+    (column 0 in the similarity arrays is the query; we skip it and use the next 10 columns).
 
-    Rows are aligned to MAIN by TARGETID.  Objects without SSL data are
-    filled with -99 (int64 columns) or -99.0 (float64 columns).
+    This extension is not row-aligned with MAIN or SPECTRA_TEMPLATE. It has one row per MAIN
+    TARGETID that has SSL similarity data, in the same order as those targets appear in MAIN
+    (a subsequence of MAIN). Query TARGETIDs are always a subset of MAIN; the similarity .npy
+    files may list more queries, which are not emitted. SIM_TARGETID_* neighbor IDs are not
+    required to appear in MAIN.
     """
 
     # Load main catalog to get authoritative TARGETID ordering
@@ -1707,14 +1856,7 @@ def create_image_ssl_hdu(file_path):
     sim_scores = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/similarity_search_magb/all_similarity_scores_total.npy")
     sim_tgids = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/similarity_search_magb/all_similarity_targetids_total.npy")
 
-    # Load UMAP 2D coordinates and their associated TARGETIDs
-    # umaps_dwarfs = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/umap/total_umap_embedding_2d.npy")
-    tgid_vals = np.load("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/dwarf_dr1/total_targetids_arr.npy")
-
     print(f"Similarity arrays shape: scores={sim_scores.shape}, tgids={sim_tgids.shape}")
-    # print(f"UMAP array shape: {umaps_dwarfs.shape}, tgid_vals length: {len(tgid_vals)}")
-
-    # assert umaps_dwarfs.shape[0] == len(tgid_vals), "UMAP rows and tgid_vals length mismatch"
     assert sim_scores.shape == sim_tgids.shape, "sim_scores and sim_tgids shape mismatch"
 
     n_sim = 10
@@ -1723,55 +1865,48 @@ def create_image_ssl_hdu(file_path):
     # sim_tgids[:, 0] holds the query TARGETID for each row
     sim_tgid_to_row = {int(sim_tgids[i, 0]): i for i in range(sim_tgids.shape[0])}
 
-    # Build lookup: TARGETID -> row index in UMAP arrays
-    # umap_tgid_to_idx = {int(tgid_vals[i]): i for i in range(len(tgid_vals))}
+    # Sparse rows: one per MAIN target that has a similarity row, in MAIN order
+    row_targetids = []
+    sim_t_lists = [[] for _ in range(n_sim)]
+    sim_s_lists = [[] for _ in range(n_sim)]
 
-    # Prepare output columns
-    # img_umap_0 = np.full(n_objects, -99.0, dtype=np.float64)
-    # img_umap_1 = np.full(n_objects, -99.0, dtype=np.float64)
-
-    sim_targetid_cols = np.full((n_objects, n_sim), -99, dtype=np.int64)
-    sim_score_cols = np.full((n_objects, n_sim), -99.0, dtype=np.float64)
-
-    for i, tgid in enumerate(main_tgids):
+    for tgid in main_tgids:
         tgid_int = int(tgid)
+        if tgid_int not in sim_tgid_to_row:
+            continue
+        row = sim_tgid_to_row[tgid_int]
+        assert int(sim_tgids[row, 0]) == tgid_int, "sim array query column mismatch for TARGETID"
+        row_targetids.append(tgid)
+        avail = min(n_sim, sim_tgids.shape[1] - 1)
+        for j in range(n_sim):
+            if j < avail:
+                sim_t_lists[j].append(int(sim_tgids[row, 1 + j]))
+                sim_s_lists[j].append(float(sim_scores[row, 1 + j]))
+            else:
+                sim_t_lists[j].append(-99)
+                sim_s_lists[j].append(-99.0)
 
-        # UMAP coordinates
-        # if tgid_int in umap_tgid_to_idx:
-        #     uidx = umap_tgid_to_idx[tgid_int]
-        #     img_umap_0[i] = umaps_dwarfs[uidx, 0]
-            # img_umap_1[i] = umaps_dwarfs[uidx, 1]
-
-        # Similarity: skip self (column 0), take next 10
-        if tgid_int in sim_tgid_to_row:
-            row = sim_tgid_to_row[tgid_int]
-            avail = min(n_sim, sim_tgids.shape[1] - 1)
-            sim_targetid_cols[i, :avail] = sim_tgids[row, 1:1 + avail]
-            sim_score_cols[i, :avail] = sim_scores[row, 1:1 + avail]
-
-    # Build astropy Table
+    n_sparse = len(row_targetids)
     new_table = Table()
-    new_table["TARGETID"] = main_tgids
+    if n_sparse:
+        new_table["TARGETID"] = np.array(row_targetids, dtype=main_tgids.dtype)
+        for j in range(n_sim):
+            new_table[f"SIM_TARGETID_{j}"] = np.array(sim_t_lists[j], dtype=np.int64)
+            new_table[f"SIM_SCORE_{j}"] = np.array(sim_s_lists[j], dtype=np.float64)
+    else:
+        new_table["TARGETID"] = np.array([], dtype=main_tgids.dtype)
+        for j in range(n_sim):
+            new_table[f"SIM_TARGETID_{j}"] = np.array([], dtype=np.int64)
+            new_table[f"SIM_SCORE_{j}"] = np.array([], dtype=np.float64)
 
-    # new_table["IMG_UMAP_0"] = img_umap_0
-    # new_table["IMG_UMAP_1"] = img_umap_1
-
-    for j in range(n_sim):
-        new_table[f"SIM_TARGETID_{j}"] = sim_targetid_cols[:, j]
-        new_table[f"SIM_SCORE_{j}"] = sim_score_cols[:, j]
-
-    # Append as new HDU
     new_hdu = fits.BinTableHDU(new_table, name="IMG_SSL")
 
     with fits.open(file_path, mode="update") as hdul:
         hdul.append(new_hdu)
         hdul.flush()
 
-    # n_matched_umap = np.sum(img_umap_0 != -99.0)
-    n_matched_sim = np.sum(sim_targetid_cols[:, 0] != -99)
-    print(f"Added IMG_SSL extension to {file_path} (length = {n_objects})")
-    # print(f"  UMAP matched: {n_matched_umap}/{n_objects}")
-    print(f"  Similarity matched: {n_matched_sim}/{n_objects}")
+    print(f"Added IMG_SSL extension to {file_path} (sparse length = {n_sparse}, MAIN length = {n_objects})")
+    print(f"  Similarity coverage: {n_sparse}/{n_objects} MAIN objects have a row in IMG_SSL")
 
     return
 
@@ -2250,15 +2385,17 @@ if __name__ == '__main__':
         add_model_photometry_to_fastspec(main_cat_outpath)
         add_delta_mag_to_fastspec(main_cat_outpath)
 
+    apply_post_emission_mstar_dwarf_cut(main_cat_outpath)
+
     consolidate_associated_fiber_properties(main_cat_outpath)
 
     if add_sfrs_zmet:
         add_sfr_halpha_to_spec_derived(main_cat_outpath)
 
-    #TODO: add a mstar maskbit where we compare C10 k correction in r and g band and compare it against our measurement. if off by 0.2, then we consider it to be uncertain! for those objects, we revert to the C10 k correction!
-
-    # TODO: there are some objects with stellar masses above 9.25 in final catalog, how? even if in associated fiber step, 
-    # they should all be less than 9.25? confirm if all the associated fibers have to be in catalog, I do not think so, but just to confirm
+    # Objects with LOG_MSTAR_M24 >= 9.25 after the low-SNR fallback in
+    # compute_emission_subtracted_photo_errors are dropped by apply_post_emission_mstar_dwarf_cut
+    # (before consolidate_associated_fiber_properties). ASSOCIATED_TARGETIDS can still list
+    # TARGETIDs not present in MAIN.
 
     if process_post_hdu:
         ##add the spectra NMF+PCA information!!
