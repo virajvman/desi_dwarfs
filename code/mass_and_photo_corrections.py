@@ -846,14 +846,15 @@ def compute_emission_subtracted_photo_errors(
         "DELTA_MAG_R_KCORR",
     )
     pkl_path = _resolve_kcorr_flag_pkl_path(kcorr_flag_pkl_path)
+    missing_kcorr_cols = [c for c in kcorr_cols if c not in fspec_cat.colnames]
     if pkl_path is None:
         if verbose:
             print("  MSTAR_MASKBIT bit 2 (k-corr outlier): no contour file found; "
                   "skipping (set kcorr_flag_pkl_path or add data/kcorr_flag_contours.pkl).")
-    elif not all(c in fspec_cat.colnames for c in kcorr_cols):
+    elif missing_kcorr_cols:
         if verbose:
             print("  MSTAR_MASKBIT bit 2 (k-corr outlier): SPEC_DERIVED missing "
-                  f"required column(s) among {kcorr_cols}; skipping.")
+                  f"required column(s) {missing_kcorr_cols}; skipping.")
     else:
         print("Flagging the k correct outliers in MSTAR MASKBIT!")
         kcorr_outlier = _kcorr_mstar_outlier_mask(

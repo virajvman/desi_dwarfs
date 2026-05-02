@@ -2377,13 +2377,13 @@ if __name__ == '__main__':
                  output_file=main_cat_outpath,
                  extra_prefixes=["qso_scnd"] if process_qso_scnd else [])
 
-    if compute_mstar_err:
-        print("Computing emission-subtracted photometry and stellar mass errors")
-        compute_emission_subtracted_photo_errors(main_cat_outpath)
-
     if add_model_phot:
         add_model_photometry_to_fastspec(main_cat_outpath)
         add_delta_mag_to_fastspec(main_cat_outpath)
+
+    if compute_mstar_err:
+        print("Computing emission-subtracted photometry and stellar mass errors")
+        compute_emission_subtracted_photo_errors(main_cat_outpath)
 
     apply_post_emission_mstar_dwarf_cut(main_cat_outpath)
 
