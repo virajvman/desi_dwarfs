@@ -486,42 +486,45 @@ def apply_lowz_mask(table):
     return table[lowz_mask]
 
 
-def get_contours(quant_x, quant_y,bins,sigs=False,min_count=0):
+def get_contours(quant_x, quant_y, bins, sigs=False, min_count=0):
     '''
     Want to get contours for the x vs. y relation. This will return a dict with the corresponding contours
     '''
-
     med = []
     c1sL = []
     c1sH = []
     c2sL = []
     c2sH = []
-
+    c3sL = []
+    c3sH = []
     for i in range(len(bins)-1):
         temp_y = quant_y[ (quant_x > bins[i]) & (quant_x < bins[i+1]) ]
-
         if min_count >= len(temp_y):
             #we return nans
             med.append(np.nan)
             if sigs:
-                c1sL.append(np.nan )  
-                c1sH.append(np.nan )  
-                c2sL.append(np.nan )  
-                c2sH.append(np.nan ) 
-
+                c1sL.append(np.nan)
+                c1sH.append(np.nan)
+                c2sL.append(np.nan)
+                c2sH.append(np.nan)
+                c3sL.append(np.nan)
+                c3sH.append(np.nan)
         else:
-            med.append(np.nanmedian(temp_y) )
+            med.append(np.nanmedian(temp_y))
             if sigs:
-                c1sL.append(np.nanpercentile(temp_y,16) )  
-                c1sH.append(np.nanpercentile(temp_y,84) )  
-                c2sL.append(np.nanpercentile(temp_y,2.5) )  
-                c2sH.append(np.nanpercentile(temp_y,97.5) ) 
-        
+                c1sL.append(np.nanpercentile(temp_y, 16))
+                c1sH.append(np.nanpercentile(temp_y, 84))
+                c2sL.append(np.nanpercentile(temp_y, 2.5))
+                c2sH.append(np.nanpercentile(temp_y, 97.5))
+                c3sL.append(np.nanpercentile(temp_y, 0.15))
+                c3sH.append(np.nanpercentile(temp_y, 99.85))
+
     #write this into dictionary
-    
-    temp_dict = {"bin_cents":0.5*(bins[1:] + bins[:-1])  , "median" : med, 
-                "sig1_low" : c1sL, "sig1_high" : c1sH, "sig2_low":c2sL , "sig2_high" : c2sH }
-    
+    temp_dict = {"bin_cents": 0.5*(bins[1:] + bins[:-1]), "median": med,
+                 "sig1_low": c1sL, "sig1_high": c1sH,
+                 "sig2_low": c2sL, "sig2_high": c2sH,
+                 "sig3_low": c3sL, "sig3_high": c3sH}
+
     return temp_dict
 
 
@@ -1567,7 +1570,90 @@ def make_subplots(ncol=3, nrow=1, row_spacing=1.1, col_spacing=1.1, plot_size=2,
     if return_fig:
         return fig, all_axes
     return all_axes
+
+
+
+def make_tall_subplots(
+    nrow=3,
+    ncol=1,
+    panel_width=2.0,    # inches
+    panel_height=1.2,   # inches — adjust aspect freely
+    row_spacing=None,   # list of nrow+1 gaps (bottom-pad, inter-panel..., top-pad)
+    col_spacing=None,   # list of ncol+1 gaps (left-pad, inter-panel..., right-pad)
+    return_fig=False,
+):
+    """
+    Multi-row, multi-column figure with physically fixed panel sizes.
+    All panels share the same rect shape defined by panel_width × panel_height.
+    Font sizes set in points will render at true physical size when included
+    directly in LaTeX (no scaling).
+
+    Parameters
+    ----------
+    nrow         : int   — number of panel rows
+    ncol         : int   — number of panel columns
+    panel_width  : float — panel width in inches
+    panel_height : float — panel height in inches
+    row_spacing  : list  — nrow+1 floats [bottom_margin, gap1, ..., top_margin]
+                           defaults to [MARGIN_LABEL, MARGIN_SHARED*(nrow-1), MARGIN_TICKS]
+    col_spacing  : list  — ncol+1 floats [left_margin, gap1, ..., right_margin]
+                           defaults to [MARGIN_LABEL, MARGIN_SHARED*(ncol-1), MARGIN_TICKS]
+
+    Returns
+    -------
+    axes : 2D numpy array of shape (nrow, ncol), indexed [row_from_top, col_from_left]
+           (matches plt.subplots convention)
+    fig  : Figure (only if return_fig=True)
+    """
+    if row_spacing is None:
+        inner_gaps = [MARGIN_SHARED] * (nrow - 1)
+        row_spacing = [MARGIN_LABEL] + inner_gaps + [MARGIN_TICKS]
+    if col_spacing is None:
+        inner_gaps = [MARGIN_SHARED] * (ncol - 1)
+        col_spacing = [MARGIN_LABEL] + inner_gaps + [MARGIN_TICKS]
+
+    assert len(row_spacing) == nrow + 1, \
+        f"need {nrow+1} row spacings, got {len(row_spacing)}"
+    assert len(col_spacing) == ncol + 1, \
+        f"need {ncol+1} col spacings, got {len(col_spacing)}"
+
+    tot_width  = panel_width  * ncol + sum(col_spacing)
+    tot_height = panel_height * nrow + sum(row_spacing)
+    fig = plt.figure(figsize=(tot_width, tot_height))
+
+    # Horizontal divider (left → right):
+    # left_margin | panel | gap | panel | ... | right_margin
+    h = []
+    for j in range(ncol):
+        h.append(Size.Fixed(col_spacing[j]))   # gap left of panel j
+        h.append(Size.Fixed(panel_width))      # panel j itself
+    h.append(Size.Fixed(col_spacing[-1]))      # right margin
+
+    # Vertical divider (bottom → top):
+    # bottom_margin | panel | gap | panel | ... | top_margin
+    v = []
+    for i in range(nrow):
+        v.append(Size.Fixed(row_spacing[i]))   # gap below panel i
+        v.append(Size.Fixed(panel_height))     # panel i itself
+    v.append(Size.Fixed(row_spacing[-1]))      # top margin
+
+    divider = Divider(fig, (0, 0, 1, 1), h, v, aspect=False)
+
+    # Build a 2D array indexed [row_from_top, col_from_left] to match plt.subplots
+    axes = np.empty((nrow, ncol), dtype=object)
+    for i in range(nrow):       # i = row from bottom (0 = bottom row)
+        for j in range(ncol):   # j = col from left (0 = left column)
+            ax = fig.add_axes(
+                divider.get_position(),
+                axes_locator=divider.new_locator(nx=2*j + 1, ny=2*i + 1),
+            )
+            axes[nrow - 1 - i, j] = ax   # flip so row 0 is at the top
+
+    if return_fig:
+        return fig, axes
+    return axes
     
+
 def get_mags(vac_data_bgs, band="R"):
     vac_fluxr = vac_data_bgs["FLUX_" + band]
     vac_fluxr_err = np.sqrt(1/vac_data_bgs["FLUX_IVAR_" + band])

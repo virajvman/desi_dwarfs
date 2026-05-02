@@ -855,6 +855,7 @@ def compute_emission_subtracted_photo_errors(
             print("  MSTAR_MASKBIT bit 2 (k-corr outlier): SPEC_DERIVED missing "
                   f"required column(s) among {kcorr_cols}; skipping.")
     else:
+        print("Flagging the k correct outliers in MSTAR MASKBIT!")
         kcorr_outlier = _kcorr_mstar_outlier_mask(
             main_cat, fspec_cat, load_flag_interpolators(pkl_path)
         )

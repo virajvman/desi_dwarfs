@@ -2408,6 +2408,12 @@ if __name__ == '__main__':
         add_wrong_redrock_maskbit(main_cat_outpath, main_datamodel)
 
 
+    # TODO: do not forget about updating the balmer decrements in the star formation rates!
+    # TODO: remove the VDISP and VDISP_ivar column. also remove DN4000	DN4000_OBS	DN4000_IVAR	DN4000_MODEL
+    # TODO: rename LOGMSTAR in SPEC_DERIVED to LOGMSTAR_FASTSPEC
+    # TODO: add a column indicating error on mstar too larger? it should not be? but
+
+
 
 
 

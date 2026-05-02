@@ -118,13 +118,13 @@ def make_spectra_panel(tgids_interest, file_name, tot_cat,wave_min=3500, wave_ma
 
 
 EMISSION_LINES = {
-    r'[OII]': 3727.09,
+    r'[OII]': 3727.09 + 30,
     r'H$\gamma$': 4340.47,
     r'H$\beta$': 4861.33,
     r'[OIII]': 4958.91,
     r'[OIII]': 5006.84,
     r'H$\alpha$': 6562.80,
-    r'[SII]': 6722.5} #choosing average SII value
+    r'[SII]': 6722.5 + 10} #choosing average SII value
 
 
 import matplotlib.transforms as mtransforms
@@ -132,9 +132,9 @@ import matplotlib.transforms as mtransforms
 def add_floating_emission_lines(
     ax,
     line_dict,
-    fontsize=13,
     color='k',
-    lw=1.5,
+    lw=1,
+    fontsize = 9
 ):
     """
     Add floating emission-line labels with short vertical ticks below them.
@@ -148,17 +148,19 @@ def add_floating_emission_lines(
 
     xmin, xmax = ax.get_xlim()
 
+    yoff_more = 0.04
     for label, wave in line_dict.items():
 
-        text_y=0.92-0.04
-        tick_y0=0.86-0.04
-        tick_y1=0.90-0.04
+        print(label,wave)
+        text_y=0.92-0.04 - yoff_more
+        tick_y0=0.86-0.04 - yoff_more
+        tick_y1=0.90-0.04 - yoff_more
     
         if xmin <= wave <= xmax:
-            if wave == 4861.33 or wave == 6722.5:
-                text_y -= 0.14
-                tick_y0 -= 0.14
-                tick_y1 -= 0.14
+            if wave == 4861.33 or wave == 6722.5 + 10:
+                text_y -= 0.22 - yoff_more
+                tick_y0 -= 0.22 - yoff_more
+                tick_y1 -= 0.22 - yoff_more
     
             # label
             ax.text(
@@ -166,15 +168,18 @@ def add_floating_emission_lines(
                 text_y,
                 label,
                 transform=trans,
+                fontsize = fontsize,
                 ha='center',
                 va='bottom',
-                fontsize=fontsize,
                 color=color,
                 clip_on=False,
                 zorder=5,
             )
 
             # floating tick
+            if wave == 3757.09:
+                wave = 3727.09
+                
             ax.plot(
                 [wave, wave],
                 [tick_y0, tick_y1],
