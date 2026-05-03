@@ -90,8 +90,9 @@ def _kcorr_mstar_outlier_mask(main_cat, fspec_cat, interpolators):
     gr = mag_g - mag_r
     poly_g = g_kcorr(gr, z)
     poly_r = r_kcorr(gr, z)
-    delta_k_g = dkg - poly_g
-    delta_k_r = dkr - poly_r
+    #we add these because our delta kcorr are the opposite sign convention as the polynomial!
+    delta_k_g = poly_g + dkg
+    delta_k_r = poly_r + dkr
     is_elg = np.asarray(np.array(main_cat["SAMPLE"], dtype=str)) == "ELG"
     valid = (
         np.isfinite(z) & (z >= 0.0) & (z < 0.5)
