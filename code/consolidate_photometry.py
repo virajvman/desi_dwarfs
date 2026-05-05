@@ -2413,6 +2413,8 @@ if __name__ == '__main__':
     # TODO: rename LOGMSTAR in SPEC_DERIVED to LOGMSTAR_FASTSPEC
     # TODO: add a column indicating error on mstar too larger? it should not be? but
 
+    TODO: fix the consolidation of dwarf mstar maskbit? Maybe SGA maskbit is not needed to port over?
+
 
 
 
