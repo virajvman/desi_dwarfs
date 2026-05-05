@@ -667,9 +667,16 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
     otherwise or if the fit fails.
 
     LOG_SFR_HALPHA, LOG_SFR_HALPHA_ERR, and LOG_HALPHA_SFR_FIBER are only set
-    for rows with finite HALPHA_FLUX > 0, HALPHA_EW > 0, and HALPHA_EW SNR > 3
-    (EW × sqrt(EW_IVAR)); otherwise those entries are NaN. This is independent
+    for rows with finite HALPHA_FLUX > 0, HBETA_FLUX > 0, HALPHA_EW > 0,
+    HALPHA_EW SNR > 3 (EW × sqrt(EW_IVAR)), HALPHA_FLUX SNR > 3, and
+    HBETA_FLUX SNR > 3; otherwise those entries are NaN. This is independent
     of the continuum-SNR split from MAG_*_FIBER_NOEMI_ERR above.
+
+    The Balmer decrement used for the SFR dust correction is computed per
+    object as BD = HALPHA_FLUX / HBETA_FLUX on rows passing the SFR mask,
+    and floored at the Case-B value 2.86 (values below 2.86 are unphysical).
+    Rows that do not pass the mask are filled with the population-average
+    BD = 3.25, but their SFRs are subsequently nulled to NaN.
 
     r_kcorr in desi_lowz_funcs is nominally valid for z < 0.5.
     """
@@ -709,8 +716,13 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
     halpha_ew = np.asarray(fspec_cat["HALPHA_EW"].data, dtype=float)
     halpha_ew_ivar = np.asarray(fspec_cat["HALPHA_EW_IVAR"].data, dtype=float)
     halpha_flux = np.asarray(fspec_cat["HALPHA_FLUX"].data, dtype=float)
+    halpha_flux_ivar = np.asarray(fspec_cat["HALPHA_FLUX_IVAR"].data, dtype=float)
+    hbeta_flux = np.asarray(fspec_cat["HBETA_FLUX"].data, dtype=float)
+    hbeta_flux_ivar = np.asarray(fspec_cat["HBETA_FLUX_IVAR"].data, dtype=float)
     with np.errstate(invalid="ignore"):
         halpha_ew_snr = halpha_ew * np.sqrt(halpha_ew_ivar)
+        halpha_flux_snr = halpha_flux * np.sqrt(halpha_flux_ivar)
+        hbeta_flux_snr = hbeta_flux * np.sqrt(hbeta_flux_ivar)
     ok_halpha_for_sfr = (
         np.isfinite(halpha_flux)
         & (halpha_flux > 0)
@@ -720,6 +732,38 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
         & (halpha_ew_ivar > 0)
         & np.isfinite(halpha_ew_snr)
         & (halpha_ew_snr > 3.0)
+        & np.isfinite(halpha_flux_ivar)
+        & (halpha_flux_ivar > 0)
+        & np.isfinite(halpha_flux_snr)
+        & (halpha_flux_snr > 3.0)
+        & np.isfinite(hbeta_flux)
+        & (hbeta_flux > 0)
+        & np.isfinite(hbeta_flux_ivar)
+        & (hbeta_flux_ivar > 0)
+        & np.isfinite(hbeta_flux_snr)
+        & (hbeta_flux_snr > 3.0)
+    )
+
+    # Per-object Balmer decrement = HALPHA_FLUX / HBETA_FLUX on the SFR-eligible
+    # rows; values below the Case-B floor of 2.86 are unphysical and clipped.
+    # Rows that fail the mask get the population-average 3.25 fill so the BD
+    # array stays finite for calc_SFR_Halpha; their SFRs are nulled below.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        bd_raw = np.where(
+            ok_halpha_for_sfr & (hbeta_flux > 0),
+            halpha_flux / hbeta_flux,
+            np.nan,
+        )
+    n_below_bd = int(np.sum(ok_halpha_for_sfr & np.isfinite(bd_raw) & (bd_raw < 2.86)))
+    n_eligible = int(np.sum(ok_halpha_for_sfr))
+    print(
+        f"  add_sfr_halpha_to_spec_derived: {n_below_bd} / {n_eligible} "
+        "SFR-eligible objects had per-object BD < 2.86; clipped to 2.86"
+    )
+    bd_per_object = np.where(
+        ok_halpha_for_sfr,
+        np.maximum(bd_raw, 2.86),
+        3.25,
     )
 
     mag_err_limit = 1.0857 / 10.0
@@ -774,7 +818,7 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
         Mr=mr_global,
         Mr_err=mr_err,
         EWc=0.0,
-        BD=3.25,
+        BD=bd_per_object,
         BD_err=0.0,
         imf_factor=1.0,
     )
@@ -832,7 +876,7 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
         Mr=mr_fiber,
         Mr_err=mr_err,
         EWc=0.0,
-        BD=3.25,
+        BD=bd_per_object,
         BD_err=0.0,
         imf_factor=1.0,
     )

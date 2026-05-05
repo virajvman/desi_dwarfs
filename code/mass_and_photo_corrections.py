@@ -822,16 +822,16 @@ def compute_emission_subtracted_photo_errors(
         mstar_maskbits = np.asarray(main_cat["MSTAR_MASKBIT"], dtype=np.int64).copy()
     else:
         mstar_maskbits = (
-            (np.asarray(main_cat["DWARF_MASKBIT"], dtype=np.int64) >> 18) & 1
+            (np.asarray(main_cat["DWARF_MASKBIT"], dtype=np.int64) >> 17) & 1
         ) << 1
 
     low = low_cont_snr_mask
     if dwarf_maskbits is not None:
-        dwarf_maskbits[low] &= ~np.int64(1 << 18)
+        dwarf_maskbits[low] &= ~np.int64(1 << 17)
     mstar_maskbits[low] &= ~np.int64(1 << 1)
     too_bright_fb = low & np.isfinite(mg_fallback) & (mg_fallback < -18.5)
     if dwarf_maskbits is not None:
-        dwarf_maskbits[too_bright_fb] |= np.int64(1 << 18)
+        dwarf_maskbits[too_bright_fb] |= np.int64(1 << 17)
         main_cat["DWARF_MASKBIT"] = dwarf_maskbits.astype(
             main_cat["DWARF_MASKBIT"].dtype)
     mstar_maskbits[too_bright_fb] |= np.int64(1 << 1)

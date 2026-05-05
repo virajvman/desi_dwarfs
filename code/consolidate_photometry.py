@@ -676,7 +676,7 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
 
     
 
-    # Flag sources brighter than Mg = -18.5 (bit 18 of DWARF_MASKBIT)
+    # Flag sources brighter than Mg = -18.5 (bit 17 of DWARF_MASKBIT)
     mag_g_corr_bright, _ = _apply_delta_mag_corrections(catalog)
     dist_pc = np.asarray(catalog["LUMI_DIST_MPC"], dtype=float) * 1.0e6
     valid_bright = np.isfinite(dist_pc) & (dist_pc > 0) & np.isfinite(mag_g_corr_bright)
@@ -684,10 +684,10 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
     abs_mag_g[valid_bright] = mag_g_corr_bright[valid_bright] - 5.0 * np.log10(dist_pc[valid_bright]) + 5.0
     too_bright = np.isfinite(abs_mag_g) & (abs_mag_g < -18.5)
     dwarf_maskbits = np.asarray(catalog["DWARF_MASKBIT"], dtype=np.int64)
-    dwarf_maskbits[too_bright] |= np.int64(1) << 18
+    dwarf_maskbits[too_bright] |= np.int64(1) << 17
     catalog["DWARF_MASKBIT"] = dwarf_maskbits
     n_flagged = int(too_bright.sum())
-    print(f"DWARF_MASKBIT bit 18 (Mg < -18.5): flagged {n_flagged}/{len(catalog)} "
+    print(f"DWARF_MASKBIT bit 17 (Mg < -18.5): flagged {n_flagged}/{len(catalog)} "
           f"({100.0 * n_flagged / len(catalog):.1f}%)")
 
     mstar_maskbits = np.zeros(len(catalog), dtype=np.int64)
@@ -1101,6 +1101,9 @@ def get_fastspec_matched_catalog(gal_cat, save_name, match_method = "TARGETID"):
     #make sure this is not a masked column!
     fastspec_cat = make_catalog_unmasked(fastspec_cat)
 
+    if "LOGMSTAR" in fastspec_cat.colnames and "LOGMSTAR_FASTSPEC" not in fastspec_cat.colnames:
+        fastspec_cat.rename_column("LOGMSTAR", "LOGMSTAR_FASTSPEC")
+
     #save this 
     fastspec_cat.write(f"{save_name}",overwrite=True)
 
@@ -1114,12 +1117,10 @@ def get_fastspec_matched_catalog(gal_cat, save_name, match_method = "TARGETID"):
 fastspec_metadata_cols = ["TARGETID","RA","DEC"]
 
 fastspec_specphot_cols = [
-    "DN4000", "DN4000_OBS", "DN4000_IVAR", "DN4000_MODEL", "DN4000_MODEL_IVAR",
-    "VDISP", "VDISP_IVAR",
     "FOII_3727_CONT", "FOII_3727_CONT_IVAR",
     "FHBETA_CONT", "FHBETA_CONT_IVAR",
     "FOIII_5007_CONT", "FOIII_5007_CONT_IVAR",
-    "FHALPHA_CONT", "FHALPHA_CONT_IVAR","LOGMSTAR"
+    "FHALPHA_CONT", "FHALPHA_CONT_IVAR", "LOGMSTAR",
 ]
 
 fastspec_cols = ["SNR_B", "SNR_R", "SNR_Z", "APERCORR", "APERCORR_G", "APERCORR_R", "APERCORR_Z"] 
@@ -1190,7 +1191,7 @@ def get_fastspec_fit_catalog_V2(chunk_size = 250000):
     main_cat_path = "/global/cfs/cdirs/desi/public/dr1/vac/dr1/fastspecfit/iron/v2.1/catalogs/fastspec-iron.fits"
 
     #as we are dealing with the v2 here, not all columns are available
-    to_remove_v2 = ["HALPHA_SIGMA","HALPHA_SIGMA_IVAR", "DN4000_MODEL_IVAR","FOII_3727_CONT", "FOII_3727_CONT_IVAR", "FHBETA_CONT", "FHBETA_CONT_IVAR", "FOIII_5007_CONT", "FOIII_5007_CONT_IVAR","FHALPHA_CONT", "FHALPHA_CONT_IVAR"]
+    to_remove_v2 = ["HALPHA_SIGMA","HALPHA_SIGMA_IVAR", "FOII_3727_CONT", "FOII_3727_CONT_IVAR", "FHBETA_CONT", "FHBETA_CONT_IVAR", "FOIII_5007_CONT", "FOIII_5007_CONT_IVAR","FHALPHA_CONT", "FHALPHA_CONT_IVAR"]
     fastspec_tot_cols_v2 = [s for s in fastspec_tot_cols if s not in to_remove_v2]
     fastspec_specphot_cols_v2 = [s for s in fastspec_specphot_cols if s not in to_remove_v2]
     
@@ -1959,7 +1960,7 @@ def _replace_main_extension_atomic(cat_path, new_main_hdu):
         raise
 
 
-def add_too_bright_maskbit(cat_path, bit=18, mag_cut=-18.5):
+def add_too_bright_maskbit(cat_path, bit=17, mag_cut=-18.5):
     """
     Flag sources whose corrected absolute g-band magnitude is brighter than
     *mag_cut* (default Mg < -18.5) by setting *bit* in DWARF_MASKBIT.
@@ -1976,7 +1977,7 @@ def add_too_bright_maskbit(cat_path, bit=18, mag_cut=-18.5):
     cat_path : str
         Path to the multi-extension FITS catalog.
     bit : int, optional
-        Bit index to set (default 18).
+        Bit index to set (default 17).
     mag_cut : float, optional
         Absolute magnitude threshold (default -18.5).  Sources *brighter*
         (more negative) than this value are flagged.
@@ -1998,7 +1999,7 @@ def add_too_bright_maskbit(cat_path, bit=18, mag_cut=-18.5):
     dwarf_maskbits[too_bright] |= np.int64(1) << bit
     main_cat["DWARF_MASKBIT"] = dwarf_maskbits
 
-    if "MSTAR_MASKBIT" in main_cat.colnames and bit == 18:
+    if "MSTAR_MASKBIT" in main_cat.colnames and bit == 17:
         mstar = np.asarray(main_cat["MSTAR_MASKBIT"], dtype=np.int64)
         mstar[too_bright] |= np.int64(1) << 1
         main_cat["MSTAR_MASKBIT"] = mstar.astype(np.int32)
@@ -2408,13 +2409,7 @@ if __name__ == '__main__':
         add_wrong_redrock_maskbit(main_cat_outpath, main_datamodel)
 
 
-    # TODO: do not forget about updating the balmer decrements in the star formation rates!
-    # TODO: remove the VDISP and VDISP_ivar column. also remove DN4000	DN4000_OBS	DN4000_IVAR	DN4000_MODEL
-    # TODO: rename LOGMSTAR in SPEC_DERIVED to LOGMSTAR_FASTSPEC
     # TODO: add a column indicating error on mstar too larger? it should not be? but
-
-    TODO: fix the consolidation of dwarf mstar maskbit? Maybe SGA maskbit is not needed to port over?
-
 
 
 

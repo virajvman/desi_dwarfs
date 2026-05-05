@@ -193,10 +193,12 @@ COLUMNS_TO_CONSOLIDATE = [
     "DIST_SOURCE",
 ]
 
-# Bits 0-15 and 18 depend on photometry; bit 16 is fiber-specific (wrong RR).
-# Bit 17 is unused in current builds (legacy catalogs may still have it set).
-PHOTO_BITS_MASK = np.int64(((1 << 16) - 1) | (1 << 18))
-FIBER_BITS_MASK = np.int64(1 << 16)
+# Bits 0-11, 13-15, and 17 depend on photometry and are inherited from the
+# property source. Bits 12 (near SGA outskirts) and 16 (wrong Redrock) are
+# fiber-specific (depend on per-fiber RA/DEC and per-fiber spectrum) and are
+# kept from the row itself.
+FIBER_BITS_MASK = np.int64((1 << 12) | (1 << 16))
+PHOTO_BITS_MASK = np.int64((((1 << 16) - 1) | (1 << 17)) & ~FIBER_BITS_MASK)
 
 
 def _find_property_source_per_group(catalog):

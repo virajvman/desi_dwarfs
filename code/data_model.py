@@ -1333,26 +1333,6 @@ fastspec_hdu_datamodel = {
         "blank_value": np.nan,
         "dtype": "float64"
     },
-    "DN4000": {
-        "unit": None,
-        "description": "Narrow 4000-Å break index (Balogh et al. 1999) measured from the emission-line subtracted spectrum.",
-        "dtype": "float32"
-    },
-    "DN4000_OBS": {
-        "unit": None,
-        "description": "Narrow 4000-Å break index measured from the observed spectrum.",
-        "dtype": "float32"
-    },
-    "DN4000_IVAR": {
-        "unit": None,
-        "description": "Inverse variance of DN4000 and DN4000_OBS.",
-        "dtype": "float32"
-    },
-    "DN4000_MODEL": {
-        "unit": None,
-        "description": "Narrow 4000-Å break index measured from the best-fitting continuum model.",
-        "dtype": "float32"
-    },
     "SNR_B": {
         "unit": None,
         "description": "Median signal-to-noise ratio per pixel in the b camera.",
@@ -1500,6 +1480,14 @@ fastspec_hdu_datamodel["LOG_MSTAR_24_FIBER"] = {
     "unit": None,
     "description": (
         "log10(Mstar / Msun) in the fiber aperture only"
+    ),
+    "dtype": "float32",
+}
+fastspec_hdu_datamodel["LOGMSTAR_FASTSPEC"] = {
+    "unit": None,
+    "description": (
+        "log10(stellar mass / Msun) from FastSpecFit SED fit (LOGMSTAR column "
+        "in the FastSpecFit SPECPHOT HDU); renamed from LOGMSTAR for clarity."
     ),
     "dtype": "float32",
 }

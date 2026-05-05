@@ -491,7 +491,7 @@ Each bit in `DWARF_MASKBIT` corresponds to a quality or cleaning flag. A value o
 | 14 | 16384 | Low signal-to-noise detection (SNR > 5 in only one band or fewer) |
 | 15 | 32768 | If `MAG_TYPE = TRACTOR_OG` and `TRACTOR_MASKBITS` has at least one of {2,3,4,8,9} [Tractor bits](https://www.legacysurvey.org/dr9/bitmasks/) flagged |
 | 16 | 65536 | Likely incorrect Redrock redshift, identified via UMAP/NMF spectral template anomaly detection |
-| 17 | 131072 | *Unused in current pipeline builds.* Legacy catalogs may still have this bit set from an earlier definition. |
+| 17 | 131072 | M_g &lt; &minus;18.5 at the survey redshift (or fallback distance for low continuum-SNR mass rows) after nebular + filter + k-corrections. |
 
 </details>
 
@@ -507,7 +507,7 @@ Each bit in `MSTAR_MASKBIT` describes the stellar-mass pipeline used for `LOG_MS
 | Bit | Value | Description |
 | :-: | ----: | :---------- |
 | 0 | 1 | Low continuum SNR in emission-subtracted *g* and *r* fiber photometry (mag error ≥ 1.0857/10, i.e. implied SNR &lt; 10 in those bands), from `compute_emission_subtracted_photo_errors` |
-| 1 | 2 | M_g &lt; −18.5 at the survey redshift: `MAG_G` + `LUMI_DIST_MPC` + `g_kcorr`(`g−r`, `Z_CMB`). For rows with bit 0, this replaces the catalog-build bright cut; other rows match the delta-mag–based cut in `DWARF_MASKBIT` bit 18 at ingest. |
+| 1 | 2 | M_g &lt; −18.5 at the survey redshift: `MAG_G` + `LUMI_DIST_MPC` + `g_kcorr`(`g−r`, `Z_CMB`). For rows with bit 0, this replaces the catalog-build bright cut; other rows match the delta-mag–based cut in `DWARF_MASKBIT` bit 17 at ingest. |
 | 2 | 4 | Model k-correction (`DELTA_MAG_{G,R}_KCORR` on SPEC_DERIVED) is a large outlier vs the Chilingarian (`g_kcorr`/`r_kcorr`) polynomial at the same spectroscopic `Z` and SDSS `g−r` from `MAG_{G,R}_SDSS_MODEL_NOEMI`, using pre-computed contours in `kcorr_flag_contours.pkl` and `kcorr_flag.flag_kcorr_outliers`. Set in `compute_emission_subtracted_photo_errors` for 0 ≤ `Z` &lt; 0.5 with finite inputs; requires the contour file (see `mass_and_photo_corrections._resolve_kcorr_flag_pkl_path`). Flag if **either** band is out of the allowed envelope (OR of per-band flags). |
 
 </details>
