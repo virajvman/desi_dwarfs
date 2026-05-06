@@ -69,13 +69,15 @@ def get_filter_weights(filt, wave_arr):
 def measure_photo_batch(wave_arr, flux_2d, ivar_2d=None, zred=None,
                         measure_bass=False,
                         measure_sdss=False,
-                        measure_sdss_z0=False):
+                        measure_sdss_z0=False,
+                        measure_sdss_z01=False):
     """
     Measure AB magnitudes (and optionally magnitude errors) for a batch
     of spectra in requested filter systems.
 
     Always measures DECam g,r. Optionally measures BASS, SDSS (observed frame),
-    and SDSS at z=0 (rest frame, per-object de-redshift via resample_flux).
+    SDSS at z=0 (rest frame), and SDSS at z=0.1 (band-shifted, for k-correction
+    validation). Each band-shift uses a per-object resample_flux.
 
     Magnitudes are computed using speclite's get_ab_magnitudes.
     Errors (if ivar_2d provided) are computed via analytic propagation
@@ -90,16 +92,19 @@ def measure_photo_batch(wave_arr, flux_2d, ivar_2d=None, zred=None,
         Inverse variance in (1e-17 erg/s/cm2/Ang)^{-2} units.
         If provided, magnitude errors are returned. If None, no errors.
     zred : 1D array, shape (N_spectra,), optional
-        Redshift of objects. Required when measure_sdss_z0=True.
+        Redshift of objects. Required when measure_sdss_z0=True or
+        measure_sdss_z01=True.
     measure_bass : bool
     measure_sdss : bool
     measure_sdss_z0 : bool
+    measure_sdss_z01 : bool
 
     Returns
     -------
     result : dict
         Keys: 'g_decam', 'r_decam', and optionally 'g_bass', 'r_bass',
-        'g_sdss', 'r_sdss', 'g_sdss_z0', 'r_sdss_z0'.
+        'g_sdss', 'r_sdss', 'g_sdss_z0', 'r_sdss_z0', 'g_sdss_z01',
+        'r_sdss_z01'.
         If ivar_2d is provided, also contains '*_err' variants of each key.
         Each value is a 1D array of shape (N_spectra,).
     """
@@ -166,48 +171,56 @@ def measure_photo_batch(wave_arr, flux_2d, ivar_2d=None, zred=None,
             'r_sdss': (SDSS_R, 'sdss2010noatm-r'),
         }, wave_arr, wlen_f, flux_f, flux_2d, ivar_for_errors)
 
-    # --- SDSS g, r at z=0 (rest frame, vectorized) ---
-    if measure_sdss_z0:
+    def _measure_sdss_at_target_z(target_z, key_g, key_r):
+        """
+        Per-object band-shift to ``target_z``: transform observed
+        ``(wave, flux)`` to ``(wave * (1+target_z)/(1+z_obs),
+        flux * (1+z_obs)/(1+target_z))``, resample onto ``wave_arr``, then
+        integrate against the SDSS g/r filters. Reduces to the rest-frame
+        case when ``target_z=0``.
+        """
         if zred is None:
-            raise ValueError("zred is required when measure_sdss_z0=True")
+            raise ValueError("zred is required when measuring SDSS at a target z")
 
         wave_out = wave_arr
+        factor_num = (1.0 + target_z)
 
-        flux_rest_resampled = np.full_like(flux_2d, np.nan)
-        ivar_rest_resampled = np.full_like(flux_2d, 0.0) if do_errors else None
+        flux_shifted_resampled = np.full_like(flux_2d, np.nan)
+        ivar_shifted_resampled = np.full_like(flux_2d, 0.0) if do_errors else None
 
         valid = np.isfinite(zred) & (zred > 0)
 
         for j in np.where(valid)[0]:
             z_j = zred[j]
-            rest_wave = wave_arr / (1.0 + z_j)
-            flux_rest_j = flux_2d[j] * (1.0 + z_j)
+            scale = factor_num / (1.0 + z_j)
+            wave_target = wave_arr * scale
+            flux_target_j = flux_2d[j] / scale
 
             if do_errors:
-                ivar_rest_j = ivar_2d[j] / (1.0 + z_j)**2
-                f_out, iv_out = resample_flux(wave_out, rest_wave, flux_rest_j,
-                                              ivar=ivar_rest_j)
-                flux_rest_resampled[j] = f_out
-                ivar_rest_resampled[j] = iv_out
+                ivar_target_j = ivar_2d[j] * (scale ** 2)
+                f_out, iv_out = resample_flux(wave_out, wave_target, flux_target_j,
+                                              ivar=ivar_target_j)
+                flux_shifted_resampled[j] = f_out
+                ivar_shifted_resampled[j] = iv_out
             else:
-                f_out = resample_flux(wave_out, rest_wave, flux_rest_j)
-                flux_rest_resampled[j] = f_out
+                f_out = resample_flux(wave_out, wave_target, flux_target_j)
+                flux_shifted_resampled[j] = f_out
 
-        g_z0 = np.full(n_spec, np.nan)
-        r_z0 = np.full(n_spec, np.nan)
-        g_z0_err = np.full(n_spec, np.nan) if do_errors else None
-        r_z0_err = np.full(n_spec, np.nan) if do_errors else None
+        g_out = np.full(n_spec, np.nan)
+        r_out = np.full(n_spec, np.nan)
+        g_err_out = np.full(n_spec, np.nan) if do_errors else None
+        r_err_out = np.full(n_spec, np.nan) if do_errors else None
 
         if np.any(valid):
-            sub_flux = flux_rest_resampled[valid]
+            sub_flux = flux_shifted_resampled[valid]
             sub_wlen = wave_out * u.Angstrom
             sub_flux_f = sub_flux * 1e-17 * u.erg / (u.cm**2 * u.s * u.Angstrom)
 
-            g_z0[valid] = SDSS_G.get_ab_magnitudes(sub_flux_f, sub_wlen)["sdss2010noatm-g"].data
-            r_z0[valid] = SDSS_R.get_ab_magnitudes(sub_flux_f, sub_wlen)["sdss2010noatm-r"].data
+            g_out[valid] = SDSS_G.get_ab_magnitudes(sub_flux_f, sub_wlen)["sdss2010noatm-g"].data
+            r_out[valid] = SDSS_R.get_ab_magnitudes(sub_flux_f, sub_wlen)["sdss2010noatm-r"].data
 
             if do_errors:
-                sub_ivar = ivar_rest_resampled[valid]
+                sub_ivar = ivar_shifted_resampled[valid]
                 sub_flux_phys = sub_flux * 1e-17
                 sub_var_phys = np.where(sub_ivar > 0, 1.0 / sub_ivar, 0.0) * (1e-17)**2
 
@@ -219,20 +232,28 @@ def measure_photo_batch(wave_arr, flux_2d, ivar_2d=None, zred=None,
                 var_maggies_g = sub_var_phys @ (w_g**2)
                 var_maggies_r = sub_var_phys @ (w_r**2)
 
-                g_z0_err[valid] = np.where(
+                g_err_out[valid] = np.where(
                     maggies_g > 0,
                     (2.5 / np.log(10)) * np.sqrt(var_maggies_g) / np.abs(maggies_g),
                     np.nan)
-                r_z0_err[valid] = np.where(
+                r_err_out[valid] = np.where(
                     maggies_r > 0,
                     (2.5 / np.log(10)) * np.sqrt(var_maggies_r) / np.abs(maggies_r),
                     np.nan)
 
-        result['g_sdss_z0'] = g_z0
-        result['r_sdss_z0'] = r_z0
+        result[key_g] = g_out
+        result[key_r] = r_out
         if do_errors:
-            result['g_sdss_z0_err'] = g_z0_err
-            result['r_sdss_z0_err'] = r_z0_err
+            result[key_g + '_err'] = g_err_out
+            result[key_r + '_err'] = r_err_out
+
+    # --- SDSS g, r at z=0 (rest frame) ---
+    if measure_sdss_z0:
+        _measure_sdss_at_target_z(0.0, 'g_sdss_z0', 'r_sdss_z0')
+
+    # --- SDSS g, r band-shifted to z=0.1 (k-correction validation) ---
+    if measure_sdss_z01:
+        _measure_sdss_at_target_z(0.1, 'g_sdss_z01', 'r_sdss_z01')
 
     return result
     
@@ -245,14 +266,19 @@ def _process_single_file(args):
     Parameters
     ----------
     args : tuple
-        (upath, cat_indices, targetids_for_file, redshifts_for_file, batch_size)
+        (upath, cat_indices, targetids_for_file, redshifts_for_file, batch_size,
+         compute_kcorr_z01_validation)
 
     Returns
     -------
     dict or None
         Dict with 'cat_indices' and photometry/absmag arrays, or None on failure.
+        When ``compute_kcorr_z01_validation`` is True, the returned dict also
+        contains the four ``*_w_emi_no_smooth`` keys (observed-frame and
+        z=0.1 SDSS g/r on continuum+emission).
     """
-    upath, cat_indices, targetids_for_file, redshifts_for_file, batch_size = args
+    (upath, cat_indices, targetids_for_file, redshifts_for_file, batch_size,
+     compute_kcorr_z01_validation) = args
 
     try:
         iron_vac = fits.open(upath, memmap=True)
@@ -331,6 +357,14 @@ def _process_single_file(args):
     g_sdss_z0_no_emi_only_cont = np.full(n_valid, np.nan)
     r_sdss_z0_no_emi_only_cont = np.full(n_valid, np.nan)
 
+    # -- KCORR_Z01 validation diagnostic: SDSS g/r on continuum+emission
+    #    (no smooth_continuum), in observed frame and band-shifted to z=0.1.
+    if compute_kcorr_z01_validation:
+        g_sdss_w_emi_no_smooth     = np.full(n_valid, np.nan)
+        r_sdss_w_emi_no_smooth     = np.full(n_valid, np.nan)
+        g_sdss_z01_w_emi_no_smooth = np.full(n_valid, np.nan)
+        r_sdss_z01_w_emi_no_smooth = np.full(n_valid, np.nan)
+
     # --- Continuum + emission: measure DECam and BASS ---
     flux_w_emi = continuum + smooth_continuum + emission
     for start in range(0, n_valid, batch_size):
@@ -392,6 +426,23 @@ def _process_single_file(args):
         g_sdss_z0_no_emi_only_cont[start:end] = phot['g_sdss_z0']
         r_sdss_z0_no_emi_only_cont[start:end] = phot['r_sdss_z0']
 
+    # --- KCORR_Z01 validation: continuum+emission (no smooth) -> SDSS@z_obs and SDSS@z=0.1 ---
+    if compute_kcorr_z01_validation:
+        # Reuse flux_w_emi_only_cont (= continuum + emission) from above.
+        for start in range(0, n_valid, batch_size):
+            end = min(start + batch_size, n_valid)
+
+            phot = measure_photo_batch(
+                wavelength, flux_w_emi_only_cont[start:end],
+                zred=valid_redshifts[start:end],
+                measure_sdss=True,
+                measure_sdss_z01=True,
+            )
+            g_sdss_w_emi_no_smooth[start:end]     = phot['g_sdss']
+            r_sdss_w_emi_no_smooth[start:end]     = phot['r_sdss']
+            g_sdss_z01_w_emi_no_smooth[start:end] = phot['g_sdss_z01']
+            r_sdss_z01_w_emi_no_smooth[start:end] = phot['r_sdss_z01']
+
     result["g_model_no_emi"] = g_no_emi
     result["r_model_no_emi"] = r_no_emi
     result["g_model_w_emi"]  = g_w_emi
@@ -414,6 +465,12 @@ def _process_single_file(args):
     result["g_sdss_z0_no_emi_ONLY_CONT"] = g_sdss_z0_no_emi_only_cont
     result["r_sdss_z0_no_emi_ONLY_CONT"] = r_sdss_z0_no_emi_only_cont
 
+    if compute_kcorr_z01_validation:
+        result["g_sdss_w_emi_no_smooth"]     = g_sdss_w_emi_no_smooth
+        result["r_sdss_w_emi_no_smooth"]     = r_sdss_w_emi_no_smooth
+        result["g_sdss_z01_w_emi_no_smooth"] = g_sdss_z01_w_emi_no_smooth
+        result["r_sdss_z01_w_emi_no_smooth"] = r_sdss_z01_w_emi_no_smooth
+
     iron_vac.close()
 
     return result
@@ -426,6 +483,7 @@ def compute_photometry_catalog(catalog,
                                save_path=None,
                                batch_size=500,
                                ncore=8,
+                               compute_kcorr_z01_validation=False,
                                verbose=True):
     """
     Loop over all objects in a DESI catalog, extract fastspecfit models,
@@ -452,6 +510,11 @@ def compute_photometry_catalog(catalog,
     ncore : int
         Number of parallel workers. Only used when compute_data_photometry=False.
         Falls back to serial if compute_data_photometry=True.
+    compute_kcorr_z01_validation : bool
+        If True, also compute SDSS g/r on (continuum + emission) -- with
+        smooth_continuum dropped -- in observed frame and band-shifted to
+        z=0.1, and emit four extra columns (g/r_sdss_w_emi_no_smooth and
+        g/r_sdss_z01_w_emi_no_smooth). Off by default.
     verbose : bool
         Print progress updates.
 
@@ -519,6 +582,13 @@ def compute_photometry_catalog(catalog,
     g_sdss_z0_no_emi_ONLY_CONT = np.full(n_objects, np.nan)
     r_sdss_z0_no_emi_ONLY_CONT = np.full(n_objects, np.nan)
 
+    # KCORR_Z01 validation: only allocated when requested.
+    if compute_kcorr_z01_validation:
+        g_sdss_w_emi_no_smooth     = np.full(n_objects, np.nan)
+        r_sdss_w_emi_no_smooth     = np.full(n_objects, np.nan)
+        g_sdss_z01_w_emi_no_smooth = np.full(n_objects, np.nan)
+        r_sdss_z01_w_emi_no_smooth = np.full(n_objects, np.nan)
+
     halpha_ew      = np.full(n_objects, np.nan)
     halpha_ew_ivar = np.full(n_objects, np.nan)
 
@@ -547,7 +617,8 @@ def compute_photometry_catalog(catalog,
         work_items = []
         for upath in unique_paths:
             ci = np.where(paths == upath)[0]
-            work_items.append((upath, ci, targetids[ci], redshifts[ci], batch_size))
+            work_items.append((upath, ci, targetids[ci], redshifts[ci], batch_size,
+                               compute_kcorr_z01_validation))
 
         if verbose:
             print(f"Processing {n_files} files with {ncore} cores ...")
@@ -580,6 +651,12 @@ def compute_photometry_catalog(catalog,
                 r_sdss_no_emi_ONLY_CONT[idx]  = file_result["r_sdss_no_emi_ONLY_CONT"]
                 g_sdss_z0_no_emi_ONLY_CONT[idx] = file_result["g_sdss_z0_no_emi_ONLY_CONT"]
                 r_sdss_z0_no_emi_ONLY_CONT[idx] = file_result["r_sdss_z0_no_emi_ONLY_CONT"]
+
+                if compute_kcorr_z01_validation:
+                    g_sdss_w_emi_no_smooth[idx]     = file_result["g_sdss_w_emi_no_smooth"]
+                    r_sdss_w_emi_no_smooth[idx]     = file_result["r_sdss_w_emi_no_smooth"]
+                    g_sdss_z01_w_emi_no_smooth[idx] = file_result["g_sdss_z01_w_emi_no_smooth"]
+                    r_sdss_z01_w_emi_no_smooth[idx] = file_result["r_sdss_z01_w_emi_no_smooth"]
 
                 halpha_ew[idx]      = file_result["halpha_ew"]
                 halpha_ew_ivar[idx] = file_result["halpha_ew_ivar"]
@@ -710,6 +787,26 @@ def compute_photometry_catalog(catalog,
                         if verbose:
                             print(f"  Photometry error (no_emi ONLY_CONT, batch {start}-{end}): {e}")
 
+                # --- KCORR_Z01 validation: continuum+emission (no smooth)
+                #     -> SDSS@z_obs and SDSS@z=0.1 ---
+                if compute_kcorr_z01_validation:
+                    for start in range(0, len(valid_cat), batch_size):
+                        end = min(start + batch_size, len(valid_cat))
+                        try:
+                            phot = measure_photo_batch(
+                                wavelength, flux_w_emi_only_cont[start:end],
+                                zred=valid_zred[start:end],
+                                measure_sdss=True,
+                                measure_sdss_z01=True,
+                            )
+                            g_sdss_w_emi_no_smooth[valid_cat[start:end]]     = phot['g_sdss']
+                            r_sdss_w_emi_no_smooth[valid_cat[start:end]]     = phot['r_sdss']
+                            g_sdss_z01_w_emi_no_smooth[valid_cat[start:end]] = phot['g_sdss_z01']
+                            r_sdss_z01_w_emi_no_smooth[valid_cat[start:end]] = phot['r_sdss_z01']
+                        except Exception as e:
+                            if verbose:
+                                print(f"  Photometry error (kcorr_z01 validation, batch {start}-{end}): {e}")
+
                 if compute_data_photometry:
                     h5_rows = np.array([h5_tgid_to_row.get(targetids[ci], -1) for ci in valid_cat])
                     has_h5 = h5_rows >= 0
@@ -774,6 +871,12 @@ def compute_photometry_catalog(catalog,
         columns["r_data_no_emi"] = r_data_no_emi
         columns["g_data_w_emi"]  = g_data_w_emi
         columns["r_data_w_emi"]  = r_data_w_emi
+
+    if compute_kcorr_z01_validation:
+        columns["g_sdss_w_emi_no_smooth"]     = g_sdss_w_emi_no_smooth
+        columns["r_sdss_w_emi_no_smooth"]     = r_sdss_w_emi_no_smooth
+        columns["g_sdss_z01_w_emi_no_smooth"] = g_sdss_z01_w_emi_no_smooth
+        columns["r_sdss_z01_w_emi_no_smooth"] = r_sdss_z01_w_emi_no_smooth
 
     result = Table(columns)
 

@@ -68,6 +68,7 @@ def run_nebular_correction_int_v2(
     gal_type,
     ncore_neb=16,
     overwrite=True,
+    compute_kcorr_z01_validation=False,
 ):
     """
     Read ``{save_filename}`` as ``*_INT_V2.fits`` under ``save_folder``, run FastSpec model
@@ -90,6 +91,14 @@ def run_nebular_correction_int_v2(
         Parallel workers for ``compute_photometry_catalog``.
     overwrite : bool
         If False, reuse ``model_photometry_diffs_{gal_type}.fits`` when TARGETIDs match.
+    compute_kcorr_z01_validation : bool
+        If True, also compute SDSS g/r on (continuum + emission, no smooth_continuum)
+        in observed frame and band-shifted to z=0.1, and add four diagnostic columns
+        ``MAG_G/R_SDSS_MODEL_WEMI_NOSMOOTH`` and ``MAG_G/R_SDSS_Z01_MODEL_WEMI_NOSMOOTH``
+        to the NEBCORR output (for cross-checks against fastspec ``KCORR01_SDSS_*``).
+        Off by default. When flipping this on with an existing cached
+        ``model_photometry_diffs_{gal_type}.fits``, set ``overwrite=True`` (or delete
+        the cache) so the new columns are recomputed.
     """
     from fastspec_funcs import (
         compute_photometry_catalog,
@@ -140,6 +149,7 @@ def run_nebular_correction_int_v2(
                 compute_data_photometry=False,
                 save_path=neb_photo_path,
                 ncore=ncore_neb,
+                compute_kcorr_z01_validation=compute_kcorr_z01_validation,
             )
     else:
         result_samp_i = compute_photometry_catalog(
@@ -147,6 +157,7 @@ def run_nebular_correction_int_v2(
             compute_data_photometry=False,
             save_path=neb_photo_path,
             ncore=ncore_neb,
+            compute_kcorr_z01_validation=compute_kcorr_z01_validation,
         )
 
     result_tid_to_idx = {tid: idx for idx, tid in enumerate(result_samp_i["TARGETID"].data)}
@@ -294,6 +305,12 @@ def run_nebular_correction_int_v2(
     samp_i_cat_cut["MAG_R_SDSS_Z0_MODEL_NOEMI"] = result_samp_i["r_sdss_z0_no_emi"][keep_mask]
     samp_i_cat_cut["MAG_G_SDSS_Z0_MODEL_NOEMI_ONLY_CONT"] = result_samp_i["g_sdss_z0_no_emi_ONLY_CONT"][keep_mask]
     samp_i_cat_cut["MAG_R_SDSS_Z0_MODEL_NOEMI_ONLY_CONT"] = result_samp_i["r_sdss_z0_no_emi_ONLY_CONT"][keep_mask]
+
+    if compute_kcorr_z01_validation:
+        samp_i_cat_cut["MAG_G_SDSS_MODEL_WEMI_NOSMOOTH"]     = result_samp_i["g_sdss_w_emi_no_smooth"][keep_mask]
+        samp_i_cat_cut["MAG_R_SDSS_MODEL_WEMI_NOSMOOTH"]     = result_samp_i["r_sdss_w_emi_no_smooth"][keep_mask]
+        samp_i_cat_cut["MAG_G_SDSS_Z01_MODEL_WEMI_NOSMOOTH"] = result_samp_i["g_sdss_z01_w_emi_no_smooth"][keep_mask]
+        samp_i_cat_cut["MAG_R_SDSS_Z01_MODEL_WEMI_NOSMOOTH"] = result_samp_i["r_sdss_z01_w_emi_no_smooth"][keep_mask]
 
     d_in_pc = np.asarray(samp_i_cat_cut["DIST_MPC_FIDU"].data, dtype=float) * 1e6
     valid_mg = (d_in_pc > 0) & np.isfinite(d_in_pc) & np.isfinite(
@@ -1692,7 +1709,7 @@ if __name__ == '__main__':
     if run_neb_correction:
         overwrite_neb = True
         # gal_types_neb = gal_types + ["OTHER"]
-        gal_types_neb = ["BGS_FAINT","ELG"]
+        gal_types_neb = ["BGS_BRIGHT","BGS_FAINT","ELG"]
         
         for gal_type in gal_types_neb:
             save_filename = save_filenames[gal_type]
