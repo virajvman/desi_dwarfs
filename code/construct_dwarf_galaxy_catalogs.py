@@ -1721,8 +1721,7 @@ if __name__ == '__main__':
                 overwrite=overwrite_neb,
             )
 
-        # TODO: I think I am computing k corrections wrong ...
-        #TODO: confirm k correction, when I redshift spectra to compute k correction, do I need to scale the flux by somehow? That would make a difference .. 
+        #TODO: add a function to fastspec where we can easily make a diagnostic plot of comparing smooth version of observed spectra and best fit template!
 
     if False:
         
