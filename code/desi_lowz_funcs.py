@@ -2241,7 +2241,7 @@ def conf_interval(x, pdf, conf_level):
 
 def plot_2d_dist(x,y, nxbins, nybins, 
                 cmin=1.e-4, cmax=1.0, smooth=None, clevs=None,ax=None, bounds=None,plot_pcol=False,
-                color = "k",cmap=None,filled=False,label="1",cmap_alpha=0.5):
+                color = "k",cmap=None,filled=False,label="1",cmap_alpha=0.5,lw_scale=1,alternating_contours=False):
     """
     construct and plot a binned, 2d distribution in the x-y plane 
     using nxbins and nybins in x- and y- direction, respectively
@@ -2275,11 +2275,31 @@ def plot_2d_dist(x,y, nxbins, nybins,
             lvls.append(sig)
 
         if filled:
-            cs = ax.contourf(X, Y, H, linewidths=np.array([1.0,0.75, 0.5, 0.25])[::-1], cmap=cmap, levels = sorted(lvls), 
+            cs = ax.contourf(X, Y, H, linewidths=np.array([1.0,0.75, 0.5, 0.25])[::-1]*lw_scale, cmap=cmap, levels = sorted(lvls), 
                     norm = LogNorm(), extent = [xbins[0], xbins[-1], ybins[0], ybins[-1]],alpha=cmap_alpha, rasterized=True)
         else:
-            cs = ax.contour(X, Y, H, linewidths=3*np.array([1.0,0.75, 0.5, 0.25])[::-1], colors=color, levels = sorted(lvls), 
+            cs = ax.contour(X, Y, H, linewidths=3*np.array([1.0,0.75, 0.5, 0.25])[::-1]*lw_scale, colors=color, levels = sorted(lvls), 
                     norm = LogNorm(), extent = [xbins[0], xbins[-1], ybins[0], ybins[-1]], rasterized=True)
+
+            if alternating_contours:
+                cs_bg = ax.contour(X, Y, H,
+                       linewidths=3*np.array([1.0, 0.75, 0.5, 0.25])[::-1]*lw_scale,
+                       colors='black',
+                       levels=sorted(lvls),
+                       norm=LogNorm(),
+                       extent=[xbins[0], xbins[-1], ybins[0], ybins[-1]],
+                       rasterized=True,
+                        linestyles="-")
+    
+                # Draw white line on top
+                cs = ax.contour(X, Y, H,
+                                linewidths=3*np.array([1.0, 0.75, 0.5, 0.25])[::-1]*lw_scale,
+                                colors='white',
+                                levels=sorted(lvls),
+                                norm=LogNorm(),
+                                extent=[xbins[0], xbins[-1], ybins[0], ybins[-1]],
+                                rasterized=True,
+                               linestyles="--")
 
             for c in cs.collections:
                 c.set_linestyle('--')
@@ -2289,7 +2309,7 @@ def plot_2d_dist(x,y, nxbins, nybins,
 
      # At end of function
     if not filled:
-        ax.plot([-5,-10], [-5,-10], color=color, linewidth=2.5, label=label)
+        ax.plot([-5,-10], [-5,-10], color=color, linewidth=2.5, label=label, alpha=cmap_alpha)
     else:
         from matplotlib.patches import Patch
         ax.plot([-5,-10], [-5,-10], color=cmap(0.6), linewidth=8, label=label)  # proxy line

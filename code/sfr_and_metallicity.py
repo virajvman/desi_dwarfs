@@ -361,7 +361,8 @@ def get_metallicity_S22(fastspec_cat):
 # Note: Kroupa vs Chabrier differ by only ~8% (~0.03 dex), well below typical
 # systematics (aperture correction, stochastic IMF sampling in dwarfs, dust),
 # so this rescaling is a consistency choice, not a physically important shift.
-_KENNICUTT_EVANS_12_HA_W_CHABRIER = 10.0**34.30   # W per (M_sun/yr), Chabrier IMF
+# _KENNICUTT_EVANS_12_HA_W_CHABRIER = 10.0**34.30   # W per (M_sun/yr), Chabrier IMF
+_BPASS_LOWZ_12_HA_W_CHABRIER = (3.63 * 10**34)   # W per (M_sun/yr), Chabrier IMF
 
 _HALPHA_REST_A    = 6564.61   # Hα rest wavelength [Å]
 _BALMER_INTRINSIC = 2.86      # Case B Hα/Hβ at T_e=1e4 K, n_e=100 cm^-3
@@ -378,7 +379,7 @@ def calc_SFR_Halpha(
     EWc=0.0,
     BD=3.25,
     BD_err=0.1,
-    imf_factor=1.0,
+    imf_factor=0.94,
 ):
     """
     Hα star formation rate from fiber spectroscopy via the Bauer+13 / Hopkins+03
@@ -523,7 +524,7 @@ def calc_SFR_Halpha(
     L_Halpha = term1 * term2 * term3  # [W]
 
     # Kennicutt & Evans 2012, Kroupa-native, optionally rescaled to another IMF
-    SFR = L_Halpha * imf_factor / _KENNICUTT_EVANS_12_HA_W_CHABRIER
+    SFR = L_Halpha * imf_factor / _BPASS_LOWZ_12_HA_W_CHABRIER
 
     with np.errstate(divide="ignore", invalid="ignore"):
         log_SFR = np.log10(SFR)
@@ -820,7 +821,7 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
         EWc=0.0,
         BD=bd_per_object,
         BD_err=0.0,
-        imf_factor=1.0,
+        imf_factor=0.94,
     )
     log_sfr = np.where(ok_halpha_for_sfr, log_sfr, np.nan)
     log_sfr_err = np.where(ok_halpha_for_sfr, log_sfr_err, np.nan)
@@ -878,7 +879,7 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
         EWc=0.0,
         BD=bd_per_object,
         BD_err=0.0,
-        imf_factor=1.0,
+        imf_factor=0.94,
     )
     log_sfr_fiber = np.where(ok_halpha_for_sfr, log_sfr_fiber, np.nan)
     fspec_cat["LOG_MSTAR_24_FIBER"] = log_mstar_fiber
