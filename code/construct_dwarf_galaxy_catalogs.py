@@ -126,8 +126,15 @@ def run_nebular_correction_int_v2(
         result_samp_i = Table.read(neb_photo_path)
         cat_tids = set(samp_i_cat["TARGETID"].data)
         res_tids = set(result_samp_i["TARGETID"].data)
-        if cat_tids != res_tids:
-            print("WARNING: TARGETIDs mismatch between catalog and cached result. Recomputing...")
+        cat_tids_match = (cat_tids == res_tids)
+        has_only_cont = "g_model_no_emi_ONLY_CONT" in result_samp_i.colnames
+        if (not cat_tids_match) or (not has_only_cont):
+            reason = []
+            if not cat_tids_match:
+                reason.append("TARGETIDs mismatch")
+            if not has_only_cont:
+                reason.append("missing ONLY_CONT columns")
+            print(f"WARNING: cached result stale ({', '.join(reason)}). Recomputing...")
             result_samp_i = compute_photometry_catalog(
                 samp_i_cat,
                 compute_data_photometry=False,
@@ -160,6 +167,12 @@ def run_nebular_correction_int_v2(
     halpha_ew = corrections["halpha_ew"]
     halpha_ew_ivar = corrections["halpha_ew_ivar"]
 
+    # ONLY_CONT diagnostic: parallel set of corrected mags computed from
+    # the same chain but on model fluxes that drop smooth_continuum.
+    mag_g_final_ONLY_CONT = corrections["mag_g_sdss_z0_ONLY_CONT"]
+    mag_r_final_ONLY_CONT = corrections["mag_r_sdss_z0_ONLY_CONT"]
+    gr_final_ONLY_CONT = mag_g_final_ONLY_CONT - mag_r_final_ONLY_CONT
+
     diag_plot_path = save_folder + f"/neb_correction_diagnostic_{gal_type}.png"
     plot_neb_correction_diagnostic(
         halpha_ew,
@@ -185,17 +198,40 @@ def run_nebular_correction_int_v2(
     logm_corr[zred_mask] = mstars_new
     logm_corr_err[zred_mask] = mstars_new_err
 
+    # Diagnostic mass using ONLY_CONT corrected mags. We pass the exact same
+    # mag_g_err/mag_r_err as the default chain (they come from cat["MAG_G_ERR"]
+    # / cat["MAG_R_ERR"] and do not depend on smooth_continuum), so the per-object
+    # error array would be identical to LOGM_M24_FIDU_CORR_ERR; we do not store it.
+    logm_corr_ONLY_CONT = -99.0 * np.ones(len(samp_i_cat))
+    mstars_only_cont, _ = get_stellar_mass_mia(
+        gr_final_ONLY_CONT[zred_mask],
+        mag_g_final_ONLY_CONT[zred_mask],
+        zred=np.zeros(np.sum(zred_mask)),
+        d_in_mpc=samp_i_cat["DIST_MPC_FIDU"][zred_mask].data,
+        input_zred=False,
+        mag_g_err=mag_g_err_final[zred_mask],
+        mag_r_err=mag_r_err_final[zred_mask],
+    )
+    logm_corr_ONLY_CONT[zred_mask] = mstars_only_cont
+
     logm_old = samp_i_cat["LOGM_M24_FIDU"].data
     valid_old = logm_old > 0
     valid_new = logm_corr > 0
+    valid_oc = logm_corr_ONLY_CONT > 0
 
     n_old_pass = np.sum(logm_old[valid_old] < 9.25)
     n_new_pass = np.sum(logm_corr[valid_new] < 9.25)
+    n_only_cont_pass = np.sum(logm_corr_ONLY_CONT[valid_oc] < 9.25)
     print(f"{gal_type}: Objects with log(M*) < 9.25 using OLD photometry: {n_old_pass}")
     print(
         f"{gal_type}: Objects with log(M*) < 9.25 using NEW (fully corrected) photometry: {n_new_pass}"
     )
     print(f"{gal_type}: Additional objects removed by corrected stellar mass: {n_old_pass - n_new_pass}")
+    print(
+        f"{gal_type}: [ONLY_CONT] Objects with log(M*) < 9.25 using ONLY_CONT (no smooth_continuum) photometry: "
+        f"{n_only_cont_pass} (vs NEW = {n_new_pass}, diff = {n_only_cont_pass - n_new_pass}); "
+        f"keep_mask still uses NEW mass."
+    )
 
     keep_mask = (logm_corr < 9.25) & (logm_corr > 0)
     n_before = len(samp_i_cat)
@@ -208,35 +244,56 @@ def run_nebular_correction_int_v2(
 
     samp_i_cat_cut["DELTA_MAG_G_BASS2DECAM"] = corrections["delta_bass2decam_g"][keep_mask]
     samp_i_cat_cut["DELTA_MAG_R_BASS2DECAM"] = corrections["delta_bass2decam_r"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_G_BASS2DECAM_ONLY_CONT"] = corrections["delta_bass2decam_g_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_R_BASS2DECAM_ONLY_CONT"] = corrections["delta_bass2decam_r_ONLY_CONT"][keep_mask]
     samp_i_cat_cut["DELTA_MAG_G_NEB"] = corrections["delta_neb_g"][keep_mask]
     samp_i_cat_cut["DELTA_MAG_R_NEB"] = corrections["delta_neb_r"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_G_NEB_ONLY_CONT"] = corrections["delta_neb_g_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_R_NEB_ONLY_CONT"] = corrections["delta_neb_r_ONLY_CONT"][keep_mask]
     samp_i_cat_cut["DELTA_MAG_G_NEB_ERR"] = corrections["delta_neb_g_err"][keep_mask]
     samp_i_cat_cut["DELTA_MAG_R_NEB_ERR"] = corrections["delta_neb_r_err"][keep_mask]
     samp_i_cat_cut["DELTA_MAG_G_DECAM2SDSS"] = corrections["delta_decam2sdss_g"][keep_mask]
     samp_i_cat_cut["DELTA_MAG_R_DECAM2SDSS"] = corrections["delta_decam2sdss_r"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_G_DECAM2SDSS_ONLY_CONT"] = corrections["delta_decam2sdss_g_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_R_DECAM2SDSS_ONLY_CONT"] = corrections["delta_decam2sdss_r_ONLY_CONT"][keep_mask]
     samp_i_cat_cut["DELTA_MAG_G_KCORR"] = corrections["delta_kcorr_g"][keep_mask]
     samp_i_cat_cut["DELTA_MAG_R_KCORR"] = corrections["delta_kcorr_r"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_G_KCORR_ONLY_CONT"] = corrections["delta_kcorr_g_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_R_KCORR_ONLY_CONT"] = corrections["delta_kcorr_r_ONLY_CONT"][keep_mask]
     samp_i_cat_cut["MAG_G_SDSS_Z0"] = mag_g_final[keep_mask]
     samp_i_cat_cut["MAG_R_SDSS_Z0"] = mag_r_final[keep_mask]
+    samp_i_cat_cut["MAG_G_SDSS_Z0_ONLY_CONT"] = mag_g_final_ONLY_CONT[keep_mask]
+    samp_i_cat_cut["MAG_R_SDSS_Z0_ONLY_CONT"] = mag_r_final_ONLY_CONT[keep_mask]
     samp_i_cat_cut["MAG_G_SDSS_Z0_ERR"] = mag_g_err_final[keep_mask]
     samp_i_cat_cut["MAG_R_SDSS_Z0_ERR"] = mag_r_err_final[keep_mask]
 
     samp_i_cat_cut["LOGM_M24_FIDU_CORR"] = logm_corr[keep_mask]
     samp_i_cat_cut["LOGM_M24_FIDU_CORR_ERR"] = logm_corr_err[keep_mask]
+    samp_i_cat_cut["LOGM_M24_FIDU_CORR_ONLY_CONT"] = logm_corr_ONLY_CONT[keep_mask]
 
     samp_i_cat_cut["HALPHA_EW"] = halpha_ew[keep_mask]
     samp_i_cat_cut["HALPHA_EW_IVAR"] = halpha_ew_ivar[keep_mask]
 
     samp_i_cat_cut["MAG_G_DECAM_MODEL_NOEMI"] = result_samp_i["g_model_no_emi"][keep_mask]
     samp_i_cat_cut["MAG_R_DECAM_MODEL_NOEMI"] = result_samp_i["r_model_no_emi"][keep_mask]
+    samp_i_cat_cut["MAG_G_DECAM_MODEL_NOEMI_ONLY_CONT"] = result_samp_i["g_model_no_emi_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["MAG_R_DECAM_MODEL_NOEMI_ONLY_CONT"] = result_samp_i["r_model_no_emi_ONLY_CONT"][keep_mask]
     samp_i_cat_cut["MAG_G_DECAM_MODEL_WEMI"] = result_samp_i["g_model_w_emi"][keep_mask]
     samp_i_cat_cut["MAG_R_DECAM_MODEL_WEMI"] = result_samp_i["r_model_w_emi"][keep_mask]
+    samp_i_cat_cut["MAG_G_DECAM_MODEL_WEMI_ONLY_CONT"] = result_samp_i["g_model_w_emi_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["MAG_R_DECAM_MODEL_WEMI_ONLY_CONT"] = result_samp_i["r_model_w_emi_ONLY_CONT"][keep_mask]
     samp_i_cat_cut["MAG_G_BASS_MODEL_WEMI"] = result_samp_i["g_bass_w_emi"][keep_mask]
     samp_i_cat_cut["MAG_R_BASS_MODEL_WEMI"] = result_samp_i["r_bass_w_emi"][keep_mask]
+    samp_i_cat_cut["MAG_G_BASS_MODEL_WEMI_ONLY_CONT"] = result_samp_i["g_bass_w_emi_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["MAG_R_BASS_MODEL_WEMI_ONLY_CONT"] = result_samp_i["r_bass_w_emi_ONLY_CONT"][keep_mask]
     samp_i_cat_cut["MAG_G_SDSS_MODEL_NOEMI"] = result_samp_i["g_sdss_no_emi"][keep_mask]
     samp_i_cat_cut["MAG_R_SDSS_MODEL_NOEMI"] = result_samp_i["r_sdss_no_emi"][keep_mask]
+    samp_i_cat_cut["MAG_G_SDSS_MODEL_NOEMI_ONLY_CONT"] = result_samp_i["g_sdss_no_emi_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["MAG_R_SDSS_MODEL_NOEMI_ONLY_CONT"] = result_samp_i["r_sdss_no_emi_ONLY_CONT"][keep_mask]
     samp_i_cat_cut["MAG_G_SDSS_Z0_MODEL_NOEMI"] = result_samp_i["g_sdss_z0_no_emi"][keep_mask]
     samp_i_cat_cut["MAG_R_SDSS_Z0_MODEL_NOEMI"] = result_samp_i["r_sdss_z0_no_emi"][keep_mask]
+    samp_i_cat_cut["MAG_G_SDSS_Z0_MODEL_NOEMI_ONLY_CONT"] = result_samp_i["g_sdss_z0_no_emi_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["MAG_R_SDSS_Z0_MODEL_NOEMI_ONLY_CONT"] = result_samp_i["r_sdss_z0_no_emi_ONLY_CONT"][keep_mask]
 
     d_in_pc = np.asarray(samp_i_cat_cut["DIST_MPC_FIDU"].data, dtype=float) * 1e6
     valid_mg = (d_in_pc > 0) & np.isfinite(d_in_pc) & np.isfinite(
@@ -1318,10 +1375,10 @@ if __name__ == '__main__':
 
     process_sga = False
     compute_nam_dists = True
-    save_int_catalog = True
+    save_int_catalog = False
 
     #should the photometry and stellar masses be corrected for nebular emission contamination?
-    run_neb_correction = False
+    run_neb_correction = True
     ncore_neb = 16
 
     zred_cuts = { "BGS_BRIGHT" : 0.4, "BGS_FAINT": 0.4, "LOWZ": 0.4, "ELG":0.5 }
