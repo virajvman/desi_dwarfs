@@ -1691,7 +1691,9 @@ if __name__ == '__main__':
 
     if run_neb_correction:
         overwrite_neb = True
-        gal_types_neb = gal_types + ["OTHER"]
+        # gal_types_neb = gal_types + ["OTHER"]
+        gal_types_neb = ["BGS_FAINT","ELG"]
+        
         for gal_type in gal_types_neb:
             save_filename = save_filenames[gal_type]
             run_nebular_correction_int_v2(
@@ -1701,6 +1703,9 @@ if __name__ == '__main__':
                 ncore_neb=ncore_neb,
                 overwrite=overwrite_neb,
             )
+
+        # TODO: I think I am computing k corrections wrong ...
+        #TODO: confirm k correction, when I redshift spectra to compute k correction, do I need to scale the flux by somehow? That would make a difference .. 
 
     if False:
         
