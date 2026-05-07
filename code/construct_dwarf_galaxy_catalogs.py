@@ -78,6 +78,34 @@ def run_nebular_correction_int_v2(
     Used for BGS/LOWZ/ELG/OTHER intermediate catalogs. ``gal_type`` labels cache and
     diagnostic outputs (e.g. ``model_photometry_diffs_{gal_type}.fits``).
 
+    Column-naming convention in the output NEBCORR table
+    ----------------------------------------------------
+    The default chain (and ``LOGM_M24_FIDU_CORR`` / ``keep_mask``) is now the
+    **continuum-only** model (no ``smooth_continuum``).  All chain-specific
+    columns therefore mean continuum-only when they have no suffix:
+
+        ``DELTA_MAG_{G,R}_BASS2DECAM``, ``..._NEB``, ``..._DECAM2SDSS``, ``..._KCORR``
+        ``MAG_{G,R}_SDSS_Z0``
+        ``MAG_{G,R}_DECAM_MODEL_NOEMI``, ``..._WEMI``
+        ``MAG_{G,R}_BASS_MODEL_WEMI``
+        ``MAG_{G,R}_SDSS_MODEL_NOEMI``, ``MAG_{G,R}_SDSS_Z0_MODEL_NOEMI``
+        ``LOGM_M24_FIDU_CORR``
+
+    The previous default (continuum + ``smooth_continuum``) is retained as a
+    diagnostic with the ``_W_SMOOTH`` suffix on all of the above columns
+    (e.g. ``DELTA_MAG_G_NEB_W_SMOOTH``, ``LOGM_M24_FIDU_CORR_W_SMOOTH``).
+    The ``_ONLY_CONT`` suffix used by previous versions of this catalog is gone.
+
+    ``*_ERR`` columns are single-copy (no ``_W_SMOOTH`` sibling): the per-object
+    g/r magnitude errors come from ``cat["MAG_*_ERR"]`` and do not depend on
+    smooth_continuum, and ``LOGM_M24_FIDU_CORR_ERR`` is computed from the new
+    default continuum-only chain.
+
+    The FastSpecFit SPECPHOT k-corrections ``KCORR01_SDSS_G`` and
+    ``KCORR01_SDSS_R`` (band-shifted to z=0.1) are now propagated through and
+    written into the NEBCORR table, mirroring how ``HALPHA_EW`` is read from
+    the FASTSPEC HDU.
+
     Parameters
     ----------
     save_folder : str
@@ -90,7 +118,9 @@ def run_nebular_correction_int_v2(
     ncore_neb : int
         Parallel workers for ``compute_photometry_catalog``.
     overwrite : bool
-        If False, reuse ``model_photometry_diffs_{gal_type}.fits`` when TARGETIDs match.
+        If False, reuse ``model_photometry_diffs_{gal_type}.fits`` when TARGETIDs match
+        and the cache contains both the ``*_ONLY_CONT`` and ``KCORR01_SDSS_{G,R}``
+        columns.  Otherwise the cache is recomputed.
     compute_kcorr_z01_validation : bool
         If True, also compute SDSS g/r on (continuum + emission, no smooth_continuum)
         in observed frame and band-shifted to z=0.1, and add four diagnostic columns
@@ -137,12 +167,18 @@ def run_nebular_correction_int_v2(
         res_tids = set(result_samp_i["TARGETID"].data)
         cat_tids_match = (cat_tids == res_tids)
         has_only_cont = "g_model_no_emi_ONLY_CONT" in result_samp_i.colnames
-        if (not cat_tids_match) or (not has_only_cont):
+        has_kcorr01 = (
+            "KCORR01_SDSS_G" in result_samp_i.colnames
+            and "KCORR01_SDSS_R" in result_samp_i.colnames
+        )
+        if (not cat_tids_match) or (not has_only_cont) or (not has_kcorr01):
             reason = []
             if not cat_tids_match:
                 reason.append("TARGETIDs mismatch")
             if not has_only_cont:
                 reason.append("missing ONLY_CONT columns")
+            if not has_kcorr01:
+                reason.append("missing KCORR01_SDSS_G/R columns")
             print(f"WARNING: cached result stale ({', '.join(reason)}). Recomputing...")
             result_samp_i = compute_photometry_catalog(
                 samp_i_cat,
@@ -170,31 +206,42 @@ def run_nebular_correction_int_v2(
     print(f"{gal_type}: Applying full photometric correction chain...")
     corrections = apply_photometric_corrections(samp_i_cat, result_samp_i)
 
-    mag_g_final = corrections["mag_g_sdss_z0"]
-    mag_r_final = corrections["mag_r_sdss_z0"]
+    # ------------------------------------------------------------------
+    # Default chain is now the continuum-only chain (formerly *_ONLY_CONT
+    # in apply_photometric_corrections).  The previous default (continuum +
+    # smooth_continuum) is retained as a *_W_SMOOTH diagnostic.  The
+    # apply_photometric_corrections dict still uses the old key names, so we
+    # explicitly map ONLY_CONT -> default and (no suffix) -> w_smooth here.
+    # ------------------------------------------------------------------
+    mag_g_final = corrections["mag_g_sdss_z0_ONLY_CONT"]
+    mag_r_final = corrections["mag_r_sdss_z0_ONLY_CONT"]
     mag_g_err_final = corrections["mag_g_sdss_z0_err"]
     mag_r_err_final = corrections["mag_r_sdss_z0_err"]
     gr_final = mag_g_final - mag_r_final
+
+    mag_g_final_w_smooth = corrections["mag_g_sdss_z0"]
+    mag_r_final_w_smooth = corrections["mag_r_sdss_z0"]
+    gr_final_w_smooth = mag_g_final_w_smooth - mag_r_final_w_smooth
+
     halpha_ew = corrections["halpha_ew"]
     halpha_ew_ivar = corrections["halpha_ew_ivar"]
+    kcorr01_sdss_g = corrections["kcorr01_sdss_g"]
+    kcorr01_sdss_r = corrections["kcorr01_sdss_r"]
 
-    # ONLY_CONT diagnostic: parallel set of corrected mags computed from
-    # the same chain but on model fluxes that drop smooth_continuum.
-    mag_g_final_ONLY_CONT = corrections["mag_g_sdss_z0_ONLY_CONT"]
-    mag_r_final_ONLY_CONT = corrections["mag_r_sdss_z0_ONLY_CONT"]
-    gr_final_ONLY_CONT = mag_g_final_ONLY_CONT - mag_r_final_ONLY_CONT
-
+    # Diagnostic plot uses the continuum-only nebular delta (the new default).
     diag_plot_path = save_folder + f"/neb_correction_diagnostic_{gal_type}.png"
     plot_neb_correction_diagnostic(
         halpha_ew,
-        corrections["delta_neb_g"],
-        corrections["delta_neb_r"],
+        corrections["delta_neb_g_ONLY_CONT"],
+        corrections["delta_neb_r_ONLY_CONT"],
         save_path=diag_plot_path,
         gal_type=gal_type,
     )
 
     zred_mask = samp_i_cat["Z"].data < 0.5
 
+    # New default mass: continuum-only chain.  This drives keep_mask and
+    # is stored as LOGM_M24_FIDU_CORR / LOGM_M24_FIDU_CORR_ERR.
     logm_corr = -99.0 * np.ones(len(samp_i_cat))
     logm_corr_err = np.nan * np.ones(len(samp_i_cat))
     mstars_new, mstars_new_err = get_stellar_mass_mia(
@@ -209,42 +256,68 @@ def run_nebular_correction_int_v2(
     logm_corr[zred_mask] = mstars_new
     logm_corr_err[zred_mask] = mstars_new_err
 
-    # Diagnostic mass using ONLY_CONT corrected mags. We pass the exact same
-    # mag_g_err/mag_r_err as the default chain (they come from cat["MAG_G_ERR"]
-    # / cat["MAG_R_ERR"] and do not depend on smooth_continuum), so the per-object
-    # error array would be identical to LOGM_M24_FIDU_CORR_ERR; we do not store it.
-    logm_corr_ONLY_CONT = -99.0 * np.ones(len(samp_i_cat))
-    mstars_only_cont, _ = get_stellar_mass_mia(
-        gr_final_ONLY_CONT[zred_mask],
-        mag_g_final_ONLY_CONT[zred_mask],
+    # Diagnostic mass using continuum + smooth_continuum (the previous default).
+    # mag_g_err / mag_r_err are identical to the new default chain (they come
+    # from cat["MAG_*_ERR"] and do not depend on smooth_continuum), so the
+    # per-object err would only differ via the (g-r) term entering
+    # get_stellar_mass_mia; we do not store it (single LOGM_M24_FIDU_CORR_ERR
+    # column matches the new default mass).
+    logm_corr_w_smooth = -99.0 * np.ones(len(samp_i_cat))
+    mstars_w_smooth, _ = get_stellar_mass_mia(
+        gr_final_w_smooth[zred_mask],
+        mag_g_final_w_smooth[zred_mask],
         zred=np.zeros(np.sum(zred_mask)),
         d_in_mpc=samp_i_cat["DIST_MPC_FIDU"][zred_mask].data,
         input_zred=False,
         mag_g_err=mag_g_err_final[zred_mask],
         mag_r_err=mag_r_err_final[zred_mask],
     )
-    logm_corr_ONLY_CONT[zred_mask] = mstars_only_cont
+    logm_corr_w_smooth[zred_mask] = mstars_w_smooth
 
     logm_old = samp_i_cat["LOGM_M24_FIDU"].data
     valid_old = logm_old > 0
     valid_new = logm_corr > 0
-    valid_oc = logm_corr_ONLY_CONT > 0
+    valid_w_smooth = logm_corr_w_smooth > 0
 
-    n_old_pass = np.sum(logm_old[valid_old] < 9.25)
-    n_new_pass = np.sum(logm_corr[valid_new] < 9.25)
-    n_only_cont_pass = np.sum(logm_corr_ONLY_CONT[valid_oc] < 9.25)
-    print(f"{gal_type}: Objects with log(M*) < 9.25 using OLD photometry: {n_old_pass}")
-    print(
-        f"{gal_type}: Objects with log(M*) < 9.25 using NEW (fully corrected) photometry: {n_new_pass}"
-    )
-    print(f"{gal_type}: Additional objects removed by corrected stellar mass: {n_old_pass - n_new_pass}")
-    print(
-        f"{gal_type}: [ONLY_CONT] Objects with log(M*) < 9.25 using ONLY_CONT (no smooth_continuum) photometry: "
-        f"{n_only_cont_pass} (vs NEW = {n_new_pass}, diff = {n_only_cont_pass - n_new_pass}); "
-        f"keep_mask still uses NEW mass."
-    )
+    n_old_pass = int(np.sum(logm_old[valid_old] < 9.25))
+    n_new_pass = int(np.sum(logm_corr[valid_new] < 9.25))
+    n_w_smooth_pass = int(np.sum(logm_corr_w_smooth[valid_w_smooth] < 9.25))
 
-    keep_mask = (logm_corr < 9.25) & (logm_corr > 0)
+    # Per-object boolean masks at full sample length so we can compare
+    # set membership of the new (continuum-only) cut against the old
+    # (W_SMOOTH = continuum + smooth_continuum) cut.
+    new_keep_full = (logm_corr < 9.25) & (logm_corr > 0)
+    w_smooth_keep_full = (logm_corr_w_smooth < 9.25) & (logm_corr_w_smooth > 0)
+    n_added = int(np.sum(new_keep_full & ~w_smooth_keep_full))
+    n_removed = int(np.sum(w_smooth_keep_full & ~new_keep_full))
+    n_common = int(np.sum(new_keep_full & w_smooth_keep_full))
+    n_net = n_added - n_removed
+
+    print(f"{gal_type}: Objects with log(M*) < 9.25 using OLD photometry (LOGM_M24_FIDU): {n_old_pass}")
+    print(
+        f"{gal_type}: Objects with log(M*) < 9.25 using NEW default (continuum-only) photometry: {n_new_pass}"
+    )
+    print(
+        f"{gal_type}: [W_SMOOTH] Objects with log(M*) < 9.25 using continuum + smooth_continuum photometry: "
+        f"{n_w_smooth_pass} (diff vs new default = {n_w_smooth_pass - n_new_pass})"
+    )
+    print(
+        f"{gal_type}: NEW default vs previous (W_SMOOTH) keep_mask: "
+        f"common = {n_common}, newly added (in NEW, not in W_SMOOTH) = {n_added}, "
+        f"removed (in W_SMOOTH, not in NEW) = {n_removed}"
+    )
+    print(
+        f"{gal_type}: Net change in catalog size vs W_SMOOTH cut: {n_net:+d} "
+        f"(added {n_added}, removed {n_removed})"
+    )
+    if n_added > 0:
+        added_tids = samp_i_cat["TARGETID"].data[new_keep_full & ~w_smooth_keep_full]
+        print(
+            f"{gal_type}: Example TARGETIDs newly included by NEW default cut "
+            f"(up to 10): {list(added_tids[:10])}"
+        )
+
+    keep_mask = new_keep_full
     n_before = len(samp_i_cat)
     samp_i_cat_cut = samp_i_cat[keep_mask]
 
@@ -253,58 +326,80 @@ def run_nebular_correction_int_v2(
         f"N after = {len(samp_i_cat_cut)}, removed = {n_before - len(samp_i_cat_cut)}"
     )
 
-    samp_i_cat_cut["DELTA_MAG_G_BASS2DECAM"] = corrections["delta_bass2decam_g"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_R_BASS2DECAM"] = corrections["delta_bass2decam_r"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_G_BASS2DECAM_ONLY_CONT"] = corrections["delta_bass2decam_g_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_R_BASS2DECAM_ONLY_CONT"] = corrections["delta_bass2decam_r_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_G_NEB"] = corrections["delta_neb_g"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_R_NEB"] = corrections["delta_neb_r"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_G_NEB_ONLY_CONT"] = corrections["delta_neb_g_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_R_NEB_ONLY_CONT"] = corrections["delta_neb_r_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_G_NEB_ERR"] = corrections["delta_neb_g_err"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_R_NEB_ERR"] = corrections["delta_neb_r_err"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_G_DECAM2SDSS"] = corrections["delta_decam2sdss_g"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_R_DECAM2SDSS"] = corrections["delta_decam2sdss_r"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_G_DECAM2SDSS_ONLY_CONT"] = corrections["delta_decam2sdss_g_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_R_DECAM2SDSS_ONLY_CONT"] = corrections["delta_decam2sdss_r_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_G_KCORR"] = corrections["delta_kcorr_g"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_R_KCORR"] = corrections["delta_kcorr_r"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_G_KCORR_ONLY_CONT"] = corrections["delta_kcorr_g_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_R_KCORR_ONLY_CONT"] = corrections["delta_kcorr_r_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["MAG_G_SDSS_Z0"] = mag_g_final[keep_mask]
-    samp_i_cat_cut["MAG_R_SDSS_Z0"] = mag_r_final[keep_mask]
-    samp_i_cat_cut["MAG_G_SDSS_Z0_ONLY_CONT"] = mag_g_final_ONLY_CONT[keep_mask]
-    samp_i_cat_cut["MAG_R_SDSS_Z0_ONLY_CONT"] = mag_r_final_ONLY_CONT[keep_mask]
-    samp_i_cat_cut["MAG_G_SDSS_Z0_ERR"] = mag_g_err_final[keep_mask]
-    samp_i_cat_cut["MAG_R_SDSS_Z0_ERR"] = mag_r_err_final[keep_mask]
+    # ------------------------------------------------------------------
+    # Column writes after the chain swap.
+    #   Unsuffixed columns       -> continuum-only chain (NEW DEFAULT;
+    #                               formerly *_ONLY_CONT in apply_photometric_corrections).
+    #   Columns with _W_SMOOTH   -> continuum + smooth_continuum chain
+    #                               (formerly the unsuffixed default).
+    # *_ERR columns are single-copy (independent of the chain choice; see comments above).
+    # ------------------------------------------------------------------
+    samp_i_cat_cut["DELTA_MAG_G_BASS2DECAM"]          = corrections["delta_bass2decam_g_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_R_BASS2DECAM"]          = corrections["delta_bass2decam_r_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_G_BASS2DECAM_W_SMOOTH"] = corrections["delta_bass2decam_g"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_R_BASS2DECAM_W_SMOOTH"] = corrections["delta_bass2decam_r"][keep_mask]
 
-    samp_i_cat_cut["LOGM_M24_FIDU_CORR"] = logm_corr[keep_mask]
-    samp_i_cat_cut["LOGM_M24_FIDU_CORR_ERR"] = logm_corr_err[keep_mask]
-    samp_i_cat_cut["LOGM_M24_FIDU_CORR_ONLY_CONT"] = logm_corr_ONLY_CONT[keep_mask]
+    samp_i_cat_cut["DELTA_MAG_G_NEB"]          = corrections["delta_neb_g_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_R_NEB"]          = corrections["delta_neb_r_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_G_NEB_W_SMOOTH"] = corrections["delta_neb_g"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_R_NEB_W_SMOOTH"] = corrections["delta_neb_r"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_G_NEB_ERR"]      = corrections["delta_neb_g_err"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_R_NEB_ERR"]      = corrections["delta_neb_r_err"][keep_mask]
 
-    samp_i_cat_cut["HALPHA_EW"] = halpha_ew[keep_mask]
+    samp_i_cat_cut["DELTA_MAG_G_DECAM2SDSS"]          = corrections["delta_decam2sdss_g_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_R_DECAM2SDSS"]          = corrections["delta_decam2sdss_r_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_G_DECAM2SDSS_W_SMOOTH"] = corrections["delta_decam2sdss_g"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_R_DECAM2SDSS_W_SMOOTH"] = corrections["delta_decam2sdss_r"][keep_mask]
+
+    samp_i_cat_cut["DELTA_MAG_G_KCORR"]          = corrections["delta_kcorr_g_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_R_KCORR"]          = corrections["delta_kcorr_r_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_G_KCORR_W_SMOOTH"] = corrections["delta_kcorr_g"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_R_KCORR_W_SMOOTH"] = corrections["delta_kcorr_r"][keep_mask]
+
+    samp_i_cat_cut["MAG_G_SDSS_Z0"]          = mag_g_final[keep_mask]
+    samp_i_cat_cut["MAG_R_SDSS_Z0"]          = mag_r_final[keep_mask]
+    samp_i_cat_cut["MAG_G_SDSS_Z0_W_SMOOTH"] = mag_g_final_w_smooth[keep_mask]
+    samp_i_cat_cut["MAG_R_SDSS_Z0_W_SMOOTH"] = mag_r_final_w_smooth[keep_mask]
+    samp_i_cat_cut["MAG_G_SDSS_Z0_ERR"]      = mag_g_err_final[keep_mask]
+    samp_i_cat_cut["MAG_R_SDSS_Z0_ERR"]      = mag_r_err_final[keep_mask]
+
+    samp_i_cat_cut["LOGM_M24_FIDU_CORR"]          = logm_corr[keep_mask]
+    samp_i_cat_cut["LOGM_M24_FIDU_CORR_ERR"]      = logm_corr_err[keep_mask]
+    samp_i_cat_cut["LOGM_M24_FIDU_CORR_W_SMOOTH"] = logm_corr_w_smooth[keep_mask]
+
+    samp_i_cat_cut["HALPHA_EW"]      = halpha_ew[keep_mask]
     samp_i_cat_cut["HALPHA_EW_IVAR"] = halpha_ew_ivar[keep_mask]
+    samp_i_cat_cut["KCORR01_SDSS_G"] = kcorr01_sdss_g[keep_mask]
+    samp_i_cat_cut["KCORR01_SDSS_R"] = kcorr01_sdss_r[keep_mask]
 
-    samp_i_cat_cut["MAG_G_DECAM_MODEL_NOEMI"] = result_samp_i["g_model_no_emi"][keep_mask]
-    samp_i_cat_cut["MAG_R_DECAM_MODEL_NOEMI"] = result_samp_i["r_model_no_emi"][keep_mask]
-    samp_i_cat_cut["MAG_G_DECAM_MODEL_NOEMI_ONLY_CONT"] = result_samp_i["g_model_no_emi_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["MAG_R_DECAM_MODEL_NOEMI_ONLY_CONT"] = result_samp_i["r_model_no_emi_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["MAG_G_DECAM_MODEL_WEMI"] = result_samp_i["g_model_w_emi"][keep_mask]
-    samp_i_cat_cut["MAG_R_DECAM_MODEL_WEMI"] = result_samp_i["r_model_w_emi"][keep_mask]
-    samp_i_cat_cut["MAG_G_DECAM_MODEL_WEMI_ONLY_CONT"] = result_samp_i["g_model_w_emi_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["MAG_R_DECAM_MODEL_WEMI_ONLY_CONT"] = result_samp_i["r_model_w_emi_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["MAG_G_BASS_MODEL_WEMI"] = result_samp_i["g_bass_w_emi"][keep_mask]
-    samp_i_cat_cut["MAG_R_BASS_MODEL_WEMI"] = result_samp_i["r_bass_w_emi"][keep_mask]
-    samp_i_cat_cut["MAG_G_BASS_MODEL_WEMI_ONLY_CONT"] = result_samp_i["g_bass_w_emi_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["MAG_R_BASS_MODEL_WEMI_ONLY_CONT"] = result_samp_i["r_bass_w_emi_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["MAG_G_SDSS_MODEL_NOEMI"] = result_samp_i["g_sdss_no_emi"][keep_mask]
-    samp_i_cat_cut["MAG_R_SDSS_MODEL_NOEMI"] = result_samp_i["r_sdss_no_emi"][keep_mask]
-    samp_i_cat_cut["MAG_G_SDSS_MODEL_NOEMI_ONLY_CONT"] = result_samp_i["g_sdss_no_emi_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["MAG_R_SDSS_MODEL_NOEMI_ONLY_CONT"] = result_samp_i["r_sdss_no_emi_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["MAG_G_SDSS_Z0_MODEL_NOEMI"] = result_samp_i["g_sdss_z0_no_emi"][keep_mask]
-    samp_i_cat_cut["MAG_R_SDSS_Z0_MODEL_NOEMI"] = result_samp_i["r_sdss_z0_no_emi"][keep_mask]
-    samp_i_cat_cut["MAG_G_SDSS_Z0_MODEL_NOEMI_ONLY_CONT"] = result_samp_i["g_sdss_z0_no_emi_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["MAG_R_SDSS_Z0_MODEL_NOEMI_ONLY_CONT"] = result_samp_i["r_sdss_z0_no_emi_ONLY_CONT"][keep_mask]
+    # Model magnitudes: unsuffixed = continuum only; _W_SMOOTH = continuum + smooth.
+    # The model_photometry_diffs cache keeps its existing column names
+    # (g_model_no_emi = with smooth, g_model_no_emi_ONLY_CONT = continuum only),
+    # so we map ONLY_CONT -> default and (no suffix in cache) -> _W_SMOOTH here.
+    samp_i_cat_cut["MAG_G_DECAM_MODEL_NOEMI"]          = result_samp_i["g_model_no_emi_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["MAG_R_DECAM_MODEL_NOEMI"]          = result_samp_i["r_model_no_emi_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["MAG_G_DECAM_MODEL_NOEMI_W_SMOOTH"] = result_samp_i["g_model_no_emi"][keep_mask]
+    samp_i_cat_cut["MAG_R_DECAM_MODEL_NOEMI_W_SMOOTH"] = result_samp_i["r_model_no_emi"][keep_mask]
+
+    samp_i_cat_cut["MAG_G_DECAM_MODEL_WEMI"]          = result_samp_i["g_model_w_emi_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["MAG_R_DECAM_MODEL_WEMI"]          = result_samp_i["r_model_w_emi_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["MAG_G_DECAM_MODEL_WEMI_W_SMOOTH"] = result_samp_i["g_model_w_emi"][keep_mask]
+    samp_i_cat_cut["MAG_R_DECAM_MODEL_WEMI_W_SMOOTH"] = result_samp_i["r_model_w_emi"][keep_mask]
+
+    samp_i_cat_cut["MAG_G_BASS_MODEL_WEMI"]          = result_samp_i["g_bass_w_emi_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["MAG_R_BASS_MODEL_WEMI"]          = result_samp_i["r_bass_w_emi_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["MAG_G_BASS_MODEL_WEMI_W_SMOOTH"] = result_samp_i["g_bass_w_emi"][keep_mask]
+    samp_i_cat_cut["MAG_R_BASS_MODEL_WEMI_W_SMOOTH"] = result_samp_i["r_bass_w_emi"][keep_mask]
+
+    samp_i_cat_cut["MAG_G_SDSS_MODEL_NOEMI"]          = result_samp_i["g_sdss_no_emi_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["MAG_R_SDSS_MODEL_NOEMI"]          = result_samp_i["r_sdss_no_emi_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["MAG_G_SDSS_MODEL_NOEMI_W_SMOOTH"] = result_samp_i["g_sdss_no_emi"][keep_mask]
+    samp_i_cat_cut["MAG_R_SDSS_MODEL_NOEMI_W_SMOOTH"] = result_samp_i["r_sdss_no_emi"][keep_mask]
+
+    samp_i_cat_cut["MAG_G_SDSS_Z0_MODEL_NOEMI"]          = result_samp_i["g_sdss_z0_no_emi_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["MAG_R_SDSS_Z0_MODEL_NOEMI"]          = result_samp_i["r_sdss_z0_no_emi_ONLY_CONT"][keep_mask]
+    samp_i_cat_cut["MAG_G_SDSS_Z0_MODEL_NOEMI_W_SMOOTH"] = result_samp_i["g_sdss_z0_no_emi"][keep_mask]
+    samp_i_cat_cut["MAG_R_SDSS_Z0_MODEL_NOEMI_W_SMOOTH"] = result_samp_i["r_sdss_z0_no_emi"][keep_mask]
 
     if compute_kcorr_z01_validation:
         samp_i_cat_cut["MAG_G_SDSS_MODEL_WEMI_NOSMOOTH"]     = result_samp_i["g_sdss_w_emi_no_smooth"][keep_mask]
@@ -312,6 +407,7 @@ def run_nebular_correction_int_v2(
         samp_i_cat_cut["MAG_G_SDSS_Z01_MODEL_WEMI_NOSMOOTH"] = result_samp_i["g_sdss_z01_w_emi_no_smooth"][keep_mask]
         samp_i_cat_cut["MAG_R_SDSS_Z01_MODEL_WEMI_NOSMOOTH"] = result_samp_i["r_sdss_z01_w_emi_no_smooth"][keep_mask]
 
+    # Mg summary uses the new default MAG_G_SDSS_Z0 (continuum-only chain).
     d_in_pc = np.asarray(samp_i_cat_cut["DIST_MPC_FIDU"].data, dtype=float) * 1e6
     valid_mg = (d_in_pc > 0) & np.isfinite(d_in_pc) & np.isfinite(
         samp_i_cat_cut["MAG_G_SDSS_Z0"].data
@@ -1709,7 +1805,7 @@ if __name__ == '__main__':
     if run_neb_correction:
         overwrite_neb = True
         # gal_types_neb = gal_types + ["OTHER"]
-        gal_types_neb = ["BGS_BRIGHT","BGS_FAINT","ELG"]
+        gal_types_neb = ["BGS_BRIGHT","BGS_FAINT","ELG", "LOWZ"]
         
         for gal_type in gal_types_neb:
             save_filename = save_filenames[gal_type]
@@ -1719,6 +1815,7 @@ if __name__ == '__main__':
                 gal_type,
                 ncore_neb=ncore_neb,
                 overwrite=overwrite_neb,
+                compute_kcorr_z01_validation=True,
             )
 
         #TODO: add a function to fastspec where we can easily make a diagnostic plot of comparing smooth version of observed spectra and best fit template!

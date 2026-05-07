@@ -292,6 +292,7 @@ def _process_single_file(args):
     model_data = iron_vac["MODELS"].data
 
     fastspec_data = iron_vac["FASTSPEC"].data
+    specphot_data = iron_vac["SPECPHOT"].data
     tgids_file = fastspec_data["TARGETID"]
     tgid_to_fits_row = {t: i for i, t in enumerate(tgids_file)}
 
@@ -314,10 +315,14 @@ def _process_single_file(args):
     valid_redshifts = redshifts_for_file[valid_local_indices]
     n_valid = len(valid_cat)
 
+    # SPECPHOT and FASTSPEC HDUs are aligned row-by-row in the iron VAC,
+    # so we use the same valid_fits_rows index into both.
     result = {
         "cat_indices":   valid_cat,
         "halpha_ew":      np.array(fastspec_data["HALPHA_EW"][valid_fits_rows], dtype=float),
         "halpha_ew_ivar": np.array(fastspec_data["HALPHA_EW_IVAR"][valid_fits_rows], dtype=float),
+        "kcorr01_sdss_g": np.array(specphot_data["KCORR01_SDSS_G"][valid_fits_rows], dtype=float),
+        "kcorr01_sdss_r": np.array(specphot_data["KCORR01_SDSS_R"][valid_fits_rows], dtype=float),
     }
 
     continuum = model_data[valid_fits_rows, 0, :]
@@ -592,6 +597,10 @@ def compute_photometry_catalog(catalog,
     halpha_ew      = np.full(n_objects, np.nan)
     halpha_ew_ivar = np.full(n_objects, np.nan)
 
+    # FastSpecFit SPECPHOT-derived k-corrections (band-shifted to z=0.1).
+    kcorr01_sdss_g = np.full(n_objects, np.nan)
+    kcorr01_sdss_r = np.full(n_objects, np.nan)
+
     if compute_data_photometry:
         g_data_no_emi = np.full(n_objects, np.nan)
         r_data_no_emi = np.full(n_objects, np.nan)
@@ -660,6 +669,8 @@ def compute_photometry_catalog(catalog,
 
                 halpha_ew[idx]      = file_result["halpha_ew"]
                 halpha_ew_ivar[idx] = file_result["halpha_ew_ivar"]
+                kcorr01_sdss_g[idx] = file_result["kcorr01_sdss_g"]
+                kcorr01_sdss_r[idx] = file_result["kcorr01_sdss_r"]
 
                 if verbose and files_done % 50 == 0:
                     print(f"  Processed {files_done}/{n_files} files")
@@ -688,6 +699,7 @@ def compute_photometry_catalog(catalog,
                 model_data = iron_vac["MODELS"].data
                 
                 fastspec_data = iron_vac["FASTSPEC"].data
+                specphot_data = iron_vac["SPECPHOT"].data
                 tgids_file = fastspec_data["TARGETID"]
                 tgid_to_fits_row = {t: i for i, t in enumerate(tgids_file)}
 
@@ -709,6 +721,9 @@ def compute_photometry_catalog(catalog,
                 
                 halpha_ew[valid_cat]      = fastspec_data["HALPHA_EW"][valid_fits_rows]
                 halpha_ew_ivar[valid_cat] = fastspec_data["HALPHA_EW_IVAR"][valid_fits_rows]
+                # SPECPHOT and FASTSPEC are aligned row-by-row in the iron VAC.
+                kcorr01_sdss_g[valid_cat] = specphot_data["KCORR01_SDSS_G"][valid_fits_rows]
+                kcorr01_sdss_r[valid_cat] = specphot_data["KCORR01_SDSS_R"][valid_fits_rows]
 
                 continuum = model_data[valid_fits_rows, 0, :]
                 smooth_continuum = model_data[valid_fits_rows, 1, :]
@@ -863,7 +878,9 @@ def compute_photometry_catalog(catalog,
         "g_sdss_z0_no_emi_ONLY_CONT": g_sdss_z0_no_emi_ONLY_CONT,
         "r_sdss_z0_no_emi_ONLY_CONT": r_sdss_z0_no_emi_ONLY_CONT,
         "HALPHA_EW":                   halpha_ew,
-        "HALPHA_EW_IVAR":             halpha_ew_ivar
+        "HALPHA_EW_IVAR":             halpha_ew_ivar,
+        "KCORR01_SDSS_G":             kcorr01_sdss_g,
+        "KCORR01_SDSS_R":             kcorr01_sdss_r,
     }
     
     if compute_data_photometry:
@@ -1024,8 +1041,8 @@ def apply_photometric_corrections(cat, model_phot_table):
         is_south (1=DECam, 0=BASS).
     model_phot_table : astropy Table
         Output of compute_photometry_catalog, with columns for DECam/BASS/SDSS
-        model photometry (default and ``*_ONLY_CONT`` variants) and
-        HALPHA_EW / HALPHA_EW_IVAR.
+        model photometry (default and ``*_ONLY_CONT`` variants), HALPHA_EW /
+        HALPHA_EW_IVAR, and the SPECPHOT-derived KCORR01_SDSS_G / KCORR01_SDSS_R.
 
     Returns
     -------
@@ -1038,6 +1055,7 @@ def apply_photometric_corrections(cat, model_phot_table):
         - mag_g_sdss_z0_err, mag_r_sdss_z0_err
         - <same set with ``_ONLY_CONT`` suffix, except no _err keys>
         - halpha_ew, halpha_ew_ivar
+        - kcorr01_sdss_g, kcorr01_sdss_r  (passthrough from FASTSPEC SPECPHOT)
     """
     n = len(cat)
     is_south = np.asarray(cat["is_south"].data, dtype=int)
@@ -1045,6 +1063,8 @@ def apply_photometric_corrections(cat, model_phot_table):
 
     halpha_ew = np.asarray(model_phot_table["HALPHA_EW"].data, dtype=float)
     halpha_ew_ivar = np.asarray(model_phot_table["HALPHA_EW_IVAR"].data, dtype=float)
+    kcorr01_sdss_g = np.asarray(model_phot_table["KCORR01_SDSS_G"].data, dtype=float)
+    kcorr01_sdss_r = np.asarray(model_phot_table["KCORR01_SDSS_R"].data, dtype=float)
 
     mag_g_in = np.array(cat["MAG_G"].data, dtype=float)
     mag_r_in = np.array(cat["MAG_R"].data, dtype=float)
@@ -1124,6 +1144,8 @@ def apply_photometric_corrections(cat, model_phot_table):
         "mag_r_sdss_z0_err": mag_r_sdss_z0_err,
         "halpha_ew": halpha_ew,
         "halpha_ew_ivar": halpha_ew_ivar,
+        "kcorr01_sdss_g": kcorr01_sdss_g,
+        "kcorr01_sdss_r": kcorr01_sdss_r,
     }
 
     for k in (
