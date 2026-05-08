@@ -292,7 +292,10 @@ def _process_single_file(args):
     model_data = iron_vac["MODELS"].data
 
     fastspec_data = iron_vac["FASTSPEC"].data
-    specphot_data = iron_vac["SPECPHOT"].data
+    specphot_data = iron_vac["SPECPHOT"].data 
+
+    print("TODO: NEED TO FIX THIS! SPECPHOT IS NOT VALID FOR V2.1?")
+    
     tgids_file = fastspec_data["TARGETID"]
     tgid_to_fits_row = {t: i for i, t in enumerate(tgids_file)}
 
