@@ -447,10 +447,9 @@ def _process_single_file(args):
     }
 
     continuum = model_data[valid_fits_rows, 0, :]
-    smooth_continuum = model_data[valid_fits_rows, 1, :]
     emission  = model_data[valid_fits_rows, 2, :]
 
-    # -- DECam photometry for both model variants (existing) --
+    # -- DECam photometry for both model variants --
     g_no_emi = np.full(n_valid, np.nan)
     r_no_emi = np.full(n_valid, np.nan)
     g_w_emi  = np.full(n_valid, np.nan)
@@ -460,89 +459,44 @@ def _process_single_file(args):
     g_bass_w_emi = np.full(n_valid, np.nan)
     r_bass_w_emi = np.full(n_valid, np.nan)
 
-    #we will have decam continuum only photmetry, and so will be applying sdss conversion to that!
-    
     # -- SDSS photometry on continuum only (for DECam->SDSS conversion) --
     g_sdss_no_emi = np.full(n_valid, np.nan)
     r_sdss_no_emi = np.full(n_valid, np.nan)
 
-    # -- SDSS z=0 photometry on continuum only (for k-correction) --
+    # -- SDSS z=0 photometry on continuum only (for MODEL_EXT k-correction
+    #    diagnostic; the chain itself uses the SED-based k-correction) --
     g_sdss_z0_no_emi = np.full(n_valid, np.nan)
     r_sdss_z0_no_emi = np.full(n_valid, np.nan)
 
-    # -- ONLY_CONT diagnostic: same set of photometry, but flux variants
-    #    drop the smooth_continuum component so we can later test its effect.
-    g_no_emi_only_cont = np.full(n_valid, np.nan)
-    r_no_emi_only_cont = np.full(n_valid, np.nan)
-    g_w_emi_only_cont  = np.full(n_valid, np.nan)
-    r_w_emi_only_cont  = np.full(n_valid, np.nan)
-    g_bass_w_emi_only_cont = np.full(n_valid, np.nan)
-    r_bass_w_emi_only_cont = np.full(n_valid, np.nan)
-    g_sdss_no_emi_only_cont = np.full(n_valid, np.nan)
-    r_sdss_no_emi_only_cont = np.full(n_valid, np.nan)
-    g_sdss_z0_no_emi_only_cont = np.full(n_valid, np.nan)
-    r_sdss_z0_no_emi_only_cont = np.full(n_valid, np.nan)
-
     # --- Continuum + emission: measure DECam and BASS ---
-    flux_w_emi = continuum + smooth_continuum + emission
+    flux_w_emi = continuum + emission
     for start in range(0, n_valid, batch_size):
         end = min(start + batch_size, n_valid)
-     
+
         phot = measure_photo_batch(wavelength, flux_w_emi[start:end],
                                    measure_bass=True)
-        g_w_emi[start:end] = phot['g_decam']
-        r_w_emi[start:end] = phot['r_decam']
+        g_w_emi[start:end]      = phot['g_decam']
+        r_w_emi[start:end]      = phot['r_decam']
         g_bass_w_emi[start:end] = phot['g_bass']
         r_bass_w_emi[start:end] = phot['r_bass']
- 
 
     # --- Continuum only: measure DECam, SDSS, and SDSS at z=0 ---
-    flux_cont_only = continuum + smooth_continuum
+    flux_no_emi = continuum
     for start in range(0, n_valid, batch_size):
         end = min(start + batch_size, n_valid)
-        
+
         phot = measure_photo_batch(
-            wavelength, flux_cont_only[start:end],
+            wavelength, flux_no_emi[start:end],
             zred=valid_redshifts[start:end],
             measure_sdss=True,
             measure_sdss_z0=True,
         )
-        g_no_emi[start:end] = phot['g_decam']
-        r_no_emi[start:end] = phot['r_decam']
-        g_sdss_no_emi[start:end] = phot['g_sdss']
-        r_sdss_no_emi[start:end] = phot['r_sdss']
+        g_no_emi[start:end]         = phot['g_decam']
+        r_no_emi[start:end]         = phot['r_decam']
+        g_sdss_no_emi[start:end]    = phot['g_sdss']
+        r_sdss_no_emi[start:end]    = phot['r_sdss']
         g_sdss_z0_no_emi[start:end] = phot['g_sdss_z0']
         r_sdss_z0_no_emi[start:end] = phot['r_sdss_z0']
-
-    # --- ONLY_CONT: continuum + emission (no smooth) -> DECam and BASS ---
-    flux_w_emi_only_cont = continuum + emission
-    for start in range(0, n_valid, batch_size):
-        end = min(start + batch_size, n_valid)
-
-        phot = measure_photo_batch(wavelength, flux_w_emi_only_cont[start:end],
-                                   measure_bass=True)
-        g_w_emi_only_cont[start:end]      = phot['g_decam']
-        r_w_emi_only_cont[start:end]      = phot['r_decam']
-        g_bass_w_emi_only_cont[start:end] = phot['g_bass']
-        r_bass_w_emi_only_cont[start:end] = phot['r_bass']
-
-    # --- ONLY_CONT: continuum only (no smooth) -> DECam, SDSS, SDSS@z=0 ---
-    flux_no_emi_only_cont = continuum
-    for start in range(0, n_valid, batch_size):
-        end = min(start + batch_size, n_valid)
-
-        phot = measure_photo_batch(
-            wavelength, flux_no_emi_only_cont[start:end],
-            zred=valid_redshifts[start:end],
-            measure_sdss=True,
-            measure_sdss_z0=True,
-        )
-        g_no_emi_only_cont[start:end]       = phot['g_decam']
-        r_no_emi_only_cont[start:end]       = phot['r_decam']
-        g_sdss_no_emi_only_cont[start:end]  = phot['g_sdss']
-        r_sdss_no_emi_only_cont[start:end]  = phot['r_sdss']
-        g_sdss_z0_no_emi_only_cont[start:end] = phot['g_sdss_z0']
-        r_sdss_z0_no_emi_only_cont[start:end] = phot['r_sdss_z0']
 
     # --- SED-based k-correction photometry (one batched speclite call per
     #     frame): build per-object full-wavelength stellar continuum SEDs
@@ -559,27 +513,16 @@ def _process_single_file(args):
         )
     )
 
-    result["g_model_no_emi"] = g_no_emi
-    result["r_model_no_emi"] = r_no_emi
-    result["g_model_w_emi"]  = g_w_emi
-    result["r_model_w_emi"]  = r_w_emi
-    result["g_bass_w_emi"]   = g_bass_w_emi
-    result["r_bass_w_emi"]   = r_bass_w_emi
-    result["g_sdss_no_emi"]  = g_sdss_no_emi
-    result["r_sdss_no_emi"]  = r_sdss_no_emi
+    result["g_model_no_emi"]   = g_no_emi
+    result["r_model_no_emi"]   = r_no_emi
+    result["g_model_w_emi"]    = g_w_emi
+    result["r_model_w_emi"]    = r_w_emi
+    result["g_bass_w_emi"]     = g_bass_w_emi
+    result["r_bass_w_emi"]     = r_bass_w_emi
+    result["g_sdss_no_emi"]    = g_sdss_no_emi
+    result["r_sdss_no_emi"]    = r_sdss_no_emi
     result["g_sdss_z0_no_emi"] = g_sdss_z0_no_emi
     result["r_sdss_z0_no_emi"] = r_sdss_z0_no_emi
-
-    result["g_model_no_emi_ONLY_CONT"] = g_no_emi_only_cont
-    result["r_model_no_emi_ONLY_CONT"] = r_no_emi_only_cont
-    result["g_model_w_emi_ONLY_CONT"]  = g_w_emi_only_cont
-    result["r_model_w_emi_ONLY_CONT"]  = r_w_emi_only_cont
-    result["g_bass_w_emi_ONLY_CONT"]   = g_bass_w_emi_only_cont
-    result["r_bass_w_emi_ONLY_CONT"]   = r_bass_w_emi_only_cont
-    result["g_sdss_no_emi_ONLY_CONT"]  = g_sdss_no_emi_only_cont
-    result["r_sdss_no_emi_ONLY_CONT"]  = r_sdss_no_emi_only_cont
-    result["g_sdss_z0_no_emi_ONLY_CONT"] = g_sdss_z0_no_emi_only_cont
-    result["r_sdss_z0_no_emi_ONLY_CONT"] = r_sdss_z0_no_emi_only_cont
 
     result["g_sdss_obs_SED"] = g_sdss_obs_SED
     result["r_sdss_obs_SED"] = r_sdss_obs_SED
@@ -678,22 +621,10 @@ def compute_photometry_catalog(catalog,
     g_sdss_no_emi = np.full(n_objects, np.nan)
     r_sdss_no_emi = np.full(n_objects, np.nan)
 
-    # SDSS at z=0 on continuum only (for k-correction)
+    # SDSS at z=0 on continuum only (for the MODEL_EXT k-correction
+    # diagnostic; the chain itself uses the SED-based k-correction below).
     g_sdss_z0_no_emi = np.full(n_objects, np.nan)
     r_sdss_z0_no_emi = np.full(n_objects, np.nan)
-
-    # ONLY_CONT diagnostic: same five photometry pairs but the model flux
-    # variants drop the smooth_continuum component.
-    g_model_no_emi_ONLY_CONT = np.full(n_objects, np.nan)
-    r_model_no_emi_ONLY_CONT = np.full(n_objects, np.nan)
-    g_model_w_emi_ONLY_CONT  = np.full(n_objects, np.nan)
-    r_model_w_emi_ONLY_CONT  = np.full(n_objects, np.nan)
-    g_bass_w_emi_ONLY_CONT   = np.full(n_objects, np.nan)
-    r_bass_w_emi_ONLY_CONT   = np.full(n_objects, np.nan)
-    g_sdss_no_emi_ONLY_CONT  = np.full(n_objects, np.nan)
-    r_sdss_no_emi_ONLY_CONT  = np.full(n_objects, np.nan)
-    g_sdss_z0_no_emi_ONLY_CONT = np.full(n_objects, np.nan)
-    r_sdss_z0_no_emi_ONLY_CONT = np.full(n_objects, np.nan)
 
     # SED-based k-correction photometry (full-wavelength stellar continuum
     # SED from build_stellar_continuum, integrated through SDSS g/r at
@@ -749,21 +680,10 @@ def compute_photometry_catalog(catalog,
                 r_model_w_emi[idx]  = file_result["r_model_w_emi"]
                 g_bass_w_emi[idx]   = file_result["g_bass_w_emi"]
                 r_bass_w_emi[idx]   = file_result["r_bass_w_emi"]
-                g_sdss_no_emi[idx]  = file_result["g_sdss_no_emi"]
-                r_sdss_no_emi[idx]  = file_result["r_sdss_no_emi"]
+                g_sdss_no_emi[idx]    = file_result["g_sdss_no_emi"]
+                r_sdss_no_emi[idx]    = file_result["r_sdss_no_emi"]
                 g_sdss_z0_no_emi[idx] = file_result["g_sdss_z0_no_emi"]
                 r_sdss_z0_no_emi[idx] = file_result["r_sdss_z0_no_emi"]
-
-                g_model_no_emi_ONLY_CONT[idx] = file_result["g_model_no_emi_ONLY_CONT"]
-                r_model_no_emi_ONLY_CONT[idx] = file_result["r_model_no_emi_ONLY_CONT"]
-                g_model_w_emi_ONLY_CONT[idx]  = file_result["g_model_w_emi_ONLY_CONT"]
-                r_model_w_emi_ONLY_CONT[idx]  = file_result["r_model_w_emi_ONLY_CONT"]
-                g_bass_w_emi_ONLY_CONT[idx]   = file_result["g_bass_w_emi_ONLY_CONT"]
-                r_bass_w_emi_ONLY_CONT[idx]   = file_result["r_bass_w_emi_ONLY_CONT"]
-                g_sdss_no_emi_ONLY_CONT[idx]  = file_result["g_sdss_no_emi_ONLY_CONT"]
-                r_sdss_no_emi_ONLY_CONT[idx]  = file_result["r_sdss_no_emi_ONLY_CONT"]
-                g_sdss_z0_no_emi_ONLY_CONT[idx] = file_result["g_sdss_z0_no_emi_ONLY_CONT"]
-                r_sdss_z0_no_emi_ONLY_CONT[idx] = file_result["r_sdss_z0_no_emi_ONLY_CONT"]
 
                 g_sdss_obs_SED[idx] = file_result["g_sdss_obs_SED"]
                 r_sdss_obs_SED[idx] = file_result["r_sdss_obs_SED"]
@@ -825,32 +745,31 @@ def compute_photometry_catalog(catalog,
                 halpha_ew_ivar[valid_cat] = fastspec_data["HALPHA_EW_IVAR"][valid_fits_rows]
 
                 continuum = model_data[valid_fits_rows, 0, :]
-                smooth_continuum = model_data[valid_fits_rows, 1, :]
                 emission  = model_data[valid_fits_rows, 2, :]
                 valid_zred = redshifts[valid_cat]
 
                 # --- Continuum + emission: DECam and BASS ---
-                flux_w_emi = continuum + smooth_continuum + emission
+                flux_w_emi = continuum + emission
                 for start in range(0, len(valid_cat), batch_size):
                     end = min(start + batch_size, len(valid_cat))
                     try:
                         phot = measure_photo_batch(wavelength, flux_w_emi[start:end],
                                                    measure_bass=True)
-                        g_model_w_emi[valid_cat[start:end]]  = phot['g_decam']
-                        r_model_w_emi[valid_cat[start:end]]  = phot['r_decam']
-                        g_bass_w_emi[valid_cat[start:end]]   = phot['g_bass']
-                        r_bass_w_emi[valid_cat[start:end]]   = phot['r_bass']
+                        g_model_w_emi[valid_cat[start:end]] = phot['g_decam']
+                        r_model_w_emi[valid_cat[start:end]] = phot['r_decam']
+                        g_bass_w_emi[valid_cat[start:end]]  = phot['g_bass']
+                        r_bass_w_emi[valid_cat[start:end]]  = phot['r_bass']
                     except Exception as e:
                         if verbose:
                             print(f"  Photometry error (w_emi, batch {start}-{end}): {e}")
 
                 # --- Continuum only: DECam, SDSS, and SDSS at z=0 ---
-                flux_only_cont = continuum + smooth_continuum
+                flux_no_emi = continuum
                 for start in range(0, len(valid_cat), batch_size):
                     end = min(start + batch_size, len(valid_cat))
                     try:
                         phot = measure_photo_batch(
-                            wavelength, flux_only_cont[start:end],
+                            wavelength, flux_no_emi[start:end],
                             zred=valid_zred[start:end],
                             measure_sdss=True,
                             measure_sdss_z0=True,
@@ -864,42 +783,6 @@ def compute_photometry_catalog(catalog,
                     except Exception as e:
                         if verbose:
                             print(f"  Photometry error (no_emi, batch {start}-{end}): {e}")
-
-                # --- ONLY_CONT: continuum + emission (no smooth) -> DECam and BASS ---
-                flux_w_emi_only_cont = continuum + emission
-                for start in range(0, len(valid_cat), batch_size):
-                    end = min(start + batch_size, len(valid_cat))
-                    try:
-                        phot = measure_photo_batch(wavelength, flux_w_emi_only_cont[start:end],
-                                                   measure_bass=True)
-                        g_model_w_emi_ONLY_CONT[valid_cat[start:end]] = phot['g_decam']
-                        r_model_w_emi_ONLY_CONT[valid_cat[start:end]] = phot['r_decam']
-                        g_bass_w_emi_ONLY_CONT[valid_cat[start:end]]  = phot['g_bass']
-                        r_bass_w_emi_ONLY_CONT[valid_cat[start:end]]  = phot['r_bass']
-                    except Exception as e:
-                        if verbose:
-                            print(f"  Photometry error (w_emi ONLY_CONT, batch {start}-{end}): {e}")
-
-                # --- ONLY_CONT: continuum only (no smooth) -> DECam, SDSS, SDSS@z=0 ---
-                flux_no_emi_only_cont = continuum
-                for start in range(0, len(valid_cat), batch_size):
-                    end = min(start + batch_size, len(valid_cat))
-                    try:
-                        phot = measure_photo_batch(
-                            wavelength, flux_no_emi_only_cont[start:end],
-                            zred=valid_zred[start:end],
-                            measure_sdss=True,
-                            measure_sdss_z0=True,
-                        )
-                        g_model_no_emi_ONLY_CONT[valid_cat[start:end]]   = phot['g_decam']
-                        r_model_no_emi_ONLY_CONT[valid_cat[start:end]]   = phot['r_decam']
-                        g_sdss_no_emi_ONLY_CONT[valid_cat[start:end]]    = phot['g_sdss']
-                        r_sdss_no_emi_ONLY_CONT[valid_cat[start:end]]    = phot['r_sdss']
-                        g_sdss_z0_no_emi_ONLY_CONT[valid_cat[start:end]] = phot['g_sdss_z0']
-                        r_sdss_z0_no_emi_ONLY_CONT[valid_cat[start:end]] = phot['r_sdss_z0']
-                    except Exception as e:
-                        if verbose:
-                            print(f"  Photometry error (no_emi ONLY_CONT, batch {start}-{end}): {e}")
 
                 # --- SED-based k-correction photometry (one batched
                 #     speclite call per frame for the whole file): build
@@ -958,33 +841,23 @@ def compute_photometry_catalog(catalog,
 
     # ---- Build output table ----
     columns = {
-        "TARGETID":                    targetids,
-        "g_model_no_emi":             g_model_no_emi,
-        "r_model_no_emi":             r_model_no_emi,
-        "g_model_w_emi":              g_model_w_emi,
-        "r_model_w_emi":              r_model_w_emi,
-        "g_bass_w_emi":               g_bass_w_emi,
-        "r_bass_w_emi":               r_bass_w_emi,
-        "g_sdss_no_emi":              g_sdss_no_emi,
-        "r_sdss_no_emi":              r_sdss_no_emi,
-        "g_sdss_z0_no_emi":           g_sdss_z0_no_emi,
-        "r_sdss_z0_no_emi":           r_sdss_z0_no_emi,
-        "g_model_no_emi_ONLY_CONT":   g_model_no_emi_ONLY_CONT,
-        "r_model_no_emi_ONLY_CONT":   r_model_no_emi_ONLY_CONT,
-        "g_model_w_emi_ONLY_CONT":    g_model_w_emi_ONLY_CONT,
-        "r_model_w_emi_ONLY_CONT":    r_model_w_emi_ONLY_CONT,
-        "g_bass_w_emi_ONLY_CONT":     g_bass_w_emi_ONLY_CONT,
-        "r_bass_w_emi_ONLY_CONT":     r_bass_w_emi_ONLY_CONT,
-        "g_sdss_no_emi_ONLY_CONT":    g_sdss_no_emi_ONLY_CONT,
-        "r_sdss_no_emi_ONLY_CONT":    r_sdss_no_emi_ONLY_CONT,
-        "g_sdss_z0_no_emi_ONLY_CONT": g_sdss_z0_no_emi_ONLY_CONT,
-        "r_sdss_z0_no_emi_ONLY_CONT": r_sdss_z0_no_emi_ONLY_CONT,
-        "g_sdss_obs_SED":             g_sdss_obs_SED,
-        "r_sdss_obs_SED":             r_sdss_obs_SED,
-        "g_sdss_z0_SED":              g_sdss_z0_SED,
-        "r_sdss_z0_SED":              r_sdss_z0_SED,
-        "HALPHA_EW":                   halpha_ew,
-        "HALPHA_EW_IVAR":             halpha_ew_ivar,
+        "TARGETID":         targetids,
+        "g_model_no_emi":   g_model_no_emi,
+        "r_model_no_emi":   r_model_no_emi,
+        "g_model_w_emi":    g_model_w_emi,
+        "r_model_w_emi":    r_model_w_emi,
+        "g_bass_w_emi":     g_bass_w_emi,
+        "r_bass_w_emi":     r_bass_w_emi,
+        "g_sdss_no_emi":    g_sdss_no_emi,
+        "r_sdss_no_emi":    r_sdss_no_emi,
+        "g_sdss_z0_no_emi": g_sdss_z0_no_emi,
+        "r_sdss_z0_no_emi": r_sdss_z0_no_emi,
+        "g_sdss_obs_SED":   g_sdss_obs_SED,
+        "r_sdss_obs_SED":   r_sdss_obs_SED,
+        "g_sdss_z0_SED":    g_sdss_z0_SED,
+        "r_sdss_z0_SED":    r_sdss_z0_SED,
+        "HALPHA_EW":        halpha_ew,
+        "HALPHA_EW_IVAR":   halpha_ew_ivar,
     }
     
     if compute_data_photometry:
@@ -1022,13 +895,8 @@ def _run_correction_chain(
     g_bass_w_emi,   r_bass_w_emi,
     g_sdss_no_emi,  r_sdss_no_emi,
     g_kcorr_delta, r_kcorr_delta,
-    label="",
 ):
     """Run the four-step photometric correction chain on one set of model magnitudes.
-
-    Used by :func:`apply_photometric_corrections` to produce both the default
-    (continuum + smooth_continuum) and the ONLY_CONT (continuum-only) chains
-    from the same arithmetic, so the two cannot drift.
 
     Parameters
     ----------
@@ -1038,13 +906,12 @@ def _run_correction_chain(
     north_mask : 1D bool array
         True where Step 1 (BASS -> DECam) must be applied.
     g_model_*, r_model_*, g_bass_*, r_bass_*, g_sdss_*, r_sdss_* : 1D arrays
-        Model photometry (one of the two flavors).
+        Model photometry on the continuum-only model variants
+        (``flux_no_emi = continuum``, ``flux_w_emi = continuum + emission``).
     g_kcorr_delta, r_kcorr_delta : 1D arrays
-        SED-based k-correction deltas, ``g/r_sdss_z0_SED - g/r_sdss_obs_SED``.
-        Already computed from the per-object full-wavelength stellar
-        continuum SED, so the same deltas are passed to both chain calls.
-    label : str
-        Tag prepended to the diagnostic prints (e.g. ``""`` or ``"[ONLY_CONT] "``).
+        SED-based k-correction deltas, ``g/r_sdss_z0_SED - g/r_sdss_obs_SED``,
+        already computed from the per-object full-wavelength stellar
+        continuum SED.
 
     Returns
     -------
@@ -1072,9 +939,9 @@ def _run_correction_chain(
 
     n_neb_applied = int(np.sum(np.isfinite(delta_neb_g_raw)))
     n_neb_nan = n - n_neb_applied
-    print(f"  {label}Nebular correction: {n_neb_applied} objects corrected (direct model delta), "
+    print(f"  Nebular correction: {n_neb_applied} objects corrected (direct model delta), "
           f"{n_neb_nan} with NaN model photometry (delta=0)")
-    print(f"  {label}Median delta_mag_g = {np.nanmedian(delta_neb_g):.4f}, "
+    print(f"  Median delta_mag_g = {np.nanmedian(delta_neb_g):.4f}, "
           f"Median delta_mag_r = {np.nanmedian(delta_neb_r):.4f}")
 
     mag_g_working += delta_neb_g
@@ -1096,7 +963,7 @@ def _run_correction_chain(
         ("g", delta_bass2decam_g, delta_neb_g, delta_decam2sdss_g, delta_kcorr_g),
         ("r", delta_bass2decam_r, delta_neb_r, delta_decam2sdss_r, delta_kcorr_r),
     ]:
-        print(f"  {label}{band}-band median deltas: "
+        print(f"  {band}-band median deltas: "
               f"bass2decam={np.nanmedian(d_b2d):.4f}, "
               f"neb={np.nanmedian(d_neb):.4f}, "
               f"decam2sdss={np.nanmedian(d_d2s):.4f}, "
@@ -1123,21 +990,20 @@ def apply_photometric_corrections(cat, model_phot_table):
     continuum-only apparent magnitudes suitable for stellar mass estimation.
 
     Correction steps (applied in this order):
-        1. BASS -> DECam  (only where is_south=0; measured on w_emi model)
-        2. Nebular emission removal in DECam (always applied from model
-           template difference: continuum+smooth vs continuum+smooth+emission)
-        3. DECam -> SDSS  (measured on continuum-only model)
+        1. BASS -> DECam  (only where is_south=0; measured on the
+           continuum + emission model)
+        2. Nebular emission removal in DECam (model template difference:
+           continuum vs continuum + emission)
+        3. DECam -> SDSS  (measured on the continuum-only model)
         4. k-correction: SDSS z_obs -> SDSS z=0 (measured on the per-object
            full-wavelength stellar continuum SED from
-           ``ContinuumTools.build_stellar_continuum``; the same SED-based
-           delta is used in both the default and ONLY_CONT chains)
+           ``ContinuumTools.build_stellar_continuum``)
 
-    The same chain is run a second time on the ONLY_CONT model variants (where
-    smooth_continuum is dropped from the flux) and returned alongside under
-    keys with the ``_ONLY_CONT`` suffix. Error columns are not duplicated:
-    in the current pipeline none of the deltas carry uncertainty (delta_neb_*_err
-    is hard-coded to zero, and the other deltas add no error contribution), so
-    ``mag_g_sdss_z0_err`` is identical between the two chains by construction.
+    The MODELS-extension band-shift k-correction
+    ``g/r_sdss_z0_no_emi - g/r_sdss_no_emi`` is also returned as a diagnostic
+    (``delta_kcorr_g/r_model_ext``), for offline comparison against the
+    SED-based k-correction that drives the chain. It is *not* applied to the
+    magnitudes.
 
     Parameters
     ----------
@@ -1145,23 +1011,18 @@ def apply_photometric_corrections(cat, model_phot_table):
         Galaxy catalog with columns MAG_G, MAG_R, MAG_G_ERR, MAG_R_ERR,
         is_south (1=DECam, 0=BASS).
     model_phot_table : astropy Table
-        Output of compute_photometry_catalog, with columns for DECam/BASS/SDSS
-        model photometry (default and ``*_ONLY_CONT`` variants), the SED-based
-        k-correction columns ``g/r_sdss_obs_SED`` and ``g/r_sdss_z0_SED``, and
-        ``HALPHA_EW`` / ``HALPHA_EW_IVAR``.
+        Output of compute_photometry_catalog: continuum-only model photometry
+        columns, the SED-based k-correction columns ``g/r_sdss_obs_SED`` and
+        ``g/r_sdss_z0_SED``, and ``HALPHA_EW`` / ``HALPHA_EW_IVAR``.
 
     Returns
     -------
     corrections : dict
-        Keys include all intermediate deltas and final corrected magnitudes
-        for both chains:
         - delta_bass2decam_g/r, delta_neb_g/r, delta_neb_g/r_err,
-          delta_decam2sdss_g/r, delta_kcorr_g/r (SED-based)
+          delta_decam2sdss_g/r, delta_kcorr_g/r (SED-based, drives the chain),
+          delta_kcorr_g/r_model_ext (MODELS band-shift, diagnostic only)
         - mag_g_sdss_z0, mag_r_sdss_z0  (final corrected apparent mags)
         - mag_g_sdss_z0_err, mag_r_sdss_z0_err
-        - <same set with ``_ONLY_CONT`` suffix, except no _err keys>;
-          delta_kcorr_g/r_ONLY_CONT equals delta_kcorr_g/r by construction
-          since both chains share the same SED-based k-correction.
         - halpha_ew, halpha_ew_ivar
     """
     n = len(cat)
@@ -1179,6 +1040,20 @@ def apply_photometric_corrections(cat, model_phot_table):
     delta_kcorr_g_SED = g_sdss_z0_SED - g_sdss_obs_SED
     delta_kcorr_r_SED = r_sdss_z0_SED - r_sdss_obs_SED
 
+    # MODEL_EXT diagnostic k-correction: band-shift the FastSpecFit
+    # MODELS-extension continuum array through SDSS g/r at observed and rest
+    # frames. Same physics as the SED-based k-correction, different input
+    # spectrum (per-pixel MODELS continuum vs full-wavelength SED). Not used
+    # in the chain.
+    delta_kcorr_g_model_ext = (
+        np.asarray(model_phot_table["g_sdss_z0_no_emi"].data, dtype=float)
+        - np.asarray(model_phot_table["g_sdss_no_emi"].data, dtype=float)
+    )
+    delta_kcorr_r_model_ext = (
+        np.asarray(model_phot_table["r_sdss_z0_no_emi"].data, dtype=float)
+        - np.asarray(model_phot_table["r_sdss_no_emi"].data, dtype=float)
+    )
+
     mag_g_in = np.array(cat["MAG_G"].data, dtype=float)
     mag_r_in = np.array(cat["MAG_R"].data, dtype=float)
 
@@ -1186,10 +1061,7 @@ def apply_photometric_corrections(cat, model_phot_table):
     n_south = int(np.sum(~north_mask))
     print(f"  Photometric corrections applied: {n_south} south (DECam), {n_north} north (BASS->DECam)")
 
-    # ------------------------------------------------------------------
-    # Default chain: continuum + smooth_continuum (+ emission for w_emi)
-    # ------------------------------------------------------------------
-    chain_default = _run_correction_chain(
+    chain = _run_correction_chain(
         mag_g_in, mag_r_in, north_mask,
         g_model_no_emi=model_phot_table["g_model_no_emi"].data,
         r_model_no_emi=model_phot_table["r_model_no_emi"].data,
@@ -1201,33 +1073,11 @@ def apply_photometric_corrections(cat, model_phot_table):
         r_sdss_no_emi=model_phot_table["r_sdss_no_emi"].data,
         g_kcorr_delta=delta_kcorr_g_SED,
         r_kcorr_delta=delta_kcorr_r_SED,
-        label="",
     )
 
-    # ------------------------------------------------------------------
-    # ONLY_CONT chain: continuum (+ emission for w_emi), no smooth_continuum
-    # Same arithmetic, only the model photometry inputs differ. The
-    # k-correction is the same SED-based delta as in the default chain.
-    # ------------------------------------------------------------------
-    chain_only_cont = _run_correction_chain(
-        mag_g_in, mag_r_in, north_mask,
-        g_model_no_emi=model_phot_table["g_model_no_emi_ONLY_CONT"].data,
-        r_model_no_emi=model_phot_table["r_model_no_emi_ONLY_CONT"].data,
-        g_model_w_emi=model_phot_table["g_model_w_emi_ONLY_CONT"].data,
-        r_model_w_emi=model_phot_table["r_model_w_emi_ONLY_CONT"].data,
-        g_bass_w_emi=model_phot_table["g_bass_w_emi_ONLY_CONT"].data,
-        r_bass_w_emi=model_phot_table["r_bass_w_emi_ONLY_CONT"].data,
-        g_sdss_no_emi=model_phot_table["g_sdss_no_emi_ONLY_CONT"].data,
-        r_sdss_no_emi=model_phot_table["r_sdss_no_emi_ONLY_CONT"].data,
-        g_kcorr_delta=delta_kcorr_g_SED,
-        r_kcorr_delta=delta_kcorr_r_SED,
-        label="[ONLY_CONT] ",
-    )
-
-    # ------------------------------------------------------------------
-    # Error propagation (default chain only; ONLY_CONT errors are identical
-    # because all deltas have zero error contribution in the current pipeline).
-    # ------------------------------------------------------------------
+    # No delta in the chain currently carries an uncertainty contribution;
+    # delta_neb_*_err is hard-coded to zero and the rest of the deltas add
+    # no error, so mag_*_sdss_z0_err = MAG_*_ERR.
     delta_neb_g_err = np.zeros(n)
     delta_neb_r_err = np.zeros(n)
 
@@ -1242,32 +1092,25 @@ def apply_photometric_corrections(cat, model_phot_table):
     mag_r_sdss_z0_err = np.sqrt(mag_r_err_base**2 + delta_neb_r_err**2)
 
     out = {
-        "delta_bass2decam_g": chain_default["delta_bass2decam_g"],
-        "delta_bass2decam_r": chain_default["delta_bass2decam_r"],
-        "delta_neb_g": chain_default["delta_neb_g"],
-        "delta_neb_r": chain_default["delta_neb_r"],
+        "delta_bass2decam_g": chain["delta_bass2decam_g"],
+        "delta_bass2decam_r": chain["delta_bass2decam_r"],
+        "delta_neb_g": chain["delta_neb_g"],
+        "delta_neb_r": chain["delta_neb_r"],
         "delta_neb_g_err": delta_neb_g_err,
         "delta_neb_r_err": delta_neb_r_err,
-        "delta_decam2sdss_g": chain_default["delta_decam2sdss_g"],
-        "delta_decam2sdss_r": chain_default["delta_decam2sdss_r"],
-        "delta_kcorr_g": chain_default["delta_kcorr_g"],
-        "delta_kcorr_r": chain_default["delta_kcorr_r"],
-        "mag_g_sdss_z0": chain_default["mag_g_sdss_z0"],
-        "mag_r_sdss_z0": chain_default["mag_r_sdss_z0"],
+        "delta_decam2sdss_g": chain["delta_decam2sdss_g"],
+        "delta_decam2sdss_r": chain["delta_decam2sdss_r"],
+        "delta_kcorr_g": chain["delta_kcorr_g"],
+        "delta_kcorr_r": chain["delta_kcorr_r"],
+        "delta_kcorr_g_model_ext": delta_kcorr_g_model_ext,
+        "delta_kcorr_r_model_ext": delta_kcorr_r_model_ext,
+        "mag_g_sdss_z0": chain["mag_g_sdss_z0"],
+        "mag_r_sdss_z0": chain["mag_r_sdss_z0"],
         "mag_g_sdss_z0_err": mag_g_sdss_z0_err,
         "mag_r_sdss_z0_err": mag_r_sdss_z0_err,
         "halpha_ew": halpha_ew,
         "halpha_ew_ivar": halpha_ew_ivar,
     }
-
-    for k in (
-        "delta_bass2decam_g", "delta_bass2decam_r",
-        "delta_neb_g", "delta_neb_r",
-        "delta_decam2sdss_g", "delta_decam2sdss_r",
-        "delta_kcorr_g", "delta_kcorr_r",
-        "mag_g_sdss_z0", "mag_r_sdss_z0",
-    ):
-        out[k + "_ONLY_CONT"] = chain_only_cont[k]
 
     return out
 

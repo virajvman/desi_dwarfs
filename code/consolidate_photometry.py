@@ -2112,6 +2112,11 @@ def add_model_photometry_to_fastspec(
     print("Adding fastspec model photometry columns to SPEC_DERIVED HDU")
     print("=" * 60)
 
+    # Cache columns sourced from compute_photometry_catalog now describe the
+    # continuum-only model variants (smooth_continuum is no longer added in
+    # the photometry pipeline). The MAG_*_SDSS_MODEL_NOEMI / *_SDSS_Z0_MODEL_NOEMI
+    # values written here therefore use the continuum-only model template,
+    # matching the run_nebular_correction_int_v2 chain semantics.
     _COL_MAP = {
         "g_model_no_emi":   "MAG_G_DECAM_MODEL_NOEMI",
         "r_model_no_emi":   "MAG_R_DECAM_MODEL_NOEMI",

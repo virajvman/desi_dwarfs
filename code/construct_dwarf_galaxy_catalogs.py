@@ -77,37 +77,43 @@ def run_nebular_correction_int_v2(
     Used for BGS/LOWZ/ELG/OTHER intermediate catalogs. ``gal_type`` labels cache and
     diagnostic outputs (e.g. ``model_photometry_diffs_{gal_type}.fits``).
 
+    Pipeline
+    --------
+    The single correction chain operates on the continuum-only FastSpecFit
+    model variants (``flux_no_emi = continuum``, ``flux_w_emi = continuum +
+    emission``; ``smooth_continuum`` is not used). Steps:
+
+        1. BASS -> DECam (north only; from continuum + emission)
+        2. Nebular emission removal in DECam (continuum vs continuum + emission)
+        3. DECam -> SDSS (continuum-only model)
+        4. k-correction: SDSS observed -> SDSS z=0, using the per-object
+           full-wavelength stellar continuum SED from
+           ``ContinuumTools.build_stellar_continuum`` (the SED-based
+           k-correction stored as ``DELTA_MAG_{G,R}_KCORR``).
+
+    A second, MODELS-extension band-shift k-correction is computed as a
+    diagnostic (``DELTA_MAG_{G,R}_KCORR_MODEL_EXT`` =
+    ``g/r_sdss_z0_no_emi - g/r_sdss_no_emi``). It uses the same physics as
+    the SED-based k-correction but a different input spectrum (the per-pixel
+    FastSpecFit MODELS continuum array on the DESI spectroscopic wavelength
+    grid). It is *not* applied to the magnitudes.
+
     Column-naming convention in the output NEBCORR table
     ----------------------------------------------------
-    The default chain (and ``LOGM_M24_FIDU_CORR`` / ``keep_mask``) is now the
-    **continuum-only** model (no ``smooth_continuum``).  All chain-specific
-    columns therefore mean continuum-only when they have no suffix:
+    All chain-specific columns are continuum-only with the SED-based
+    k-correction:
 
-        ``DELTA_MAG_{G,R}_BASS2DECAM``, ``..._NEB``, ``..._DECAM2SDSS``, ``..._KCORR``
-        ``MAG_{G,R}_SDSS_Z0``
+        ``DELTA_MAG_{G,R}_BASS2DECAM``, ``..._NEB``, ``..._NEB_ERR``,
+        ``..._DECAM2SDSS``, ``..._KCORR``
+        ``MAG_{G,R}_SDSS_Z0``, ``MAG_{G,R}_SDSS_Z0_ERR``
         ``MAG_{G,R}_DECAM_MODEL_NOEMI``, ``..._WEMI``
         ``MAG_{G,R}_BASS_MODEL_WEMI``
         ``MAG_{G,R}_SDSS_MODEL_NOEMI``, ``MAG_{G,R}_SDSS_Z0_MODEL_NOEMI``
-        ``LOGM_M24_FIDU_CORR``
+        ``LOGM_M24_FIDU_CORR``, ``LOGM_M24_FIDU_CORR_ERR``
 
-    The previous default (continuum + ``smooth_continuum``) is retained as a
-    diagnostic with the ``_W_SMOOTH`` suffix on all of the above columns
-    (e.g. ``DELTA_MAG_G_NEB_W_SMOOTH``, ``LOGM_M24_FIDU_CORR_W_SMOOTH``).
-    The ``_ONLY_CONT`` suffix used by previous versions of this catalog is gone.
+    Plus the diagnostic MODELS-extension k-correction:
 
-    ``*_ERR`` columns are single-copy (no ``_W_SMOOTH`` sibling): the per-object
-    g/r magnitude errors come from ``cat["MAG_*_ERR"]`` and do not depend on
-    smooth_continuum, and ``LOGM_M24_FIDU_CORR_ERR`` is computed from the new
-    default continuum-only chain.
-
-    The k-correction step (SDSS observed frame -> z=0) uses the per-object
-    full-wavelength stellar continuum SED from
-    ``ContinuumTools.build_stellar_continuum``, integrated through SDSS g/r
-    at observed and rest frames. The resulting ``g/r_sdss_obs_SED`` and
-    ``g/r_sdss_z0_SED`` columns are produced by ``compute_photometry_catalog``
-    and feed ``DELTA_MAG_{G,R}_KCORR``. Because both chain variants now share
-    the same SED-based k-correction, the legacy ``DELTA_MAG_{G,R}_KCORR_W_SMOOTH``
-    diagnostic is no longer emitted.
+        ``DELTA_MAG_{G,R}_KCORR_MODEL_EXT``
 
     Parameters
     ----------
@@ -121,9 +127,10 @@ def run_nebular_correction_int_v2(
     ncore_neb : int
         Parallel workers for ``compute_photometry_catalog``.
     overwrite : bool
-        If False, reuse ``model_photometry_diffs_{gal_type}.fits`` when TARGETIDs match
-        and the cache contains both the ``*_ONLY_CONT`` and ``g/r_sdss_z0_SED``
-        columns.  Otherwise the cache is recomputed.
+        If False, reuse ``model_photometry_diffs_{gal_type}.fits`` when
+        TARGETIDs match, the cache has the SED k-correction columns, and the
+        cache does not still carry legacy ``*_ONLY_CONT`` columns. Otherwise
+        the cache is recomputed.
     """
     from fastspec_funcs import (
         compute_photometry_catalog,
@@ -161,19 +168,23 @@ def run_nebular_correction_int_v2(
         cat_tids = set(samp_i_cat["TARGETID"].data)
         res_tids = set(result_samp_i["TARGETID"].data)
         cat_tids_match = (cat_tids == res_tids)
-        has_only_cont = "g_model_no_emi_ONLY_CONT" in result_samp_i.colnames
         has_sed_kcorr = (
             "g_sdss_z0_SED" in result_samp_i.colnames
             and "r_sdss_z0_SED" in result_samp_i.colnames
         )
-        if (not cat_tids_match) or (not has_only_cont) or (not has_sed_kcorr):
+        # Old-schema caches (continuum + smooth_continuum chain) carry
+        # *_ONLY_CONT columns; their presence forces a recompute.
+        has_legacy_only_cont = any(
+            c.endswith("_ONLY_CONT") for c in result_samp_i.colnames
+        )
+        if (not cat_tids_match) or (not has_sed_kcorr) or has_legacy_only_cont:
             reason = []
             if not cat_tids_match:
                 reason.append("TARGETIDs mismatch")
-            if not has_only_cont:
-                reason.append("missing ONLY_CONT columns")
             if not has_sed_kcorr:
                 reason.append("missing g/r_sdss_z0_SED columns")
+            if has_legacy_only_cont:
+                reason.append("legacy *_ONLY_CONT columns present")
             print(f"WARNING: cached result stale ({', '.join(reason)}). Recomputing...")
             result_samp_i = compute_photometry_catalog(
                 samp_i_cat,
@@ -199,40 +210,29 @@ def run_nebular_correction_int_v2(
     print(f"{gal_type}: Applying full photometric correction chain...")
     corrections = apply_photometric_corrections(samp_i_cat, result_samp_i)
 
-    # ------------------------------------------------------------------
-    # Default chain is now the continuum-only chain (formerly *_ONLY_CONT
-    # in apply_photometric_corrections).  The previous default (continuum +
-    # smooth_continuum) is retained as a *_W_SMOOTH diagnostic.  The
-    # apply_photometric_corrections dict still uses the old key names, so we
-    # explicitly map ONLY_CONT -> default and (no suffix) -> w_smooth here.
-    # ------------------------------------------------------------------
-    mag_g_final = corrections["mag_g_sdss_z0_ONLY_CONT"]
-    mag_r_final = corrections["mag_r_sdss_z0_ONLY_CONT"]
+    # The chain is continuum-only with the SED-based k-correction. The
+    # MODELS-extension band-shift k-correction is carried as a diagnostic
+    # only (see DELTA_MAG_{G,R}_KCORR_MODEL_EXT below).
+    mag_g_final = corrections["mag_g_sdss_z0"]
+    mag_r_final = corrections["mag_r_sdss_z0"]
     mag_g_err_final = corrections["mag_g_sdss_z0_err"]
     mag_r_err_final = corrections["mag_r_sdss_z0_err"]
     gr_final = mag_g_final - mag_r_final
 
-    mag_g_final_w_smooth = corrections["mag_g_sdss_z0"]
-    mag_r_final_w_smooth = corrections["mag_r_sdss_z0"]
-    gr_final_w_smooth = mag_g_final_w_smooth - mag_r_final_w_smooth
-
     halpha_ew = corrections["halpha_ew"]
     halpha_ew_ivar = corrections["halpha_ew_ivar"]
 
-    # Diagnostic plot uses the continuum-only nebular delta (the new default).
     diag_plot_path = save_folder + f"/neb_correction_diagnostic_{gal_type}.png"
     plot_neb_correction_diagnostic(
         halpha_ew,
-        corrections["delta_neb_g_ONLY_CONT"],
-        corrections["delta_neb_r_ONLY_CONT"],
+        corrections["delta_neb_g"],
+        corrections["delta_neb_r"],
         save_path=diag_plot_path,
         gal_type=gal_type,
     )
 
     zred_mask = samp_i_cat["Z"].data < 0.5
 
-    # New default mass: continuum-only chain.  This drives keep_mask and
-    # is stored as LOGM_M24_FIDU_CORR / LOGM_M24_FIDU_CORR_ERR.
     logm_corr = -99.0 * np.ones(len(samp_i_cat))
     logm_corr_err = np.nan * np.ones(len(samp_i_cat))
     mstars_new, mstars_new_err = get_stellar_mass_mia(
@@ -247,66 +247,41 @@ def run_nebular_correction_int_v2(
     logm_corr[zred_mask] = mstars_new
     logm_corr_err[zred_mask] = mstars_new_err
 
-    # Diagnostic mass using continuum + smooth_continuum (the previous default).
-    # mag_g_err / mag_r_err are identical to the new default chain (they come
-    # from cat["MAG_*_ERR"] and do not depend on smooth_continuum), so the
-    # per-object err would only differ via the (g-r) term entering
-    # get_stellar_mass_mia; we do not store it (single LOGM_M24_FIDU_CORR_ERR
-    # column matches the new default mass).
-    logm_corr_w_smooth = -99.0 * np.ones(len(samp_i_cat))
-    mstars_w_smooth, _ = get_stellar_mass_mia(
-        gr_final_w_smooth[zred_mask],
-        mag_g_final_w_smooth[zred_mask],
-        zred=np.zeros(np.sum(zred_mask)),
-        d_in_mpc=samp_i_cat["DIST_MPC_FIDU"][zred_mask].data,
-        input_zred=False,
-        mag_g_err=mag_g_err_final[zred_mask],
-        mag_r_err=mag_r_err_final[zred_mask],
-    )
-    logm_corr_w_smooth[zred_mask] = mstars_w_smooth
-
     logm_old = samp_i_cat["LOGM_M24_FIDU"].data
     valid_old = logm_old > 0
     valid_new = logm_corr > 0
-    valid_w_smooth = logm_corr_w_smooth > 0
 
     n_old_pass = int(np.sum(logm_old[valid_old] < 9.25))
     n_new_pass = int(np.sum(logm_corr[valid_new] < 9.25))
-    n_w_smooth_pass = int(np.sum(logm_corr_w_smooth[valid_w_smooth] < 9.25))
 
-    # Per-object boolean masks at full sample length so we can compare
-    # set membership of the new (continuum-only) cut against the old
-    # (W_SMOOTH = continuum + smooth_continuum) cut.
     new_keep_full = (logm_corr < 9.25) & (logm_corr > 0)
-    w_smooth_keep_full = (logm_corr_w_smooth < 9.25) & (logm_corr_w_smooth > 0)
-    n_added = int(np.sum(new_keep_full & ~w_smooth_keep_full))
-    n_removed = int(np.sum(w_smooth_keep_full & ~new_keep_full))
-    n_common = int(np.sum(new_keep_full & w_smooth_keep_full))
-    n_net = n_added - n_removed
 
     print(f"{gal_type}: Objects with log(M*) < 9.25 using OLD photometry (LOGM_M24_FIDU): {n_old_pass}")
     print(
-        f"{gal_type}: Objects with log(M*) < 9.25 using NEW default (continuum-only) photometry: {n_new_pass}"
+        f"{gal_type}: Objects with log(M*) < 9.25 using corrected photometry "
+        f"(continuum-only chain, SED k-correction): {n_new_pass}"
+    )
+
+    # Compare SED-based k-correction (drives the chain) against the
+    # MODELS-extension band-shift k-correction (diagnostic only).
+    delta_kcorr_g_sed       = np.asarray(corrections["delta_kcorr_g"], dtype=float)
+    delta_kcorr_r_sed       = np.asarray(corrections["delta_kcorr_r"], dtype=float)
+    delta_kcorr_g_model_ext = np.asarray(corrections["delta_kcorr_g_model_ext"], dtype=float)
+    delta_kcorr_r_model_ext = np.asarray(corrections["delta_kcorr_r_model_ext"], dtype=float)
+    print(
+        f"{gal_type}: Median DELTA_MAG_G_KCORR (SED) = "
+        f"{np.nanmedian(delta_kcorr_g_sed):.4f}, "
+        f"median DELTA_MAG_G_KCORR_MODEL_EXT (MODELS continuum) = "
+        f"{np.nanmedian(delta_kcorr_g_model_ext):.4f}, "
+        f"diff = {np.nanmedian(delta_kcorr_g_sed - delta_kcorr_g_model_ext):.4f}"
     )
     print(
-        f"{gal_type}: [W_SMOOTH] Objects with log(M*) < 9.25 using continuum + smooth_continuum photometry: "
-        f"{n_w_smooth_pass} (diff vs new default = {n_w_smooth_pass - n_new_pass})"
+        f"{gal_type}: Median DELTA_MAG_R_KCORR (SED) = "
+        f"{np.nanmedian(delta_kcorr_r_sed):.4f}, "
+        f"median DELTA_MAG_R_KCORR_MODEL_EXT (MODELS continuum) = "
+        f"{np.nanmedian(delta_kcorr_r_model_ext):.4f}, "
+        f"diff = {np.nanmedian(delta_kcorr_r_sed - delta_kcorr_r_model_ext):.4f}"
     )
-    print(
-        f"{gal_type}: NEW default vs previous (W_SMOOTH) keep_mask: "
-        f"common = {n_common}, newly added (in NEW, not in W_SMOOTH) = {n_added}, "
-        f"removed (in W_SMOOTH, not in NEW) = {n_removed}"
-    )
-    print(
-        f"{gal_type}: Net change in catalog size vs W_SMOOTH cut: {n_net:+d} "
-        f"(added {n_added}, removed {n_removed})"
-    )
-    if n_added > 0:
-        added_tids = samp_i_cat["TARGETID"].data[new_keep_full & ~w_smooth_keep_full]
-        print(
-            f"{gal_type}: Example TARGETIDs newly included by NEW default cut "
-            f"(up to 10): {list(added_tids[:10])}"
-        )
 
     keep_mask = new_keep_full
     n_before = len(samp_i_cat)
@@ -318,77 +293,56 @@ def run_nebular_correction_int_v2(
     )
 
     # ------------------------------------------------------------------
-    # Column writes after the chain swap.
-    #   Unsuffixed columns       -> continuum-only chain (NEW DEFAULT;
-    #                               formerly *_ONLY_CONT in apply_photometric_corrections).
-    #   Columns with _W_SMOOTH   -> continuum + smooth_continuum chain
-    #                               (formerly the unsuffixed default).
-    # *_ERR columns are single-copy (independent of the chain choice; see comments above).
+    # Column writes. All columns describe the continuum-only chain with
+    # the SED-based k-correction, except DELTA_MAG_{G,R}_KCORR_MODEL_EXT
+    # which is the diagnostic MODELS-extension band-shift k-correction.
     # ------------------------------------------------------------------
-    samp_i_cat_cut["DELTA_MAG_G_BASS2DECAM"]          = corrections["delta_bass2decam_g_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_R_BASS2DECAM"]          = corrections["delta_bass2decam_r_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_G_BASS2DECAM_W_SMOOTH"] = corrections["delta_bass2decam_g"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_R_BASS2DECAM_W_SMOOTH"] = corrections["delta_bass2decam_r"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_G_BASS2DECAM"] = corrections["delta_bass2decam_g"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_R_BASS2DECAM"] = corrections["delta_bass2decam_r"][keep_mask]
 
-    samp_i_cat_cut["DELTA_MAG_G_NEB"]          = corrections["delta_neb_g_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_R_NEB"]          = corrections["delta_neb_r_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_G_NEB_W_SMOOTH"] = corrections["delta_neb_g"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_R_NEB_W_SMOOTH"] = corrections["delta_neb_r"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_G_NEB_ERR"]      = corrections["delta_neb_g_err"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_R_NEB_ERR"]      = corrections["delta_neb_r_err"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_G_NEB"]     = corrections["delta_neb_g"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_R_NEB"]     = corrections["delta_neb_r"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_G_NEB_ERR"] = corrections["delta_neb_g_err"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_R_NEB_ERR"] = corrections["delta_neb_r_err"][keep_mask]
 
-    samp_i_cat_cut["DELTA_MAG_G_DECAM2SDSS"]          = corrections["delta_decam2sdss_g_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_R_DECAM2SDSS"]          = corrections["delta_decam2sdss_r_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_G_DECAM2SDSS_W_SMOOTH"] = corrections["delta_decam2sdss_g"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_R_DECAM2SDSS_W_SMOOTH"] = corrections["delta_decam2sdss_r"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_G_DECAM2SDSS"] = corrections["delta_decam2sdss_g"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_R_DECAM2SDSS"] = corrections["delta_decam2sdss_r"][keep_mask]
 
-    samp_i_cat_cut["DELTA_MAG_G_KCORR"]          = corrections["delta_kcorr_g"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_R_KCORR"]          = corrections["delta_kcorr_r"][keep_mask]
+    # SED-based k-correction (drives MAG_*_SDSS_Z0 and LOGM_M24_FIDU_CORR).
+    samp_i_cat_cut["DELTA_MAG_G_KCORR"] = corrections["delta_kcorr_g"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_R_KCORR"] = corrections["delta_kcorr_r"][keep_mask]
+    # MODELS-extension band-shift k-correction (diagnostic only, not applied).
+    samp_i_cat_cut["DELTA_MAG_G_KCORR_MODEL_EXT"] = corrections["delta_kcorr_g_model_ext"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_R_KCORR_MODEL_EXT"] = corrections["delta_kcorr_r_model_ext"][keep_mask]
 
-    samp_i_cat_cut["MAG_G_SDSS_Z0"]          = mag_g_final[keep_mask]
-    samp_i_cat_cut["MAG_R_SDSS_Z0"]          = mag_r_final[keep_mask]
-    samp_i_cat_cut["MAG_G_SDSS_Z0_W_SMOOTH"] = mag_g_final_w_smooth[keep_mask]
-    samp_i_cat_cut["MAG_R_SDSS_Z0_W_SMOOTH"] = mag_r_final_w_smooth[keep_mask]
-    samp_i_cat_cut["MAG_G_SDSS_Z0_ERR"]      = mag_g_err_final[keep_mask]
-    samp_i_cat_cut["MAG_R_SDSS_Z0_ERR"]      = mag_r_err_final[keep_mask]
+    samp_i_cat_cut["MAG_G_SDSS_Z0"]     = mag_g_final[keep_mask]
+    samp_i_cat_cut["MAG_R_SDSS_Z0"]     = mag_r_final[keep_mask]
+    samp_i_cat_cut["MAG_G_SDSS_Z0_ERR"] = mag_g_err_final[keep_mask]
+    samp_i_cat_cut["MAG_R_SDSS_Z0_ERR"] = mag_r_err_final[keep_mask]
 
-    samp_i_cat_cut["LOGM_M24_FIDU_CORR"]          = logm_corr[keep_mask]
-    samp_i_cat_cut["LOGM_M24_FIDU_CORR_ERR"]      = logm_corr_err[keep_mask]
-    samp_i_cat_cut["LOGM_M24_FIDU_CORR_W_SMOOTH"] = logm_corr_w_smooth[keep_mask]
+    samp_i_cat_cut["LOGM_M24_FIDU_CORR"]     = logm_corr[keep_mask]
+    samp_i_cat_cut["LOGM_M24_FIDU_CORR_ERR"] = logm_corr_err[keep_mask]
 
     samp_i_cat_cut["HALPHA_EW"]      = halpha_ew[keep_mask]
     samp_i_cat_cut["HALPHA_EW_IVAR"] = halpha_ew_ivar[keep_mask]
 
-    # Model magnitudes: unsuffixed = continuum only; _W_SMOOTH = continuum + smooth.
-    # The model_photometry_diffs cache keeps its existing column names
-    # (g_model_no_emi = with smooth, g_model_no_emi_ONLY_CONT = continuum only),
-    # so we map ONLY_CONT -> default and (no suffix in cache) -> _W_SMOOTH here.
-    samp_i_cat_cut["MAG_G_DECAM_MODEL_NOEMI"]          = result_samp_i["g_model_no_emi_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["MAG_R_DECAM_MODEL_NOEMI"]          = result_samp_i["r_model_no_emi_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["MAG_G_DECAM_MODEL_NOEMI_W_SMOOTH"] = result_samp_i["g_model_no_emi"][keep_mask]
-    samp_i_cat_cut["MAG_R_DECAM_MODEL_NOEMI_W_SMOOTH"] = result_samp_i["r_model_no_emi"][keep_mask]
+    # Model magnitudes from the model-photometry cache (continuum-only chain).
+    samp_i_cat_cut["MAG_G_DECAM_MODEL_NOEMI"] = result_samp_i["g_model_no_emi"][keep_mask]
+    samp_i_cat_cut["MAG_R_DECAM_MODEL_NOEMI"] = result_samp_i["r_model_no_emi"][keep_mask]
 
-    samp_i_cat_cut["MAG_G_DECAM_MODEL_WEMI"]          = result_samp_i["g_model_w_emi_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["MAG_R_DECAM_MODEL_WEMI"]          = result_samp_i["r_model_w_emi_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["MAG_G_DECAM_MODEL_WEMI_W_SMOOTH"] = result_samp_i["g_model_w_emi"][keep_mask]
-    samp_i_cat_cut["MAG_R_DECAM_MODEL_WEMI_W_SMOOTH"] = result_samp_i["r_model_w_emi"][keep_mask]
+    samp_i_cat_cut["MAG_G_DECAM_MODEL_WEMI"] = result_samp_i["g_model_w_emi"][keep_mask]
+    samp_i_cat_cut["MAG_R_DECAM_MODEL_WEMI"] = result_samp_i["r_model_w_emi"][keep_mask]
 
-    samp_i_cat_cut["MAG_G_BASS_MODEL_WEMI"]          = result_samp_i["g_bass_w_emi_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["MAG_R_BASS_MODEL_WEMI"]          = result_samp_i["r_bass_w_emi_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["MAG_G_BASS_MODEL_WEMI_W_SMOOTH"] = result_samp_i["g_bass_w_emi"][keep_mask]
-    samp_i_cat_cut["MAG_R_BASS_MODEL_WEMI_W_SMOOTH"] = result_samp_i["r_bass_w_emi"][keep_mask]
+    samp_i_cat_cut["MAG_G_BASS_MODEL_WEMI"] = result_samp_i["g_bass_w_emi"][keep_mask]
+    samp_i_cat_cut["MAG_R_BASS_MODEL_WEMI"] = result_samp_i["r_bass_w_emi"][keep_mask]
 
-    samp_i_cat_cut["MAG_G_SDSS_MODEL_NOEMI"]          = result_samp_i["g_sdss_no_emi_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["MAG_R_SDSS_MODEL_NOEMI"]          = result_samp_i["r_sdss_no_emi_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["MAG_G_SDSS_MODEL_NOEMI_W_SMOOTH"] = result_samp_i["g_sdss_no_emi"][keep_mask]
-    samp_i_cat_cut["MAG_R_SDSS_MODEL_NOEMI_W_SMOOTH"] = result_samp_i["r_sdss_no_emi"][keep_mask]
+    samp_i_cat_cut["MAG_G_SDSS_MODEL_NOEMI"] = result_samp_i["g_sdss_no_emi"][keep_mask]
+    samp_i_cat_cut["MAG_R_SDSS_MODEL_NOEMI"] = result_samp_i["r_sdss_no_emi"][keep_mask]
 
-    samp_i_cat_cut["MAG_G_SDSS_Z0_MODEL_NOEMI"]          = result_samp_i["g_sdss_z0_no_emi_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["MAG_R_SDSS_Z0_MODEL_NOEMI"]          = result_samp_i["r_sdss_z0_no_emi_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["MAG_G_SDSS_Z0_MODEL_NOEMI_W_SMOOTH"] = result_samp_i["g_sdss_z0_no_emi"][keep_mask]
-    samp_i_cat_cut["MAG_R_SDSS_Z0_MODEL_NOEMI_W_SMOOTH"] = result_samp_i["r_sdss_z0_no_emi"][keep_mask]
+    samp_i_cat_cut["MAG_G_SDSS_Z0_MODEL_NOEMI"] = result_samp_i["g_sdss_z0_no_emi"][keep_mask]
+    samp_i_cat_cut["MAG_R_SDSS_Z0_MODEL_NOEMI"] = result_samp_i["r_sdss_z0_no_emi"][keep_mask]
 
-    # Mg summary uses the new default MAG_G_SDSS_Z0 (continuum-only chain).
+    # Mg summary uses MAG_G_SDSS_Z0 (continuum-only chain, SED k-correction).
     d_in_pc = np.asarray(samp_i_cat_cut["DIST_MPC_FIDU"].data, dtype=float) * 1e6
     valid_mg = (d_in_pc > 0) & np.isfinite(d_in_pc) & np.isfinite(
         samp_i_cat_cut["MAG_G_SDSS_Z0"].data
