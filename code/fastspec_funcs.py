@@ -21,8 +21,139 @@ SDSS_G = speclite.filters.load_filters('sdss2010noatm-g')
 SDSS_R = speclite.filters.load_filters('sdss2010noatm-r')
 
 
+# Common wavelength grid (in Angstrom) used for batched SED-based k-correction
+# photometry: per-object SEDs from build_stellar_continuum are resampled onto
+# this grid (observed-frame and deredshifted rest-frame) so a single batched
+# speclite call handles all objects in the batch. 1 Angstrom sampling is fine
+# enough to integrate SDSS g/r (FWHM ~1000 A) accurately.
+KCORR_COMMON_WAVE = np.arange(3000.0, 11000.0, 1.0)
+
+
+_FSF_SCDATA = None
+
+
+def _get_scdata():
+    """Lazily initialize and cache the FastSpecFit single-copy data.
+
+    The first call in a Python process triggers ``sc_data.initialize`` (which
+    loads the SPS templates, photometry config, cosmology, and IGM model) and
+    caches the resulting handles in a module-level dict. Subsequent calls
+    reuse the cached objects. In multiprocessing workers this means each
+    worker pays the initialization cost exactly once on first use.
+    """
+    global _FSF_SCDATA
+    if _FSF_SCDATA is None:
+        from fastspecfit.singlecopy import sc_data
+        sc_data.initialize(fastphot=False)
+        _FSF_SCDATA = {
+            "templates": sc_data.templates,
+            "phot":      sc_data.photometry,
+            "cosmo":     sc_data.cosmology,
+            "igm":       sc_data.igm,
+        }
+    return _FSF_SCDATA
+
+
+def _build_sed_for_object(tgid, zred, photsys, coeff, tauv):
+    """Build the full-wavelength stellar-continuum SED for one object.
+
+    Wraps ``fastspecfit.continuum.ContinuumTools.build_stellar_continuum``
+    using the cached single-copy data. Returns ``(ztemplatewave, sedmodel)``
+    in the same flux units as the MODELS extension (1e-17 erg/s/cm^2/A).
+    """
+    from fastspecfit.continuum import ContinuumTools
+    sc = _get_scdata()
+    data_j = {
+        "uniqueid":    int(tgid),
+        "redshift":    float(zred),
+        "dluminosity": sc["cosmo"].luminosity_distance(zred),
+        "dmodulus":    sc["cosmo"].distance_modulus(zred),
+        "photsys":     str(photsys),
+        "tuniv":       100.,
+    }
+    CTools = ContinuumTools(data_j, sc["templates"], sc["phot"],
+                            sc["igm"], fastphot=True)
+    sedmodel = CTools.build_stellar_continuum(
+        sc["templates"].flux_nolines_nomvdisp,
+        np.asarray(coeff, dtype=float),
+        tauv=float(tauv), vdisp=None, dust_emission=False,
+    )
+    return CTools.ztemplatewave, sedmodel
+
+
+def _batch_sed_kcorr_photometry(tgids, zreds, photsys_arr, coeff_arr, tauv_arr):
+    """Batched SDSS g,r photometry on per-object SEDs at obs and rest frame.
+
+    For each object we build the full-wavelength stellar-continuum SED with
+    ``_build_sed_for_object`` and resample it onto a single common wavelength
+    grid (``KCORR_COMMON_WAVE``) for both (a) the observed frame as-is and
+    (b) the rest frame (deredshifted: lambda_rest = lambda_obs/(1+z),
+    F_lambda_rest = F_lambda_obs * (1+z)). Then we call
+    ``measure_photo_batch`` exactly *once* per frame on the resulting
+    ``(n, len(KCORR_COMMON_WAVE))`` flux arrays so the speclite filter
+    integration is fully vectorized.
+
+    Parameters
+    ----------
+    tgids, zreds : 1D arrays, shape (n,)
+    photsys_arr  : 1D array of strings ('N' or 'S'), shape (n,)
+    coeff_arr    : 2D array, shape (n, n_templates)
+    tauv_arr     : 1D array, shape (n,)
+
+    Returns
+    -------
+    g_obs, r_obs, g_z0, r_z0 : 1D arrays of AB magnitudes, shape (n,)
+        ``NaN`` is returned for objects where the SED could not be built or
+        the SED is all-zero/non-finite.
+    """
+    n = len(tgids)
+    flux_obs_2d  = np.zeros((n, KCORR_COMMON_WAVE.size))
+    flux_rest_2d = np.zeros((n, KCORR_COMMON_WAVE.size))
+    valid = np.zeros(n, dtype=bool)
+
+    for j in range(n):
+        try:
+            sedwave, sedflux = _build_sed_for_object(
+                tgids[j], zreds[j], photsys_arr[j],
+                coeff_arr[j], tauv_arr[j],
+            )
+        except Exception:
+            continue
+        if not np.any(np.isfinite(sedflux)) or np.all(sedflux == 0):
+            continue
+
+        flux_obs_2d[j] = resample_flux(
+            KCORR_COMMON_WAVE, sedwave, sedflux, extrapolate=False,
+        )
+        z = float(zreds[j])
+        flux_rest_2d[j] = resample_flux(
+            KCORR_COMMON_WAVE,
+            sedwave / (1.0 + z),
+            sedflux * (1.0 + z),
+            extrapolate=False,
+        )
+        valid[j] = True
+
+    g_obs = np.full(n, np.nan)
+    r_obs = np.full(n, np.nan)
+    g_z0  = np.full(n, np.nan)
+    r_z0  = np.full(n, np.nan)
+
+    if np.any(valid):
+        phot_obs  = measure_photo_batch(KCORR_COMMON_WAVE, flux_obs_2d[valid],
+                                        measure_sdss=True)
+        phot_rest = measure_photo_batch(KCORR_COMMON_WAVE, flux_rest_2d[valid],
+                                        measure_sdss=True)
+        g_obs[valid] = phot_obs['g_sdss']
+        r_obs[valid] = phot_obs['r_sdss']
+        g_z0[valid]  = phot_rest['g_sdss']
+        r_z0[valid]  = phot_rest['r_sdss']
+
+    return g_obs, r_obs, g_z0, r_z0
+
+
 def get_fastspecfit_path(survey, program, healpix,
-                         base_dir="/global/cfs/cdirs/desi/public/dr1/vac/dr1/fastspecfit/iron/v2.1/healpix"):
+                         base_dir="/global/cfs/cdirs/desi/public/dr1/vac/dr1/fastspecfit/iron/v3.0/healpix"):
     healpix_parent = healpix // 100
     filename = f"fastspec-{survey}-{program}-{healpix}.fits.gz"
     return f"{base_dir}/{survey}/{program}/{healpix_parent}/{healpix}/{filename}"
@@ -69,15 +200,14 @@ def get_filter_weights(filt, wave_arr):
 def measure_photo_batch(wave_arr, flux_2d, ivar_2d=None, zred=None,
                         measure_bass=False,
                         measure_sdss=False,
-                        measure_sdss_z0=False,
-                        measure_sdss_z01=False):
+                        measure_sdss_z0=False):
     """
     Measure AB magnitudes (and optionally magnitude errors) for a batch
     of spectra in requested filter systems.
 
     Always measures DECam g,r. Optionally measures BASS, SDSS (observed frame),
-    SDSS at z=0 (rest frame), and SDSS at z=0.1 (band-shifted, for k-correction
-    validation). Each band-shift uses a per-object resample_flux.
+    and SDSS at z=0 (rest frame). The rest-frame band-shift uses a per-object
+    resample_flux.
 
     Magnitudes are computed using speclite's get_ab_magnitudes.
     Errors (if ivar_2d provided) are computed via analytic propagation
@@ -92,19 +222,16 @@ def measure_photo_batch(wave_arr, flux_2d, ivar_2d=None, zred=None,
         Inverse variance in (1e-17 erg/s/cm2/Ang)^{-2} units.
         If provided, magnitude errors are returned. If None, no errors.
     zred : 1D array, shape (N_spectra,), optional
-        Redshift of objects. Required when measure_sdss_z0=True or
-        measure_sdss_z01=True.
+        Redshift of objects. Required when measure_sdss_z0=True.
     measure_bass : bool
     measure_sdss : bool
     measure_sdss_z0 : bool
-    measure_sdss_z01 : bool
 
     Returns
     -------
     result : dict
         Keys: 'g_decam', 'r_decam', and optionally 'g_bass', 'r_bass',
-        'g_sdss', 'r_sdss', 'g_sdss_z0', 'r_sdss_z0', 'g_sdss_z01',
-        'r_sdss_z01'.
+        'g_sdss', 'r_sdss', 'g_sdss_z0', 'r_sdss_z0'.
         If ivar_2d is provided, also contains '*_err' variants of each key.
         Each value is a 1D array of shape (N_spectra,).
     """
@@ -251,10 +378,6 @@ def measure_photo_batch(wave_arr, flux_2d, ivar_2d=None, zred=None,
     if measure_sdss_z0:
         _measure_sdss_at_target_z(0.0, 'g_sdss_z0', 'r_sdss_z0')
 
-    # --- SDSS g, r band-shifted to z=0.1 (k-correction validation) ---
-    if measure_sdss_z01:
-        _measure_sdss_at_target_z(0.1, 'g_sdss_z01', 'r_sdss_z01')
-
     return result
     
 
@@ -266,19 +389,17 @@ def _process_single_file(args):
     Parameters
     ----------
     args : tuple
-        (upath, cat_indices, targetids_for_file, redshifts_for_file, batch_size,
-         compute_kcorr_z01_validation)
+        (upath, cat_indices, targetids_for_file, redshifts_for_file, batch_size)
 
     Returns
     -------
     dict or None
         Dict with 'cat_indices' and photometry/absmag arrays, or None on failure.
-        When ``compute_kcorr_z01_validation`` is True, the returned dict also
-        contains the four ``*_w_emi_no_smooth`` keys (observed-frame and
-        z=0.1 SDSS g/r on continuum+emission).
+        Always contains the four SED-based k-correction photometry columns
+        ``g/r_sdss_obs_SED`` and ``g/r_sdss_z0_SED`` computed from the
+        full-wavelength stellar continuum SED.
     """
-    (upath, cat_indices, targetids_for_file, redshifts_for_file, batch_size,
-     compute_kcorr_z01_validation) = args
+    (upath, cat_indices, targetids_for_file, redshifts_for_file, batch_size) = args
 
     try:
         iron_vac = fits.open(upath, memmap=True)
@@ -292,10 +413,9 @@ def _process_single_file(args):
     model_data = iron_vac["MODELS"].data
 
     fastspec_data = iron_vac["FASTSPEC"].data
-    specphot_data = iron_vac["SPECPHOT"].data 
+    specphot_data = iron_vac["SPECPHOT"].data
+    metadata_data = iron_vac["METADATA"].data
 
-    print("TODO: NEED TO FIX THIS! SPECPHOT IS NOT VALID FOR V2.1?")
-    
     tgids_file = fastspec_data["TARGETID"]
     tgid_to_fits_row = {t: i for i, t in enumerate(tgids_file)}
 
@@ -318,14 +438,12 @@ def _process_single_file(args):
     valid_redshifts = redshifts_for_file[valid_local_indices]
     n_valid = len(valid_cat)
 
-    # SPECPHOT and FASTSPEC HDUs are aligned row-by-row in the iron VAC,
-    # so we use the same valid_fits_rows index into both.
+    # SPECPHOT, FASTSPEC and METADATA HDUs are aligned row-by-row in the iron VAC,
+    # so we use the same valid_fits_rows index into all three.
     result = {
         "cat_indices":   valid_cat,
         "halpha_ew":      np.array(fastspec_data["HALPHA_EW"][valid_fits_rows], dtype=float),
         "halpha_ew_ivar": np.array(fastspec_data["HALPHA_EW_IVAR"][valid_fits_rows], dtype=float),
-        "kcorr01_sdss_g": np.array(specphot_data["KCORR01_SDSS_G"][valid_fits_rows], dtype=float),
-        "kcorr01_sdss_r": np.array(specphot_data["KCORR01_SDSS_R"][valid_fits_rows], dtype=float),
     }
 
     continuum = model_data[valid_fits_rows, 0, :]
@@ -364,14 +482,6 @@ def _process_single_file(args):
     r_sdss_no_emi_only_cont = np.full(n_valid, np.nan)
     g_sdss_z0_no_emi_only_cont = np.full(n_valid, np.nan)
     r_sdss_z0_no_emi_only_cont = np.full(n_valid, np.nan)
-
-    # -- KCORR_Z01 validation diagnostic: SDSS g/r on continuum+emission
-    #    (no smooth_continuum), in observed frame and band-shifted to z=0.1.
-    if compute_kcorr_z01_validation:
-        g_sdss_w_emi_no_smooth     = np.full(n_valid, np.nan)
-        r_sdss_w_emi_no_smooth     = np.full(n_valid, np.nan)
-        g_sdss_z01_w_emi_no_smooth = np.full(n_valid, np.nan)
-        r_sdss_z01_w_emi_no_smooth = np.full(n_valid, np.nan)
 
     # --- Continuum + emission: measure DECam and BASS ---
     flux_w_emi = continuum + smooth_continuum + emission
@@ -434,22 +544,20 @@ def _process_single_file(args):
         g_sdss_z0_no_emi_only_cont[start:end] = phot['g_sdss_z0']
         r_sdss_z0_no_emi_only_cont[start:end] = phot['r_sdss_z0']
 
-    # --- KCORR_Z01 validation: continuum+emission (no smooth) -> SDSS@z_obs and SDSS@z=0.1 ---
-    if compute_kcorr_z01_validation:
-        # Reuse flux_w_emi_only_cont (= continuum + emission) from above.
-        for start in range(0, n_valid, batch_size):
-            end = min(start + batch_size, n_valid)
-
-            phot = measure_photo_batch(
-                wavelength, flux_w_emi_only_cont[start:end],
-                zred=valid_redshifts[start:end],
-                measure_sdss=True,
-                measure_sdss_z01=True,
-            )
-            g_sdss_w_emi_no_smooth[start:end]     = phot['g_sdss']
-            r_sdss_w_emi_no_smooth[start:end]     = phot['r_sdss']
-            g_sdss_z01_w_emi_no_smooth[start:end] = phot['g_sdss_z01']
-            r_sdss_z01_w_emi_no_smooth[start:end] = phot['r_sdss_z01']
+    # --- SED-based k-correction photometry (one batched speclite call per
+    #     frame): build per-object full-wavelength stellar continuum SEDs
+    #     from build_stellar_continuum and integrate SDSS g/r at observed
+    #     and rest frames. Inputs come from SPECPHOT (COEFF, TAUV) and
+    #     METADATA (PHOTSYS); redshifts already aligned in valid_redshifts.
+    coeff_arr   = np.asarray(specphot_data["COEFF"][valid_fits_rows])
+    tauv_arr    = np.asarray(specphot_data["TAUV"][valid_fits_rows])
+    photsys_arr = np.asarray(metadata_data["PHOTSYS"][valid_fits_rows])
+    tgids_arr   = np.asarray(tgids_file[valid_fits_rows])
+    g_sdss_obs_SED, r_sdss_obs_SED, g_sdss_z0_SED, r_sdss_z0_SED = (
+        _batch_sed_kcorr_photometry(
+            tgids_arr, valid_redshifts, photsys_arr, coeff_arr, tauv_arr,
+        )
+    )
 
     result["g_model_no_emi"] = g_no_emi
     result["r_model_no_emi"] = r_no_emi
@@ -473,11 +581,10 @@ def _process_single_file(args):
     result["g_sdss_z0_no_emi_ONLY_CONT"] = g_sdss_z0_no_emi_only_cont
     result["r_sdss_z0_no_emi_ONLY_CONT"] = r_sdss_z0_no_emi_only_cont
 
-    if compute_kcorr_z01_validation:
-        result["g_sdss_w_emi_no_smooth"]     = g_sdss_w_emi_no_smooth
-        result["r_sdss_w_emi_no_smooth"]     = r_sdss_w_emi_no_smooth
-        result["g_sdss_z01_w_emi_no_smooth"] = g_sdss_z01_w_emi_no_smooth
-        result["r_sdss_z01_w_emi_no_smooth"] = r_sdss_z01_w_emi_no_smooth
+    result["g_sdss_obs_SED"] = g_sdss_obs_SED
+    result["r_sdss_obs_SED"] = r_sdss_obs_SED
+    result["g_sdss_z0_SED"]  = g_sdss_z0_SED
+    result["r_sdss_z0_SED"]  = r_sdss_z0_SED
 
     iron_vac.close()
 
@@ -487,11 +594,10 @@ def _process_single_file(args):
 def compute_photometry_catalog(catalog,
                                spectra_h5_path=None,
                                compute_data_photometry=True,
-                               base_dir="/global/cfs/cdirs/desi/public/dr1/vac/dr1/fastspecfit/iron/v2.1/healpix",
+                               base_dir="/global/cfs/cdirs/desi/public/dr1/vac/dr1/fastspecfit/iron/v3.0/healpix",
                                save_path=None,
                                batch_size=500,
                                ncore=8,
-                               compute_kcorr_z01_validation=False,
                                verbose=True):
     """
     Loop over all objects in a DESI catalog, extract fastspecfit models,
@@ -518,17 +624,16 @@ def compute_photometry_catalog(catalog,
     ncore : int
         Number of parallel workers. Only used when compute_data_photometry=False.
         Falls back to serial if compute_data_photometry=True.
-    compute_kcorr_z01_validation : bool
-        If True, also compute SDSS g/r on (continuum + emission) -- with
-        smooth_continuum dropped -- in observed frame and band-shifted to
-        z=0.1, and emit four extra columns (g/r_sdss_w_emi_no_smooth and
-        g/r_sdss_z01_w_emi_no_smooth). Off by default.
     verbose : bool
         Print progress updates.
 
     Returns
     -------
     result : astropy Table
+        Includes the SED-based k-correction photometry columns
+        ``g/r_sdss_obs_SED`` and ``g/r_sdss_z0_SED``, computed from the
+        per-object full-wavelength stellar continuum SED via
+        ``ContinuumTools.build_stellar_continuum``.
     """
 
     use_parallel = (ncore > 1) and (not compute_data_photometry)
@@ -590,19 +695,16 @@ def compute_photometry_catalog(catalog,
     g_sdss_z0_no_emi_ONLY_CONT = np.full(n_objects, np.nan)
     r_sdss_z0_no_emi_ONLY_CONT = np.full(n_objects, np.nan)
 
-    # KCORR_Z01 validation: only allocated when requested.
-    if compute_kcorr_z01_validation:
-        g_sdss_w_emi_no_smooth     = np.full(n_objects, np.nan)
-        r_sdss_w_emi_no_smooth     = np.full(n_objects, np.nan)
-        g_sdss_z01_w_emi_no_smooth = np.full(n_objects, np.nan)
-        r_sdss_z01_w_emi_no_smooth = np.full(n_objects, np.nan)
+    # SED-based k-correction photometry (full-wavelength stellar continuum
+    # SED from build_stellar_continuum, integrated through SDSS g/r at
+    # observed and rest frames).
+    g_sdss_obs_SED = np.full(n_objects, np.nan)
+    r_sdss_obs_SED = np.full(n_objects, np.nan)
+    g_sdss_z0_SED  = np.full(n_objects, np.nan)
+    r_sdss_z0_SED  = np.full(n_objects, np.nan)
 
     halpha_ew      = np.full(n_objects, np.nan)
     halpha_ew_ivar = np.full(n_objects, np.nan)
-
-    # FastSpecFit SPECPHOT-derived k-corrections (band-shifted to z=0.1).
-    kcorr01_sdss_g = np.full(n_objects, np.nan)
-    kcorr01_sdss_r = np.full(n_objects, np.nan)
 
     if compute_data_photometry:
         g_data_no_emi = np.full(n_objects, np.nan)
@@ -629,8 +731,7 @@ def compute_photometry_catalog(catalog,
         work_items = []
         for upath in unique_paths:
             ci = np.where(paths == upath)[0]
-            work_items.append((upath, ci, targetids[ci], redshifts[ci], batch_size,
-                               compute_kcorr_z01_validation))
+            work_items.append((upath, ci, targetids[ci], redshifts[ci], batch_size))
 
         if verbose:
             print(f"Processing {n_files} files with {ncore} cores ...")
@@ -664,16 +765,13 @@ def compute_photometry_catalog(catalog,
                 g_sdss_z0_no_emi_ONLY_CONT[idx] = file_result["g_sdss_z0_no_emi_ONLY_CONT"]
                 r_sdss_z0_no_emi_ONLY_CONT[idx] = file_result["r_sdss_z0_no_emi_ONLY_CONT"]
 
-                if compute_kcorr_z01_validation:
-                    g_sdss_w_emi_no_smooth[idx]     = file_result["g_sdss_w_emi_no_smooth"]
-                    r_sdss_w_emi_no_smooth[idx]     = file_result["r_sdss_w_emi_no_smooth"]
-                    g_sdss_z01_w_emi_no_smooth[idx] = file_result["g_sdss_z01_w_emi_no_smooth"]
-                    r_sdss_z01_w_emi_no_smooth[idx] = file_result["r_sdss_z01_w_emi_no_smooth"]
+                g_sdss_obs_SED[idx] = file_result["g_sdss_obs_SED"]
+                r_sdss_obs_SED[idx] = file_result["r_sdss_obs_SED"]
+                g_sdss_z0_SED[idx]  = file_result["g_sdss_z0_SED"]
+                r_sdss_z0_SED[idx]  = file_result["r_sdss_z0_SED"]
 
                 halpha_ew[idx]      = file_result["halpha_ew"]
                 halpha_ew_ivar[idx] = file_result["halpha_ew_ivar"]
-                kcorr01_sdss_g[idx] = file_result["kcorr01_sdss_g"]
-                kcorr01_sdss_r[idx] = file_result["kcorr01_sdss_r"]
 
                 if verbose and files_done % 50 == 0:
                     print(f"  Processed {files_done}/{n_files} files")
@@ -703,6 +801,7 @@ def compute_photometry_catalog(catalog,
                 
                 fastspec_data = iron_vac["FASTSPEC"].data
                 specphot_data = iron_vac["SPECPHOT"].data
+                metadata_data = iron_vac["METADATA"].data
                 tgids_file = fastspec_data["TARGETID"]
                 tgid_to_fits_row = {t: i for i, t in enumerate(tgids_file)}
 
@@ -724,9 +823,6 @@ def compute_photometry_catalog(catalog,
                 
                 halpha_ew[valid_cat]      = fastspec_data["HALPHA_EW"][valid_fits_rows]
                 halpha_ew_ivar[valid_cat] = fastspec_data["HALPHA_EW_IVAR"][valid_fits_rows]
-                # SPECPHOT and FASTSPEC are aligned row-by-row in the iron VAC.
-                kcorr01_sdss_g[valid_cat] = specphot_data["KCORR01_SDSS_G"][valid_fits_rows]
-                kcorr01_sdss_r[valid_cat] = specphot_data["KCORR01_SDSS_R"][valid_fits_rows]
 
                 continuum = model_data[valid_fits_rows, 0, :]
                 smooth_continuum = model_data[valid_fits_rows, 1, :]
@@ -805,25 +901,28 @@ def compute_photometry_catalog(catalog,
                         if verbose:
                             print(f"  Photometry error (no_emi ONLY_CONT, batch {start}-{end}): {e}")
 
-                # --- KCORR_Z01 validation: continuum+emission (no smooth)
-                #     -> SDSS@z_obs and SDSS@z=0.1 ---
-                if compute_kcorr_z01_validation:
-                    for start in range(0, len(valid_cat), batch_size):
-                        end = min(start + batch_size, len(valid_cat))
-                        try:
-                            phot = measure_photo_batch(
-                                wavelength, flux_w_emi_only_cont[start:end],
-                                zred=valid_zred[start:end],
-                                measure_sdss=True,
-                                measure_sdss_z01=True,
-                            )
-                            g_sdss_w_emi_no_smooth[valid_cat[start:end]]     = phot['g_sdss']
-                            r_sdss_w_emi_no_smooth[valid_cat[start:end]]     = phot['r_sdss']
-                            g_sdss_z01_w_emi_no_smooth[valid_cat[start:end]] = phot['g_sdss_z01']
-                            r_sdss_z01_w_emi_no_smooth[valid_cat[start:end]] = phot['r_sdss_z01']
-                        except Exception as e:
-                            if verbose:
-                                print(f"  Photometry error (kcorr_z01 validation, batch {start}-{end}): {e}")
+                # --- SED-based k-correction photometry (one batched
+                #     speclite call per frame for the whole file): build
+                #     per-object full-wavelength stellar continuum SEDs and
+                #     integrate SDSS g/r at observed and rest frames. ---
+                try:
+                    coeff_arr   = np.asarray(specphot_data["COEFF"][valid_fits_rows])
+                    tauv_arr    = np.asarray(specphot_data["TAUV"][valid_fits_rows])
+                    photsys_arr = np.asarray(metadata_data["PHOTSYS"][valid_fits_rows])
+                    tgids_arr   = np.asarray(tgids_file[valid_fits_rows])
+                    g_obs_SED, r_obs_SED, g_z0_SED, r_z0_SED = (
+                        _batch_sed_kcorr_photometry(
+                            tgids_arr, valid_zred, photsys_arr,
+                            coeff_arr, tauv_arr,
+                        )
+                    )
+                    g_sdss_obs_SED[valid_cat] = g_obs_SED
+                    r_sdss_obs_SED[valid_cat] = r_obs_SED
+                    g_sdss_z0_SED[valid_cat]  = g_z0_SED
+                    r_sdss_z0_SED[valid_cat]  = r_z0_SED
+                except Exception as e:
+                    if verbose:
+                        print(f"  SED kcorr photometry error: {e}")
 
                 if compute_data_photometry:
                     h5_rows = np.array([h5_tgid_to_row.get(targetids[ci], -1) for ci in valid_cat])
@@ -880,10 +979,12 @@ def compute_photometry_catalog(catalog,
         "r_sdss_no_emi_ONLY_CONT":    r_sdss_no_emi_ONLY_CONT,
         "g_sdss_z0_no_emi_ONLY_CONT": g_sdss_z0_no_emi_ONLY_CONT,
         "r_sdss_z0_no_emi_ONLY_CONT": r_sdss_z0_no_emi_ONLY_CONT,
+        "g_sdss_obs_SED":             g_sdss_obs_SED,
+        "r_sdss_obs_SED":             r_sdss_obs_SED,
+        "g_sdss_z0_SED":              g_sdss_z0_SED,
+        "r_sdss_z0_SED":              r_sdss_z0_SED,
         "HALPHA_EW":                   halpha_ew,
         "HALPHA_EW_IVAR":             halpha_ew_ivar,
-        "KCORR01_SDSS_G":             kcorr01_sdss_g,
-        "KCORR01_SDSS_R":             kcorr01_sdss_r,
     }
     
     if compute_data_photometry:
@@ -891,12 +992,6 @@ def compute_photometry_catalog(catalog,
         columns["r_data_no_emi"] = r_data_no_emi
         columns["g_data_w_emi"]  = g_data_w_emi
         columns["r_data_w_emi"]  = r_data_w_emi
-
-    if compute_kcorr_z01_validation:
-        columns["g_sdss_w_emi_no_smooth"]     = g_sdss_w_emi_no_smooth
-        columns["r_sdss_w_emi_no_smooth"]     = r_sdss_w_emi_no_smooth
-        columns["g_sdss_z01_w_emi_no_smooth"] = g_sdss_z01_w_emi_no_smooth
-        columns["r_sdss_z01_w_emi_no_smooth"] = r_sdss_z01_w_emi_no_smooth
 
     result = Table(columns)
 
@@ -926,7 +1021,7 @@ def _run_correction_chain(
     g_model_w_emi,  r_model_w_emi,
     g_bass_w_emi,   r_bass_w_emi,
     g_sdss_no_emi,  r_sdss_no_emi,
-    g_sdss_z0_no_emi, r_sdss_z0_no_emi,
+    g_kcorr_delta, r_kcorr_delta,
     label="",
 ):
     """Run the four-step photometric correction chain on one set of model magnitudes.
@@ -942,8 +1037,12 @@ def _run_correction_chain(
         These are *copied* before being modified.
     north_mask : 1D bool array
         True where Step 1 (BASS -> DECam) must be applied.
-    g_model_*, r_model_*, g_bass_*, r_bass_*, g_sdss_*, r_sdss_*, g_sdss_z0_*, r_sdss_z0_* : 1D arrays
+    g_model_*, r_model_*, g_bass_*, r_bass_*, g_sdss_*, r_sdss_* : 1D arrays
         Model photometry (one of the two flavors).
+    g_kcorr_delta, r_kcorr_delta : 1D arrays
+        SED-based k-correction deltas, ``g/r_sdss_z0_SED - g/r_sdss_obs_SED``.
+        Already computed from the per-object full-wavelength stellar
+        continuum SED, so the same deltas are passed to both chain calls.
     label : str
         Tag prepended to the diagnostic prints (e.g. ``""`` or ``"[ONLY_CONT] "``).
 
@@ -987,8 +1086,8 @@ def _run_correction_chain(
     mag_g_working += delta_decam2sdss_g
     mag_r_working += delta_decam2sdss_r
 
-    delta_kcorr_g = g_sdss_z0_no_emi - g_sdss_no_emi
-    delta_kcorr_r = r_sdss_z0_no_emi - r_sdss_no_emi
+    delta_kcorr_g = np.asarray(g_kcorr_delta, dtype=float)
+    delta_kcorr_r = np.asarray(r_kcorr_delta, dtype=float)
 
     mag_g_working += delta_kcorr_g
     mag_r_working += delta_kcorr_r
@@ -1028,7 +1127,10 @@ def apply_photometric_corrections(cat, model_phot_table):
         2. Nebular emission removal in DECam (always applied from model
            template difference: continuum+smooth vs continuum+smooth+emission)
         3. DECam -> SDSS  (measured on continuum-only model)
-        4. k-correction: SDSS z_obs -> SDSS z=0 (measured on continuum-only model)
+        4. k-correction: SDSS z_obs -> SDSS z=0 (measured on the per-object
+           full-wavelength stellar continuum SED from
+           ``ContinuumTools.build_stellar_continuum``; the same SED-based
+           delta is used in both the default and ONLY_CONT chains)
 
     The same chain is run a second time on the ONLY_CONT model variants (where
     smooth_continuum is dropped from the flux) and returned alongside under
@@ -1044,8 +1146,9 @@ def apply_photometric_corrections(cat, model_phot_table):
         is_south (1=DECam, 0=BASS).
     model_phot_table : astropy Table
         Output of compute_photometry_catalog, with columns for DECam/BASS/SDSS
-        model photometry (default and ``*_ONLY_CONT`` variants), HALPHA_EW /
-        HALPHA_EW_IVAR, and the SPECPHOT-derived KCORR01_SDSS_G / KCORR01_SDSS_R.
+        model photometry (default and ``*_ONLY_CONT`` variants), the SED-based
+        k-correction columns ``g/r_sdss_obs_SED`` and ``g/r_sdss_z0_SED``, and
+        ``HALPHA_EW`` / ``HALPHA_EW_IVAR``.
 
     Returns
     -------
@@ -1053,12 +1156,13 @@ def apply_photometric_corrections(cat, model_phot_table):
         Keys include all intermediate deltas and final corrected magnitudes
         for both chains:
         - delta_bass2decam_g/r, delta_neb_g/r, delta_neb_g/r_err,
-          delta_decam2sdss_g/r, delta_kcorr_g/r
+          delta_decam2sdss_g/r, delta_kcorr_g/r (SED-based)
         - mag_g_sdss_z0, mag_r_sdss_z0  (final corrected apparent mags)
         - mag_g_sdss_z0_err, mag_r_sdss_z0_err
-        - <same set with ``_ONLY_CONT`` suffix, except no _err keys>
+        - <same set with ``_ONLY_CONT`` suffix, except no _err keys>;
+          delta_kcorr_g/r_ONLY_CONT equals delta_kcorr_g/r by construction
+          since both chains share the same SED-based k-correction.
         - halpha_ew, halpha_ew_ivar
-        - kcorr01_sdss_g, kcorr01_sdss_r  (passthrough from FASTSPEC SPECPHOT)
     """
     n = len(cat)
     is_south = np.asarray(cat["is_south"].data, dtype=int)
@@ -1066,8 +1170,14 @@ def apply_photometric_corrections(cat, model_phot_table):
 
     halpha_ew = np.asarray(model_phot_table["HALPHA_EW"].data, dtype=float)
     halpha_ew_ivar = np.asarray(model_phot_table["HALPHA_EW_IVAR"].data, dtype=float)
-    kcorr01_sdss_g = np.asarray(model_phot_table["KCORR01_SDSS_G"].data, dtype=float)
-    kcorr01_sdss_r = np.asarray(model_phot_table["KCORR01_SDSS_R"].data, dtype=float)
+
+    g_sdss_obs_SED = np.asarray(model_phot_table["g_sdss_obs_SED"].data, dtype=float)
+    r_sdss_obs_SED = np.asarray(model_phot_table["r_sdss_obs_SED"].data, dtype=float)
+    g_sdss_z0_SED  = np.asarray(model_phot_table["g_sdss_z0_SED"].data, dtype=float)
+    r_sdss_z0_SED  = np.asarray(model_phot_table["r_sdss_z0_SED"].data, dtype=float)
+
+    delta_kcorr_g_SED = g_sdss_z0_SED - g_sdss_obs_SED
+    delta_kcorr_r_SED = r_sdss_z0_SED - r_sdss_obs_SED
 
     mag_g_in = np.array(cat["MAG_G"].data, dtype=float)
     mag_r_in = np.array(cat["MAG_R"].data, dtype=float)
@@ -1089,14 +1199,15 @@ def apply_photometric_corrections(cat, model_phot_table):
         r_bass_w_emi=model_phot_table["r_bass_w_emi"].data,
         g_sdss_no_emi=model_phot_table["g_sdss_no_emi"].data,
         r_sdss_no_emi=model_phot_table["r_sdss_no_emi"].data,
-        g_sdss_z0_no_emi=model_phot_table["g_sdss_z0_no_emi"].data,
-        r_sdss_z0_no_emi=model_phot_table["r_sdss_z0_no_emi"].data,
+        g_kcorr_delta=delta_kcorr_g_SED,
+        r_kcorr_delta=delta_kcorr_r_SED,
         label="",
     )
 
     # ------------------------------------------------------------------
     # ONLY_CONT chain: continuum (+ emission for w_emi), no smooth_continuum
-    # Same arithmetic, only the model photometry inputs differ.
+    # Same arithmetic, only the model photometry inputs differ. The
+    # k-correction is the same SED-based delta as in the default chain.
     # ------------------------------------------------------------------
     chain_only_cont = _run_correction_chain(
         mag_g_in, mag_r_in, north_mask,
@@ -1108,8 +1219,8 @@ def apply_photometric_corrections(cat, model_phot_table):
         r_bass_w_emi=model_phot_table["r_bass_w_emi_ONLY_CONT"].data,
         g_sdss_no_emi=model_phot_table["g_sdss_no_emi_ONLY_CONT"].data,
         r_sdss_no_emi=model_phot_table["r_sdss_no_emi_ONLY_CONT"].data,
-        g_sdss_z0_no_emi=model_phot_table["g_sdss_z0_no_emi_ONLY_CONT"].data,
-        r_sdss_z0_no_emi=model_phot_table["r_sdss_z0_no_emi_ONLY_CONT"].data,
+        g_kcorr_delta=delta_kcorr_g_SED,
+        r_kcorr_delta=delta_kcorr_r_SED,
         label="[ONLY_CONT] ",
     )
 
@@ -1147,8 +1258,6 @@ def apply_photometric_corrections(cat, model_phot_table):
         "mag_r_sdss_z0_err": mag_r_sdss_z0_err,
         "halpha_ew": halpha_ew,
         "halpha_ew_ivar": halpha_ew_ivar,
-        "kcorr01_sdss_g": kcorr01_sdss_g,
-        "kcorr01_sdss_r": kcorr01_sdss_r,
     }
 
     for k in (

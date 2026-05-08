@@ -68,7 +68,6 @@ def run_nebular_correction_int_v2(
     gal_type,
     ncore_neb=16,
     overwrite=True,
-    compute_kcorr_z01_validation=False,
 ):
     """
     Read ``{save_filename}`` as ``*_INT_V2.fits`` under ``save_folder``, run FastSpec model
@@ -101,10 +100,14 @@ def run_nebular_correction_int_v2(
     smooth_continuum, and ``LOGM_M24_FIDU_CORR_ERR`` is computed from the new
     default continuum-only chain.
 
-    The FastSpecFit SPECPHOT k-corrections ``KCORR01_SDSS_G`` and
-    ``KCORR01_SDSS_R`` (band-shifted to z=0.1) are now propagated through and
-    written into the NEBCORR table, mirroring how ``HALPHA_EW`` is read from
-    the FASTSPEC HDU.
+    The k-correction step (SDSS observed frame -> z=0) uses the per-object
+    full-wavelength stellar continuum SED from
+    ``ContinuumTools.build_stellar_continuum``, integrated through SDSS g/r
+    at observed and rest frames. The resulting ``g/r_sdss_obs_SED`` and
+    ``g/r_sdss_z0_SED`` columns are produced by ``compute_photometry_catalog``
+    and feed ``DELTA_MAG_{G,R}_KCORR``. Because both chain variants now share
+    the same SED-based k-correction, the legacy ``DELTA_MAG_{G,R}_KCORR_W_SMOOTH``
+    diagnostic is no longer emitted.
 
     Parameters
     ----------
@@ -119,16 +122,8 @@ def run_nebular_correction_int_v2(
         Parallel workers for ``compute_photometry_catalog``.
     overwrite : bool
         If False, reuse ``model_photometry_diffs_{gal_type}.fits`` when TARGETIDs match
-        and the cache contains both the ``*_ONLY_CONT`` and ``KCORR01_SDSS_{G,R}``
+        and the cache contains both the ``*_ONLY_CONT`` and ``g/r_sdss_z0_SED``
         columns.  Otherwise the cache is recomputed.
-    compute_kcorr_z01_validation : bool
-        If True, also compute SDSS g/r on (continuum + emission, no smooth_continuum)
-        in observed frame and band-shifted to z=0.1, and add four diagnostic columns
-        ``MAG_G/R_SDSS_MODEL_WEMI_NOSMOOTH`` and ``MAG_G/R_SDSS_Z01_MODEL_WEMI_NOSMOOTH``
-        to the NEBCORR output (for cross-checks against fastspec ``KCORR01_SDSS_*``).
-        Off by default. When flipping this on with an existing cached
-        ``model_photometry_diffs_{gal_type}.fits``, set ``overwrite=True`` (or delete
-        the cache) so the new columns are recomputed.
     """
     from fastspec_funcs import (
         compute_photometry_catalog,
@@ -167,25 +162,24 @@ def run_nebular_correction_int_v2(
         res_tids = set(result_samp_i["TARGETID"].data)
         cat_tids_match = (cat_tids == res_tids)
         has_only_cont = "g_model_no_emi_ONLY_CONT" in result_samp_i.colnames
-        has_kcorr01 = (
-            "KCORR01_SDSS_G" in result_samp_i.colnames
-            and "KCORR01_SDSS_R" in result_samp_i.colnames
+        has_sed_kcorr = (
+            "g_sdss_z0_SED" in result_samp_i.colnames
+            and "r_sdss_z0_SED" in result_samp_i.colnames
         )
-        if (not cat_tids_match) or (not has_only_cont) or (not has_kcorr01):
+        if (not cat_tids_match) or (not has_only_cont) or (not has_sed_kcorr):
             reason = []
             if not cat_tids_match:
                 reason.append("TARGETIDs mismatch")
             if not has_only_cont:
                 reason.append("missing ONLY_CONT columns")
-            if not has_kcorr01:
-                reason.append("missing KCORR01_SDSS_G/R columns")
+            if not has_sed_kcorr:
+                reason.append("missing g/r_sdss_z0_SED columns")
             print(f"WARNING: cached result stale ({', '.join(reason)}). Recomputing...")
             result_samp_i = compute_photometry_catalog(
                 samp_i_cat,
                 compute_data_photometry=False,
                 save_path=neb_photo_path,
                 ncore=ncore_neb,
-                compute_kcorr_z01_validation=compute_kcorr_z01_validation,
             )
     else:
         result_samp_i = compute_photometry_catalog(
@@ -193,7 +187,6 @@ def run_nebular_correction_int_v2(
             compute_data_photometry=False,
             save_path=neb_photo_path,
             ncore=ncore_neb,
-            compute_kcorr_z01_validation=compute_kcorr_z01_validation,
         )
 
     result_tid_to_idx = {tid: idx for idx, tid in enumerate(result_samp_i["TARGETID"].data)}
@@ -225,8 +218,6 @@ def run_nebular_correction_int_v2(
 
     halpha_ew = corrections["halpha_ew"]
     halpha_ew_ivar = corrections["halpha_ew_ivar"]
-    kcorr01_sdss_g = corrections["kcorr01_sdss_g"]
-    kcorr01_sdss_r = corrections["kcorr01_sdss_r"]
 
     # Diagnostic plot uses the continuum-only nebular delta (the new default).
     diag_plot_path = save_folder + f"/neb_correction_diagnostic_{gal_type}.png"
@@ -351,10 +342,8 @@ def run_nebular_correction_int_v2(
     samp_i_cat_cut["DELTA_MAG_G_DECAM2SDSS_W_SMOOTH"] = corrections["delta_decam2sdss_g"][keep_mask]
     samp_i_cat_cut["DELTA_MAG_R_DECAM2SDSS_W_SMOOTH"] = corrections["delta_decam2sdss_r"][keep_mask]
 
-    samp_i_cat_cut["DELTA_MAG_G_KCORR"]          = corrections["delta_kcorr_g_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_R_KCORR"]          = corrections["delta_kcorr_r_ONLY_CONT"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_G_KCORR_W_SMOOTH"] = corrections["delta_kcorr_g"][keep_mask]
-    samp_i_cat_cut["DELTA_MAG_R_KCORR_W_SMOOTH"] = corrections["delta_kcorr_r"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_G_KCORR"]          = corrections["delta_kcorr_g"][keep_mask]
+    samp_i_cat_cut["DELTA_MAG_R_KCORR"]          = corrections["delta_kcorr_r"][keep_mask]
 
     samp_i_cat_cut["MAG_G_SDSS_Z0"]          = mag_g_final[keep_mask]
     samp_i_cat_cut["MAG_R_SDSS_Z0"]          = mag_r_final[keep_mask]
@@ -369,8 +358,6 @@ def run_nebular_correction_int_v2(
 
     samp_i_cat_cut["HALPHA_EW"]      = halpha_ew[keep_mask]
     samp_i_cat_cut["HALPHA_EW_IVAR"] = halpha_ew_ivar[keep_mask]
-    samp_i_cat_cut["KCORR01_SDSS_G"] = kcorr01_sdss_g[keep_mask]
-    samp_i_cat_cut["KCORR01_SDSS_R"] = kcorr01_sdss_r[keep_mask]
 
     # Model magnitudes: unsuffixed = continuum only; _W_SMOOTH = continuum + smooth.
     # The model_photometry_diffs cache keeps its existing column names
@@ -400,12 +387,6 @@ def run_nebular_correction_int_v2(
     samp_i_cat_cut["MAG_R_SDSS_Z0_MODEL_NOEMI"]          = result_samp_i["r_sdss_z0_no_emi_ONLY_CONT"][keep_mask]
     samp_i_cat_cut["MAG_G_SDSS_Z0_MODEL_NOEMI_W_SMOOTH"] = result_samp_i["g_sdss_z0_no_emi"][keep_mask]
     samp_i_cat_cut["MAG_R_SDSS_Z0_MODEL_NOEMI_W_SMOOTH"] = result_samp_i["r_sdss_z0_no_emi"][keep_mask]
-
-    if compute_kcorr_z01_validation:
-        samp_i_cat_cut["MAG_G_SDSS_MODEL_WEMI_NOSMOOTH"]     = result_samp_i["g_sdss_w_emi_no_smooth"][keep_mask]
-        samp_i_cat_cut["MAG_R_SDSS_MODEL_WEMI_NOSMOOTH"]     = result_samp_i["r_sdss_w_emi_no_smooth"][keep_mask]
-        samp_i_cat_cut["MAG_G_SDSS_Z01_MODEL_WEMI_NOSMOOTH"] = result_samp_i["g_sdss_z01_w_emi_no_smooth"][keep_mask]
-        samp_i_cat_cut["MAG_R_SDSS_Z01_MODEL_WEMI_NOSMOOTH"] = result_samp_i["r_sdss_z01_w_emi_no_smooth"][keep_mask]
 
     # Mg summary uses the new default MAG_G_SDSS_Z0 (continuum-only chain).
     d_in_pc = np.asarray(samp_i_cat_cut["DIST_MPC_FIDU"].data, dtype=float) * 1e6
@@ -1815,10 +1796,8 @@ if __name__ == '__main__':
                 gal_type,
                 ncore_neb=ncore_neb,
                 overwrite=overwrite_neb,
-                compute_kcorr_z01_validation=True,
             )
 
-        #TODO: add a function to fastspec where we can easily make a diagnostic plot of comparing smooth version of observed spectra and best fit template!
 
     if False:
         
