@@ -1740,7 +1740,7 @@ if __name__ == '__main__':
     if run_neb_correction:
         overwrite_neb = True
         # gal_types_neb = gal_types + ["OTHER"]
-        gal_types_neb = ["BGS_BRIGHT","BGS_FAINT","ELG", "LOWZ"]
+        gal_types_neb = ["BGS_FAINT","ELG", "LOWZ"]
         
         for gal_type in gal_types_neb:
             save_filename = save_filenames[gal_type]
@@ -1751,6 +1751,13 @@ if __name__ == '__main__':
                 ncore_neb=ncore_neb,
                 overwrite=overwrite_neb,
             )
+
+
+    # TODO: need to run the below parts, then run the photometry pipeline and download spectra+imaging maybe?
+    # need to check if any new objects have entered ... 
+    # then first thing is to finalize all the stellar mass plots and maskbits as that affects everything downstream
+    # the nnmf and image ssl stuff finalize can wait ... 
+    # need to also have appendix section on number of templates justification
 
 
     if False:

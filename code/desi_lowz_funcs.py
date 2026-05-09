@@ -1539,26 +1539,20 @@ def make_subplots(ncol=3, nrow=1, row_spacing=1.1, col_spacing=1.1, plot_size=2,
         col_spacing = [col_spacing] * (ncol + 1)
     assert len(row_spacing) == nrow + 1, f"need {nrow+1} row spacings, got {len(row_spacing)}"
     assert len(col_spacing) == ncol + 1, f"need {ncol+1} col spacings, got {len(col_spacing)}"
-
     tot_len    = plot_size * ncol + sum(col_spacing)
     tot_height = plot_size * nrow + sum(row_spacing)
-
     fig = plt.figure(figsize=(tot_len, tot_height))
-
     h = []
     for j in range(ncol):
         h.append(Size.Fixed(col_spacing[j]))
         h.append(Size.Fixed(plot_size))
     h.append(Size.Fixed(col_spacing[-1]))
-
     v = []
     for i in range(nrow):
         v.append(Size.Fixed(row_spacing[i]))
         v.append(Size.Fixed(plot_size))
     v.append(Size.Fixed(row_spacing[-1]))
-
     divider = Divider(fig, (0, 0, 1, 1), h, v, aspect=False)
-
     all_axes = []
     for i in range(nrow):
         for j in range(ncol):
@@ -1566,13 +1560,11 @@ def make_subplots(ncol=3, nrow=1, row_spacing=1.1, col_spacing=1.1, plot_size=2,
                 divider.get_position(),
                 axes_locator=divider.new_locator(nx=2*j + 1, ny=2*i + 1))
             all_axes.append(axi)
-
     if return_fig:
         return fig, all_axes
     return all_axes
 
-
-
+    
 def make_tall_subplots(
     nrow=3,
     ncol=1,

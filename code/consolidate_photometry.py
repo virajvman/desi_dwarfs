@@ -2413,15 +2413,12 @@ if __name__ == '__main__':
         #update the dwarf_maskbit with some weird spectra masks
         add_wrong_redrock_maskbit(main_cat_outpath, main_datamodel)
 
-
-    # TODO: add a column indicating error on mstar too larger? it should not be? but
-
+    TODO: update the mstar maskbit computation so that we no longer flag objects based on k corrections!
+    
     TODO: add a function that loads the catalog of interest for us, with MSTAR_MASKBIT and DWARF_MASKBIT as per our wishes. So for instance, in DWARF_MASKBIT, we do not flag 15 one.
-    In MSTAR_MASKBIT, we do not flag the low continuum objects 
+    In MSTAR_MASKBIT, we do not flag the low continuum objects in our error budget? confirm for low-continuum objects, how their mstars are computed.
+    Describe in paper, how much of an impact happens if we were to do approximate stellar mass comp as for these low-cont vs. full method. 
 
-    TODO: we need to add some more columns, where we compute the g and r band photometry on the DESI model fit, with and without smooth continuum so we can compare with fibertotmag?
-    and then we rederive the nebular and kcorr etc. with no smooth and smooth and we will compare the k corrections for both those methods!
-    Maybe the weird spike at z~0.15 vanishes when we do not use smooth continuum? smooth continuum is additive .. will also help us diagnose if sky is issue or not?
 
 
 
