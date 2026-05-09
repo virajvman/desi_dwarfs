@@ -914,7 +914,7 @@ def run_aperture_pipe(input_dict):
 
 
         ## MAKING
-        ax = make_subplots(ncol = 5, nrow = 2, row_spacing = 0.5,col_spacing=0.4, label_font_size = 17,plot_size = 3,direction = "horizontal")
+        ax = make_subplots(ncol = 5, nrow = 2, row_spacing = 0.5,col_spacing=0.4, plot_size = 3,direction = "horizontal")
 
         ##we have so far dealt with deblended segments being part of main galaxy segment. What about individual sources?
 
