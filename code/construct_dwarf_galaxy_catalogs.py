@@ -1421,12 +1421,12 @@ if __name__ == '__main__':
     from desi_lowz_funcs import match_c_to_catalog, get_stellar_mass_mia, calc_normalized_dist
     from desi_lowz_funcs import get_sweep_filename, save_table, is_target_in_south
 
-    process_sga = False
+    process_sga = True
     compute_nam_dists = True
     save_int_catalog = False
 
     #should the photometry and stellar masses be corrected for nebular emission contamination?
-    run_neb_correction = True
+    run_neb_correction = False
     ncore_neb = 16
 
     zred_cuts = { "BGS_BRIGHT" : 0.4, "BGS_FAINT": 0.4, "LOWZ": 0.4, "ELG":0.5 }
@@ -1753,14 +1753,15 @@ if __name__ == '__main__':
             )
 
 
-    # TODO: need to run the below parts, then run the photometry pipeline and download spectra+imaging maybe?
+    # TODO: need to run the below parts, then run the photometry pipeline for both shreds and clean and download spectra+imaging maybe?
     # need to check if any new objects have entered ... 
     # then first thing is to finalize all the stellar mass plots and maskbits as that affects everything downstream
     # the nnmf and image ssl stuff finalize can wait ... 
     # need to also have appendix section on number of templates justification
 
+    #Before I do any more running i can just check by comparing with files saved in next stage if there is a need to rerun a lot of stuff or if there are new objects etc. 
 
-    if False:
+    if True:
         
         for i,gal_type in enumerate(gal_types):
             save_filename = save_filenames[gal_type]

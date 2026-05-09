@@ -9,7 +9,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=192GB
-#SBATCH --time=02:00:00
+#SBATCH --time=01:00:00
 #SBATCH --job-name=lowz_shred
 #SBATCH --output=aperture_shred_lowz.log
 
