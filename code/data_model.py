@@ -173,9 +173,7 @@ main_datamodel = {
         "description": (
             "Bitwise mask for the LOG_MSTAR_M24 derivation: bit 0 = low continuum SNR "
             "(nebular-subtracted g/r fiber photometry, threshold SNR 10); "
-            "bit 1 = M_g,0 < -18.5 after corrections; "
-            "bit 2 = model k-corr (DELTA_MAG_*_KCORR) outlier vs Chilingarian polynomial "
-            "at Z and SDSS g-r from MAG_*_SDSS_MODEL_NOEMI (contours in kcorr_flag_contours.pkl). "
+            "bit 1 = M_g,0 < -18.5 after corrections. "
             "Copied with LOG_MSTAR_M24 from PROPERTY_SOURCE_TARGETID during associated-fiber consolidation."
         ),
         "dtype": "int32"

@@ -2413,8 +2413,6 @@ if __name__ == '__main__':
         #update the dwarf_maskbit with some weird spectra masks
         add_wrong_redrock_maskbit(main_cat_outpath, main_datamodel)
 
-    TODO: update the mstar maskbit computation so that we no longer flag objects based on k corrections!
-    
     TODO: add a function that loads the catalog of interest for us, with MSTAR_MASKBIT and DWARF_MASKBIT as per our wishes. So for instance, in DWARF_MASKBIT, we do not flag 15 one.
     In MSTAR_MASKBIT, we do not flag the low continuum objects in our error budget? confirm for low-continuum objects, how their mstars are computed.
     Describe in paper, how much of an impact happens if we were to do approximate stellar mass comp as for these low-cont vs. full method. 

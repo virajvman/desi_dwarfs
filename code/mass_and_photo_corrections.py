@@ -17,8 +17,7 @@ import h5py
 from tqdm import tqdm
 from desispec.interpolation import resample_flux
 from fastspec_funcs import measure_photo_batch, get_fastspecfit_path
-from desi_lowz_funcs import get_stellar_mass_mia, g_kcorr, r_kcorr
-from kcorr_flag import load_flag_interpolators, flag_kcorr_outliers
+from desi_lowz_funcs import get_stellar_mass_mia, g_kcorr
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -52,56 +51,6 @@ FASTSPEC_DELTA_MAG_COLS = (
 # FITS extension name for spectral / fastspec-derived columns in the multi-extension
 # dwarf catalog (not the iron fastspec VAC, which remains FASTSPEC).
 DWARF_CATALOG_SPEC_HDU = "SPEC_DERIVED"
-
-# Pre-computed 95% k-corr residual envelopes (ELG/BGS) for MSTAR_MASKBIT bit 2.
-_KCORR_FLAG_PKL_CANDIDATES = (
-    os.path.join(os.path.dirname(__file__), "..", "data", "kcorr_flag_contours.pkl"),
-    "/global/homes/v/virajvm/DESI2_LOWZ/desi_dwarfs/data/kcorr_flag_contours.pkl",
-)
-
-
-def _resolve_kcorr_flag_pkl_path(explicit_path):
-    """Return first existing path, or None."""
-    if explicit_path is not None and os.path.isfile(explicit_path):
-        return os.path.abspath(explicit_path)
-    for p in _KCORR_FLAG_PKL_CANDIDATES:
-        if os.path.isfile(p):
-            return os.path.abspath(p)
-    return None
-
-
-def _kcorr_mstar_outlier_mask(main_cat, fspec_cat, interpolators):
-    """
-    True where the model k-correction (DELTA_MAG_*_KCORR) is an outlier vs
-    Chilingarian polynomial at the same (SDSS g-r, Z). Only rows with
-    0 <= Z < 0.5 and finite SDSS no-emission model mags and k deltas are
-    considered; others do not get the bit set.
-    """
-    t_main = np.asarray(main_cat["TARGETID"], dtype=np.int64)
-    t_spec = np.asarray(fspec_cat["TARGETID"], dtype=np.int64)
-    if t_main.shape != t_spec.shape or np.any(t_main != t_spec):
-        raise ValueError("MAIN and SPEC_DERIVED TARGETID rows must match for k-corr flag")
-
-    z = np.asarray(main_cat["Z"], dtype=np.float64)
-    mag_g = np.asarray(fspec_cat["MAG_G_SDSS_MODEL_NOEMI"], dtype=np.float64)
-    mag_r = np.asarray(fspec_cat["MAG_R_SDSS_MODEL_NOEMI"], dtype=np.float64)
-    dkg = np.asarray(fspec_cat["DELTA_MAG_G_KCORR"], dtype=np.float64)
-    dkr = np.asarray(fspec_cat["DELTA_MAG_R_KCORR"], dtype=np.float64)
-    gr = mag_g - mag_r
-    poly_g = g_kcorr(gr, z)
-    poly_r = r_kcorr(gr, z)
-    #we add these because our delta kcorr are the opposite sign convention as the polynomial!
-    delta_k_g = poly_g + dkg
-    delta_k_r = poly_r + dkr
-    is_elg = np.asarray(np.array(main_cat["SAMPLE"], dtype=str)) == "ELG"
-    valid = (
-        np.isfinite(z) & (z >= 0.0) & (z < 0.5)
-        & np.isfinite(gr) & np.isfinite(dkg) & np.isfinite(dkr)
-    )
-    flag_g, flag_r = flag_kcorr_outliers(
-        z, delta_k_g, delta_k_r, is_elg, interpolators
-    )
-    return (flag_g | flag_r) & valid
 
 # ---------------------------------------------------------------------------
 # Utility helpers (needed to avoid circular imports with consolidate_photometry)
@@ -553,7 +502,6 @@ def compute_emission_subtracted_photo_errors(
     ncores=8,
     verbose=True,
     rerun_nans=True,
-    kcorr_flag_pkl_path=None,
 ):
     """
     Subtract fastspec emission-line models from observed spectra, measure
@@ -587,17 +535,11 @@ def compute_emission_subtracted_photo_errors(
     rerun_nans : bool
         If True, cached rows whose g_noemi_err is NaN are treated as missing
         and reprocessed. Useful after re-downloading the spectra HDF5 file.
-    kcorr_flag_pkl_path : str or None
-        Path to `kcorr_flag_contours.pkl` for MSTAR_MASKBIT bit 2. If None, uses
-        the first file that exists among the repo `data/` path and a NERSC
-        default. If no file is found, bit 2 is left unset and a message is
-        printed when *verbose* is True.
 
     Updates the multi-extension FITS catalog at *cat_path*:
       - MAIN HDU: adds LOG_MSTAR_M24_ERR; sets MSTAR_MASKBIT bit 0 (low continuum
-        SNR in nebular-subtracted g/r fiber photometry, threshold 10) and
-        bit 2 (model k-corr vs Chilingarian polynomial outlier) when a contour
-        pickle is available; refits bright/SNR bits as before
+        SNR in nebular-subtracted g/r fiber photometry, threshold 10); refits
+        bright bits as before
       - SPEC_DERIVED HDU: adds MAG_G_FIBER_NOEMI, MAG_R_FIBER_NOEMI,
         MAG_G_FIBER_NOEMI_ERR, MAG_R_FIBER_NOEMI_ERR
     """
@@ -839,36 +781,6 @@ def compute_emission_subtracted_photo_errors(
     # ── 7b. MSTAR_MASKBIT bit 0: low continuum SNR (nebular-subtracted g/r) ──
     mstar_maskbits[low_cont_snr_mask] |= np.int64(1) << 0
 
-    # ── 7c. MSTAR_MASKBIT bit 2: model k-corr far from Chilingarian polynomial
-    kcorr_cols = (
-        "MAG_G_SDSS_MODEL_NOEMI",
-        "MAG_R_SDSS_MODEL_NOEMI",
-        "DELTA_MAG_G_KCORR",
-        "DELTA_MAG_R_KCORR",
-    )
-    pkl_path = _resolve_kcorr_flag_pkl_path(kcorr_flag_pkl_path)
-    missing_kcorr_cols = [c for c in kcorr_cols if c not in fspec_cat.colnames]
-    if pkl_path is None:
-        if verbose:
-            print("  MSTAR_MASKBIT bit 2 (k-corr outlier): no contour file found; "
-                  "skipping (set kcorr_flag_pkl_path or add data/kcorr_flag_contours.pkl).")
-    elif missing_kcorr_cols:
-        if verbose:
-            print("  MSTAR_MASKBIT bit 2 (k-corr outlier): SPEC_DERIVED missing "
-                  f"required column(s) {missing_kcorr_cols}; skipping.")
-    else:
-        print("Flagging the k correct outliers in MSTAR MASKBIT!")
-        kcorr_outlier = _kcorr_mstar_outlier_mask(
-            main_cat, fspec_cat, load_flag_interpolators(pkl_path)
-        )
-        mstar_maskbits[kcorr_outlier] |= np.int64(1) << 2
-        if verbose:
-            n_kc = int(np.count_nonzero(kcorr_outlier))
-            print(
-                f"  MSTAR_MASKBIT bit 2 (k-corr outlier, contours {pkl_path}): "
-                f"flagged {n_kc}/{n_objects} objects"
-            )
-
     main_cat["MSTAR_MASKBIT"] = mstar_maskbits.astype(np.int32)
     if "DWARF_MASKBIT" in main_cat.colnames:
         cols = list(main_cat.colnames)
@@ -934,6 +846,6 @@ def compute_emission_subtracted_photo_errors(
 
     print(f"Updated {cat_path}:")
     print(f"  MAIN HDU: added LOG_MSTAR_M24_ERR; low-SNR fallback LOG_MSTAR_M24; "
-          f"MSTAR_MASKBIT (bits 0, 1, 2 as applicable); DWARF/MSTAR bright bits refit for low-SNR rows")
+          f"MSTAR_MASKBIT (bits 0, 1 as applicable); DWARF/MSTAR bright bits refit for low-SNR rows")
     print(f"  SPEC_DERIVED HDU: added MAG_G_FIBER_NOEMI, MAG_R_FIBER_NOEMI, MAG_G_FIBER_NOEMI_ERR, MAG_R_FIBER_NOEMI_ERR")
     print("=" * 60)
