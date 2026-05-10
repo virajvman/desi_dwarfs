@@ -853,7 +853,7 @@ def cog_fitting_subfunction(same_input_dict,reconstruct_galaxy_dict, parent_gala
     dec = same_input_dict["dec"]
     zred = same_input_dict["zred"]
 
-    fig,ax = make_subplots(ncol = 5, nrow = 2, row_spacing = 0.5,col_spacing=1.2, label_font_size = 17,plot_size = 3,direction = "horizontal", return_fig=True)
+    fig,ax = make_subplots(ncol = 5, nrow = 2, row_spacing = 0.5,col_spacing=1.2, plot_size = 3,direction = "horizontal", return_fig=True)
 
     radii_scale = np.arange(1.25,4.25,0.25)
 
