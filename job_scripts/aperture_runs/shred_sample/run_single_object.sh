@@ -19,6 +19,15 @@ RUN_COG=true
 RUN_SHIFTER=true
 TGID=39628516139993581
 
+# Match dwarf_photo_pipeline consolidated catalog for tractor incremental mode.
+# With -tgids, tractor_model.py skips photometry-catalog incremental filtering.
+END_NAME=""
+OVERWRITE_PHOTOMETRY=false
+TRACTOR_PHOTO_ARGS=(-end_name "$END_NAME")
+if [ "$OVERWRITE_PHOTOMETRY" = true ]; then
+    TRACTOR_PHOTO_ARGS+=(-overwrite_photometry)
+fi
+
 # Command-line args
 BASE_ARGS="-sample $SAMPLE -min 0 -max 100000 -run_parr -ncores 1 -overwrite -nchunks 1 -no_cnn_cut -use_sample $SAMPLE_TYPE -tgids $TGID"
 
@@ -37,9 +46,9 @@ fi
 if [ "$RUN_SHIFTER" = true ]; then
     shifterimg pull docker:legacysurvey/legacypipe:DR10.3.4
     
-    shifter --image docker:legacysurvey/legacypipe:DR10.3.4 python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -img_source -use_sample shred
+    shifter --image docker:legacysurvey/legacypipe:DR10.3.4 python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -img_source -use_sample $SAMPLE_TYPE "${TRACTOR_PHOTO_ARGS[@]}"
     
-    shifter --image docker:legacysurvey/legacypipe:DR10.3.4 python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -parent_galaxy -bkg_source -blend_remove_source -use_sample $SAMPLE_TYPE -tgids $TGID
+    shifter --image docker:legacysurvey/legacypipe:DR10.3.4 python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -parent_galaxy -bkg_source -blend_remove_source -use_sample $SAMPLE_TYPE -tgids $TGID "${TRACTOR_PHOTO_ARGS[@]}"
 
 fi
 

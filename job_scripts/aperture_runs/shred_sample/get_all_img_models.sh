@@ -23,13 +23,21 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 
+# Match dwarf_photo_pipeline consolidated catalog for tractor incremental mode
+END_NAME=""
+OVERWRITE_PHOTOMETRY=false
+TRACTOR_PHOTO_ARGS=(-end_name "$END_NAME")
+if [ "$OVERWRITE_PHOTOMETRY" = true ]; then
+    TRACTOR_PHOTO_ARGS+=(-overwrite_photometry)
+fi
+
 
 shifterimg pull docker:legacysurvey/legacypipe:DR10.3.4
 
-shifter --image docker:legacysurvey/legacypipe:DR10.3.4 python3 desi_dwarfs/code/tractor_model.py -sample BGS_BRIGHT -img_source -use_sample shred
-shifter --image docker:legacysurvey/legacypipe:DR10.3.4 python3 desi_dwarfs/code/tractor_model.py -sample BGS_FAINT -img_source -use_sample shred
-shifter --image docker:legacysurvey/legacypipe:DR10.3.4 python3 desi_dwarfs/code/tractor_model.py -sample ELG -img_source -use_sample shred
-shifter --image docker:legacysurvey/legacypipe:DR10.3.4 python3 desi_dwarfs/code/tractor_model.py -sample LOWZ -img_source -use_sample shred
+shifter --image docker:legacysurvey/legacypipe:DR10.3.4 python3 desi_dwarfs/code/tractor_model.py -sample BGS_BRIGHT -img_source -use_sample shred "${TRACTOR_PHOTO_ARGS[@]}"
+shifter --image docker:legacysurvey/legacypipe:DR10.3.4 python3 desi_dwarfs/code/tractor_model.py -sample BGS_FAINT -img_source -use_sample shred "${TRACTOR_PHOTO_ARGS[@]}"
+shifter --image docker:legacysurvey/legacypipe:DR10.3.4 python3 desi_dwarfs/code/tractor_model.py -sample ELG -img_source -use_sample shred "${TRACTOR_PHOTO_ARGS[@]}"
+shifter --image docker:legacysurvey/legacypipe:DR10.3.4 python3 desi_dwarfs/code/tractor_model.py -sample LOWZ -img_source -use_sample shred "${TRACTOR_PHOTO_ARGS[@]}"
 
 
 

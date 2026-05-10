@@ -660,6 +660,19 @@ def parse_tgids(value):
         return None
     return [int(x) for x in value.split(',')]
 
+
+def photometry_catalog_path(sample, use_sample, end_name, override_path=None):
+    """Match dwarf_photo_pipeline final merged photometry FITS path."""
+    if override_path:
+        return override_path
+    clean_flag_map = {"shred": "shreds", "clean": "clean", "sga": "sga"}
+    clean_flag = clean_flag_map[use_sample]
+    return (
+        f"/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/"
+        f"iron_{sample}_{clean_flag}_catalog_w_aper_mags{end_name}.fits"
+    )
+
+
     
 def argument_parser():
     '''
@@ -676,6 +689,26 @@ def argument_parser():
     result.add_argument('-parent_galaxy',dest='parent_galaxy', action = "store_true")
     result.add_argument('-tgids',dest="tgids_list", type=parse_tgids) 
     result.add_argument('-overwrite',dest='overwrite', action='store_true')
+    result.add_argument(
+        '-end_name',
+        dest='end_name',
+        type=str,
+        default="",
+        help="Suffix on iron photometry catalog filename (same as dwarf_photo_pipeline -end_name).",
+    )
+    result.add_argument(
+        '-photometry_catalog',
+        dest='photometry_catalog',
+        type=str,
+        default=None,
+        help="Override path to consolidated photometry FITS; default path follows dwarf_photo_pipeline.",
+    )
+    result.add_argument(
+        '-overwrite_photometry',
+        dest='overwrite_photometry',
+        action='store_true',
+        help="If set, do not restrict to TARGETIDs missing from the photometry catalog.",
+    )
     
     return result
 
@@ -697,6 +730,9 @@ if __name__ == '__main__':
     max_num = args.max_num
     tgids_list = args.tgids_list
     overwrite = args.overwrite
+    end_name = args.end_name
+    photometry_catalog_override = args.photometry_catalog
+    overwrite_photometry = args.overwrite_photometry
     
     print(f"Reading the sample = {use_sample}")
     
@@ -719,6 +755,30 @@ if __name__ == '__main__':
         print("List of targetids to process:",tgids_list)
         dwarf_cat = dwarf_cat[np.isin(dwarf_cat['TARGETID'], np.array(tgids_list) )]
         print("Number of targetids to process =", len(dwarf_cat))
+
+    if not overwrite_photometry and tgids_list is None:
+        photometry_path = photometry_catalog_path(
+            sample, use_sample, end_name, photometry_catalog_override
+        )
+        if os.path.exists(photometry_path):
+            existing_cat = Table.read(photometry_path)
+            existing_tgids = set(existing_cat["TARGETID"].data)
+            n_before = len(dwarf_cat)
+            new_mask = ~np.isin(dwarf_cat["TARGETID"].data, list(existing_tgids))
+            dwarf_cat = dwarf_cat[new_mask]
+            print(
+                f"Incremental photometry filter: {n_before} rows in dwarf_cat, "
+                f"{len(existing_tgids)} TARGETIDs in {photometry_path}, "
+                f"{len(dwarf_cat)} new rows for tractor"
+            )
+            if len(dwarf_cat) == 0:
+                print("No new objects to process (tractor incremental). Exiting.")
+                sys.exit(0)
+        else:
+            print(
+                f"Photometry catalog not found at {photometry_path}; "
+                "no incremental TARGETID filter applied."
+            )
 
     dwarf_cat = dwarf_cat[:max_num]
     
