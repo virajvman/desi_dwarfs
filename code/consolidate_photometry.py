@@ -2242,8 +2242,8 @@ if __name__ == '__main__':
     process_clean = True
     compute_mstar_err = True
     add_model_phot = True
-    process_qso_scnd = True
-    process_post_hdu = True
+    process_qso_scnd = False
+    process_post_hdu = False
 
     #make sure the get_fastspec_fit_catalog_V2 function is run before hand in case there are any new columns added
     process_fastspec=True
@@ -2413,9 +2413,13 @@ if __name__ == '__main__':
         #update the dwarf_maskbit with some weird spectra masks
         add_wrong_redrock_maskbit(main_cat_outpath, main_datamodel)
 
-    TODO: add a function that loads the catalog of interest for us, with MSTAR_MASKBIT and DWARF_MASKBIT as per our wishes. So for instance, in DWARF_MASKBIT, we do not flag 15 one.
-    In MSTAR_MASKBIT, we do not flag the low continuum objects in our error budget? confirm for low-continuum objects, how their mstars are computed.
-    Describe in paper, how much of an impact happens if we were to do approximate stellar mass comp as for these low-cont vs. full method. 
+
+    #TODO: validate the above steps what happens if the targetids do not exist ... for now can we just have have blank values attached to them and keep them as is so we can move ahead with fixing stuyff 
+    # can we maybe apply a photometry cut for very red , low-redshift objects?
+
+    # TODO: add a function that loads the catalog of interest for us, with MSTAR_MASKBIT and DWARF_MASKBIT as per our wishes. So for instance, in DWARF_MASKBIT, we do not flag 15 one.
+    # In MSTAR_MASKBIT, we do not flag the low continuum objects in our error budget? confirm for low-continuum objects, how their mstars are computed.
+    # Describe in paper, how much of an impact happens if we were to do approximate stellar mass comp as for these low-cont vs. full method. 
 
 
 

@@ -41,7 +41,7 @@ if [ "$OVERWRITE_PHOTOMETRY" = true ]; then
 fi
 
 # Command-line args
-BASE_ARGS="-sample $SAMPLE -min 0 -max 100000 -run_parr -ncores 64 -overwrite -nchunks 5 -no_cnn_cut -use_sample shred -get_cnn_inputs"
+BASE_ARGS="-sample $SAMPLE -min 0 -max 100000 -run_parr -ncores 64 -overwrite -nchunks 5 -no_cnn_cut -use_sample shred"
 
 # ------------------------------
 # Run steps
@@ -59,10 +59,10 @@ if [ "$RUN_SHIFTER" = true ]; then
     shifterimg pull docker:legacysurvey/legacypipe:DR10.3.4
     
     srun --cpu-bind=cores shifter --image docker:legacysurvey/legacypipe:DR10.3.4 \
-        python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -img_source -use_sample shred "${TRACTOR_PHOTO_ARGS[@]}"
+        python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -img_source -use_sample shred "${TRACTOR_PHOTO_ARGS[@]}" -overwrite
     
     srun --kill-on-bad-exit=1 --cpu-bind=cores shifter --image docker:legacysurvey/legacypipe:DR10.3.4 \
-        python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -parent_galaxy -bkg_source -blend_remove_source -use_sample shred "${TRACTOR_PHOTO_ARGS[@]}"
+        python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -parent_galaxy -bkg_source -blend_remove_source -use_sample shred "${TRACTOR_PHOTO_ARGS[@]}" -overwrite
 fi
 
 

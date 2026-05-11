@@ -41,7 +41,7 @@ if [ "$OVERWRITE_PHOTOMETRY" = true ]; then
 fi
 
 # Command-line args
-BASE_ARGS="-sample $SAMPLE -min 0 -max 100000 -run_parr -ncores 64 -overwrite -nchunks 5 -no_cnn_cut -use_sample sga -get_cnn_inputs"
+BASE_ARGS="-sample $SAMPLE -min 0 -max 100000 -run_parr -ncores 64 -overwrite -nchunks 5 -no_cnn_cut -use_sample sga"
 
 # ------------------------------
 # Run steps
