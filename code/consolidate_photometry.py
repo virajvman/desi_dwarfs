@@ -2231,6 +2231,38 @@ def add_model_photometry_to_fastspec(
 # _load_nebcorr_delta_mag_table and add_delta_magDA_to_fastspec
 # are imported from mass_and_photo_corrections
 
+
+def load_clean_dwarf_catalog(
+    cat_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits",
+    hdu="MAIN",
+    verbose=True,
+):
+    """
+    Read the final multi-extension dwarf catalog and return rows from `hdu`
+    where DWARF_MASKBIT == 0. Prints the number of galaxies before and after.
+    """
+    cat = safe_read_table(cat_path, hdu=hdu)
+    if "DWARF_MASKBIT" not in cat.colnames:
+        raise KeyError(f"{cat_path} ({hdu}): no DWARF_MASKBIT column")
+
+    n_before = len(cat)
+    keep = np.asarray(cat["DWARF_MASKBIT"], dtype=np.int64) == 0
+    cat_clean = cat[keep]
+    n_after = len(cat_clean)
+
+    if verbose:
+        print("=" * 60)
+        print("load_clean_dwarf_catalog")
+        print("=" * 60)
+        print(f"  File: {cat_path}")
+        print(f"  HDU:  {hdu}")
+        print(f"  Galaxies before filter (DWARF_MASKBIT == 0): {n_before}")
+        print(f"  Galaxies after  filter (DWARF_MASKBIT == 0): {n_after} "
+              f"({n_before - n_after} dropped)")
+
+    return cat_clean
+
+
 if __name__ == '__main__':
 
     save_path = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats"
@@ -2414,10 +2446,8 @@ if __name__ == '__main__':
         add_wrong_redrock_maskbit(main_cat_outpath, main_datamodel)
 
 
-    #TODO: validate the above steps what happens if the targetids do not exist ... for now can we just have have blank values attached to them and keep them as is so we can move ahead with fixing stuyff 
     # can we maybe apply a photometry cut for very red , low-redshift objects?
 
-    # TODO: add a function that loads the catalog of interest for us, with MSTAR_MASKBIT and DWARF_MASKBIT as per our wishes. So for instance, in DWARF_MASKBIT, we do not flag 15 one.
     # In MSTAR_MASKBIT, we do not flag the low continuum objects in our error budget? confirm for low-continuum objects, how their mstars are computed.
     # Describe in paper, how much of an impact happens if we were to do approximate stellar mass comp as for these low-cont vs. full method. 
 
