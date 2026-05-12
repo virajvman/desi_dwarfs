@@ -630,14 +630,14 @@ if __name__ == '__main__':
     ##add the columns on image path and file_path to these catalogs!!
     shreds_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v5.fits"
     clean_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v5.fits"
-    # clean_file_2 = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v5_RUN_W_APER.fits"
+    clean_file_2 = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v5_RUN_W_APER.fits"
     sga_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_SGA_matched_dwarfs_REPROCESS_V2.fits"
 
 
     ##Adding the image path and file path (where all the outputs are saved) columns to the catalog if they do not exist
     shreds_cat = Table.read(shreds_file)
     clean_cat = Table.read(clean_file)
-    # clean_cat_2 = Table.read(clean_file_2)
+    clean_cat_2 = Table.read(clean_file_2)
     sga_cat = Table.read(sga_file)
 
     ##we need to be careful here in how we are defining the top folder!! 
@@ -657,11 +657,11 @@ if __name__ == '__main__':
 
     ###
     
-    # if "IMAGE_PATH" in clean_cat_2.colnames and "FILE_PATH" in clean_cat_2.colnames:
-    #     print("image_path and file_path columns already exist in clean TOTAL catalog!")
-    # else:
-    #     print("Adding image_path and file_path to clean TOTAL catalog!")
-    #     add_paths_to_catalog(org_file = clean_file_2, out_file = clean_file_2,top_folder="/pscratch/sd/v/virajvm/redo_photometry_plots/all_good")
+    if "IMAGE_PATH" in clean_cat_2.colnames and "FILE_PATH" in clean_cat_2.colnames:
+        print("image_path and file_path columns already exist in clean TOTAL catalog!")
+    else:
+        print("Adding image_path and file_path to clean TOTAL catalog!")
+        add_paths_to_catalog(org_file = clean_file_2, out_file = clean_file_2,top_folder="/pscratch/sd/v/virajvm/redo_photometry_plots/all_good")
 
     ##
         
@@ -680,7 +680,7 @@ if __name__ == '__main__':
         # add_pcnn_to_shred_catalog(shreds_file,get_all_data=True)
 
     #delete these variables as no longer needed!
-    del shreds_cat, clean_cat, sga_cat #, clean_cat_2
+    del shreds_cat, clean_cat, sga_cat, clean_cat_2
      
     ##################
     ##PART 2: Generate nested folder structure with relevant files for doing photometry

@@ -2242,7 +2242,7 @@ if __name__ == '__main__':
     process_clean = True
     compute_mstar_err = True
     add_model_phot = True
-    process_qso_scnd = False
+    process_qso_scnd = True
     process_post_hdu = False
 
     #make sure the get_fastspec_fit_catalog_V2 function is run before hand in case there are any new columns added

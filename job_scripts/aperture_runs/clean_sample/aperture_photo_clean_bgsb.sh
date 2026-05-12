@@ -9,7 +9,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=128GB
-#SBATCH --time=07:00:00
+#SBATCH --time=08:00:00
 #SBATCH --job-name=bgsb_clean
 #SBATCH --output=aperture_clean_bgsb.log
 
@@ -27,21 +27,21 @@ export NUMEXPR_NUM_THREADS=1
 # Configurable flags
 # ------------------------------
 SAMPLE="BGS_BRIGHT"
-MAKE_CATS=false      # set true/false
-RUN_APER=true
-RUN_COG=true
+MAKE_CATS=true      # set true/false
+RUN_APER=false
+RUN_COG=false
 RUN_SHIFTER=false
 
 # Match dwarf_photo_pipeline consolidated catalog for tractor incremental mode
 END_NAME=""
-OVERWRITE_PHOTOMETRY=false
+OVERWRITE_PHOTOMETRY=true
 TRACTOR_PHOTO_ARGS=(-end_name "$END_NAME")
 if [ "$OVERWRITE_PHOTOMETRY" = true ]; then
     TRACTOR_PHOTO_ARGS+=(-overwrite_photometry)
 fi
 
 # Command-line args
-BASE_ARGS="-sample $SAMPLE -min 0 -max 50000 -run_parr -ncores 64 -overwrite -nchunks 50 -no_cnn_cut -use_sample clean"
+BASE_ARGS="-sample $SAMPLE -min 0 -max 50000 -run_parr -ncores 10 -overwrite -nchunks 50 -no_cnn_cut -use_sample clean"
 
 # ------------------------------
 # Run steps

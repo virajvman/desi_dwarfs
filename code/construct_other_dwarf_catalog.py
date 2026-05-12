@@ -409,7 +409,7 @@ def main(
                 output_dir,
                 other_base,
                 "OTHER",
-                ncore_neb=ncore_neb,
+                ncore_neb=4,
                 overwrite=overwrite_neb,
             )
 
