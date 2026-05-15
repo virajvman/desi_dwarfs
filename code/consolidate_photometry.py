@@ -2275,7 +2275,7 @@ if __name__ == '__main__':
     compute_mstar_err = True
     add_model_phot = True
     process_qso_scnd = True
-    process_post_hdu = False
+    process_post_hdu = True
 
     #make sure the get_fastspec_fit_catalog_V2 function is run before hand in case there are any new columns added
     process_fastspec=True

@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 
 def deredshift_for_stacking():
 
-    save_dered = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_y1_dwarf_combine_deredshift_hires_bin1A.h5"
+    save_dered = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_y1_dwarf_combine_deredshift_hires.h5"
 
     print("Making deredshited spectra file!")
 
@@ -34,7 +34,7 @@ def deredshift_for_stacking():
 
     print_stage("De-redshifting the spectra and clipping to relevant wavelength range")
 
-    wave_out = np.arange(3600,9820,1)
+    wave_out = wave
 
     print(wave_out[:10])
     print(wave_out[-10:])
@@ -67,7 +67,7 @@ def load_catalog(filename="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/d
 
     halpha_snr = ( np.array(fspec_cat["HALPHA_FLUX"]) * np.sqrt(np.array(fspec_cat["HALPHA_FLUX_IVAR"])) )
 
-    mask = (tot_cat["DWARF_MASKBIT"] == 0) & (halpha_snr > 3) & ( np.array(fspec_cat["HALPHA_FLUX"]) > 1) & (tot_cat["MAG_TYPE"] == "TRACTOR_OG")
+    mask = (tot_cat["DWARF_MASKBIT"] == 0) & (halpha_snr > 3) & ( np.array(fspec_cat["HALPHA_FLUX"]) > 1) #& (tot_cat["MAG_TYPE"] == "TRACTOR_OG")
     
     tot_cat_f = tot_cat[ mask ]
 
@@ -75,7 +75,7 @@ def load_catalog(filename="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/d
 
     tractor_cat_f = tractor_cat[ mask ]
     
-    tot_cat_new =  hstack( [tot_cat_f, fspec_cat_f["HALPHA_FLUX", "HALPHA_FLUX_IVAR", "ABSMAG01_SDSS_G", "ABSMAG01_SDSS_R", "ABSMAG01_SDSS_I", "ABSMAG01_SDSS_Z", "ABSMAG01_IVAR_SDSS_G", "ABSMAG01_IVAR_SDSS_R", "ABSMAG01_IVAR_SDSS_I", "ABSMAG01_IVAR_SDSS_Z","HBETA_FLUX", "HBETA_FLUX_IVAR", "OIII_5007_FLUX", "OIII_5007_FLUX_IVAR", "HALPHA_EW", "HALPHA_EW_IVAR", "OII_3726_FLUX", "OII_3726_FLUX_IVAR", "OII_3729_FLUX", "OII_3729_FLUX_IVAR", "HALPHA_BOXFLUX"], tractor_cat_f["FLUX_G","FLUX_R","FLUX_Z","FLUX_IVAR_G", "FLUX_IVAR_R", "FLUX_IVAR_Z"] ] )
+    tot_cat_new =  hstack( [tot_cat_f, fspec_cat_f["HALPHA_FLUX", "HALPHA_FLUX_IVAR","HBETA_FLUX", "HBETA_FLUX_IVAR", "OIII_5007_FLUX", "OIII_5007_FLUX_IVAR", "HALPHA_EW", "HALPHA_EW_IVAR", "OII_3726_FLUX", "OII_3726_FLUX_IVAR", "OII_3729_FLUX", "OII_3729_FLUX_IVAR", "HALPHA_BOXFLUX", "DELTA_MAG_G_KCORR", "DELTA_MAG_R_KCORR"], tractor_cat_f["FLUX_G","FLUX_R","FLUX_Z","FLUX_IVAR_G", "FLUX_IVAR_R", "FLUX_IVAR_Z"] ] )
     
     print(f"Cleaned catalog size = {len(tot_cat_new)}")
     
