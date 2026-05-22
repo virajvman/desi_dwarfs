@@ -34,14 +34,14 @@ def compute_o32(fastspec):
     '''
     Function that computes the O32 = OIII 5007 / OII 3726 index
     '''
-    o32 = np.array(fastspec["OIII_5007_FLUX"]) / np.array(fastspec["OII_3726_FLUX"])
+    o32 = np.array(fastspec["OIII_5007_FLUX"]) / ( np.array(fastspec["OII_3726_FLUX"]) + np.array(fastspec["OII_3729_FLUX"]) )
     return o32 
 
 def compute_r32(fastspec):
     '''
     Function that computes the R32 = (OIII 4959,5007 + OI 3726) / Hbeta index
     '''
-    r32 =  ( fastspec["OIII_5007_FLUX"] + fastspec["OIII_4959_FLUX"] + fastspec["OII_3726_FLUX"] ) / fastspec["HBETA_FLUX"]
+    r32 =  ( fastspec["OIII_5007_FLUX"] + fastspec["OIII_4959_FLUX"] + fastspec["OII_3726_FLUX"] + fastspec["OII_3729_FLUX"] ) / fastspec["HBETA_FLUX"]
     return np.array(r32)
 
 ##########################################################
