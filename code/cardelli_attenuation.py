@@ -59,3 +59,33 @@ def attenuation_Av(lam, Av):
 def transmission_Av(lam, Av):
     Av = np.atleast_1d(Av)
     return 10**(-0.4*attenuation_Av(lam, Av))
+
+
+def deredden_flux(flux_observed, wavelength_rest, Av, flux_err_observed=None):
+    """
+    De-redden an observed line flux to its intrinsic (rest-frame) value
+    using a Cardelli+1989 extinction law with R_V = 3.1.
+
+    Parameters
+    ----------
+    flux_observed : float or array
+        Observed (attenuated) line flux, in any flux units.
+    wavelength_rest : float
+        Rest-frame wavelength of the line in Angstroms.
+    Av : float or array
+        V-band attenuation in magnitudes. Can be array-like to broadcast
+        against flux_observed for catalog-level dereddening.
+    flux_err_observed : float or array, optional
+        1-sigma uncertainty on the observed flux. If given, returned
+        alongside the dereddened flux (scaled by the same factor).
+
+    Returns
+    -------
+    flux_intrinsic : float or array
+    flux_err_intrinsic : float or array  (only if flux_err_observed given)
+    """
+    t = transmission_Av(wavelength_rest, Av)
+    flux_intrinsic = flux_observed / t
+    if flux_err_observed is None:
+        return flux_intrinsic
+    return flux_intrinsic, flux_err_observed / t
