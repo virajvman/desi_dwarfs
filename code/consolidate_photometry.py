@@ -38,8 +38,6 @@ from construct_dwarf_galaxy_catalogs import (
 from get_associated_fibers import find_associated_tgids, get_dwarf_primary
 from consolidate_associated_fibers import symmetrize_and_group_associated_tgids, consolidate_associated_fiber_properties
 
-from sfr_and_metallicity import add_sfr_halpha_to_spec_derived
-
 from mass_and_photo_corrections import (
     make_catalog_unmasked,
     safe_read_table,
@@ -1294,7 +1292,7 @@ def apply_post_emission_mstar_dwarf_cut(
     fallback in compute_emission_subtracted_photo_errors (same criterion as
     create_main_data_model).
 
-    Subsets MAIN, ZCAT, TRACTOR, and SPEC_DERIVED with a common boolean mask;
+    Subsets MAIN, ZCAT, TRACTOR, and FASTSPEC with a common boolean mask;
     filters REPROCESS_PHOTO to retained TARGETIDs when that column exists;
     re-runs get_dwarf_primary so DWARF_PRIMARY_TARGETID cannot point at a
     removed row. Other extensions are copied unchanged.
@@ -1576,7 +1574,7 @@ def combine_hdus(hdu_list, base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs
     Combine multiple HDUs (Astropy tables) into a single multi-extension FITS file.
 
     After stacking clean + shreds (+ optional extras) with identical row order for
-    MAIN, ZCAT, TRACTOR, and SPEC_DERIVED, this function (1) reassigns MAIN ``SAMPLE``
+    MAIN, ZCAT, TRACTOR, and FASTSPEC, this function (1) reassigns MAIN ``SAMPLE``
     from ZCAT targeting bits with priority BGS_BRIGHT > BGS_FAINT > ELG for rows
     whose SAMPLE is BGS_BRIGHT, BGS_FAINT, or ELG; (2) deduplicates on TARGETID (first row
     kept); (3) runs ``finalize_main_hdu`` on MAIN. LOWZ and OTHER are not relabeled.
@@ -2098,10 +2096,10 @@ def add_model_photometry_to_fastspec(
     """
     Read pre-computed fastspec model photometry from
     model_photometry_diffs_{gal_type}.fits files, cross-match by TARGETID,
-    and append 10 model-magnitude columns to the SPEC_DERIVED HDU of the
+    and append 10 model-magnitude columns to the FASTSPEC HDU of the
     multi-extension catalog at *cat_path*.
 
-    New SPEC_DERIVED columns:
+    New FASTSPEC columns:
         MAG_{G,R}_DECAM_MODEL_NOEMI   - DECam model mags, continuum only
         MAG_{G,R}_DECAM_MODEL_WEMI    - DECam model mags, continuum + emission
         MAG_{G,R}_BASS_MODEL_WEMI     - BASS  model mags, continuum + emission
@@ -2109,7 +2107,7 @@ def add_model_photometry_to_fastspec(
         MAG_{G,R}_SDSS_Z0_MODEL_NOEMI - SDSS  z=0 rest-frame model mags, continuum only
     """
     print("=" * 60)
-    print("Adding fastspec model photometry columns to SPEC_DERIVED HDU")
+    print("Adding fastspec model photometry columns to FASTSPEC HDU")
     print("=" * 60)
 
     # Cache columns sourced from compute_photometry_catalog now describe the
@@ -2154,13 +2152,13 @@ def add_model_photometry_to_fastspec(
     if verbose:
         print(f"  Combined model photometry table: {len(model_phot)} unique TARGETIDs")
 
-    # ── 2. Read SPEC_DERIVED HDU from the catalog ──────────────────────────
+    # ── 2. Read FASTSPEC HDU from the catalog ──────────────────────────
     fspec_cat = safe_read_table(cat_path, hdu=DWARF_CATALOG_SPEC_HDU)
     n_objects = len(fspec_cat)
     cat_tids = np.asarray(fspec_cat["TARGETID"])
 
     if verbose:
-        print(f"  SPEC_DERIVED HDU has {n_objects} rows")
+        print(f"  FASTSPEC HDU has {n_objects} rows")
 
     # ── 3. Build TARGETID lookup and fill columns ──────────────────────
     model_tid_to_row = {int(t): i for i, t in enumerate(model_phot["TARGETID"])}
@@ -2178,7 +2176,7 @@ def add_model_photometry_to_fastspec(
     if verbose:
         print(f"  Matched {n_matched}/{n_objects} objects to model photometry")
 
-    # ── 4. Rewrite catalog (SPEC_DERIVED only) ─────────────────────────────
+    # ── 4. Rewrite catalog (FASTSPEC only) ─────────────────────────────
     # Same as compute_emission_subtracted_photo_errors: mode="update" after
     # resizing an extension breaks verify on the following HDU (here el. 5).
     # MAIN must use table_to_hdu (not hdu.copy()) so VLAs e.g. ASSOCIATED_TARGETIDS
@@ -2224,7 +2222,7 @@ def add_model_photometry_to_fastspec(
 
     new_cols_str = ", ".join(_COL_MAP.values())
     print(f"Updated {cat_path}:")
-    print(f"  SPEC_DERIVED HDU: added {new_cols_str}")
+    print(f"  FASTSPEC HDU: added {new_cols_str}")
     print("=" * 60)
 
 
@@ -2279,8 +2277,6 @@ if __name__ == '__main__':
 
     #make sure the get_fastspec_fit_catalog_V2 function is run before hand in case there are any new columns added
     process_fastspec=True
-
-    add_sfrs_zmet = True
 
     main_cat_outpath = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits"
 
@@ -2366,7 +2362,7 @@ if __name__ == '__main__':
         ##get the fastspecfit hdu
         if process_fastspec:
             print("Creating the shred fastspecfit hdu")
-            get_fastspec_matched_catalog(tot_shred, save_path + "/shreds_SPEC_DERIVED_hdu.fits", match_method="TARGETID")
+            get_fastspec_matched_catalog(tot_shred, save_path + "/shreds_FASTSPEC_hdu.fits", match_method="TARGETID")
             
         ##get the other hdus
 
@@ -2390,7 +2386,7 @@ if __name__ == '__main__':
         ##get the fastspecfit hdu
         if process_fastspec:
             print("Creating the clean fastspecfit hdu")
-            get_fastspec_matched_catalog(clean_cat, save_path + "/clean_SPEC_DERIVED_hdu.fits", match_method="TARGETID")
+            get_fastspec_matched_catalog(clean_cat, save_path + "/clean_FASTSPEC_hdu.fits", match_method="TARGETID")
 
     if process_qso_scnd:
         qso_scnd_input = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_other_qso_scnd_candidates_INT_V2_NEBCORR.fits"
@@ -2406,7 +2402,7 @@ if __name__ == '__main__':
 
         if process_fastspec:
             print("Creating the QSO/SCND fastspecfit hdu")
-            get_fastspec_matched_catalog(qso_scnd_cat, save_path + "/qso_scnd_SPEC_DERIVED_hdu.fits", match_method="TARGETID")
+            get_fastspec_matched_catalog(qso_scnd_cat, save_path + "/qso_scnd_FASTSPEC_hdu.fits", match_method="TARGETID")
 
     #then we consolidate it all into a multi-ext file!
     #make sure the REPROCESS_PHOTO_CAT is also last in the below list!
@@ -2427,9 +2423,6 @@ if __name__ == '__main__':
 
     consolidate_associated_fiber_properties(main_cat_outpath)
 
-    if add_sfrs_zmet:
-        add_sfr_halpha_to_spec_derived(main_cat_outpath)
-
     # Objects with LOG_MSTAR_M24 >= 9.25 after the low-SNR fallback in
     # compute_emission_subtracted_photo_errors are dropped by apply_post_emission_mstar_dwarf_cut
     # (before consolidate_associated_fiber_properties). ASSOCIATED_TARGETIDS can still list
@@ -2446,14 +2439,10 @@ if __name__ == '__main__':
         add_wrong_redrock_maskbit(main_cat_outpath, main_datamodel)
 
 
-    #TODO: need to get the spectra line flux stuff like SFR estimation and stuff outside, as we need to first estimate the AV !
-    #TODO: move the sfr and metallicity stuff to nebular stuff, update SFR computaiton, compute AV!!
-    ## and then 
-    #TODO: finalize AV computations
-    #TODO: split spec_derived separate from fastspec!
-    #TODO: make this additional line stuff calculations as another script and job!
-    #TODO: we assume 2.86 as ratio but that is separate from the direct metallicity case where we can fit for dust on individual level ... 
-    #TODO: need to compare this.
+    # Halpha SFR, fiber Mstar/SFR, strong-line metallicity and other
+    # spectroscopically derived nebular properties are now appended as a
+    # separate SPEC_DERIVED HDU by code/add_nebular_props.py, which is run
+    # after after consolidate_photometry.py finishes.
 
     #get the stacked spectra of stellar mass in bins of stellar mass and also in bins of fiber sSFR or Halpha EW
     ##need to confirm this, and save all the stacked spectra 

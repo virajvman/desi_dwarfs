@@ -48,9 +48,16 @@ FASTSPEC_DELTA_MAG_COLS = (
     "DELTA_MAG_R_KCORR",
 )
 
-# FITS extension name for spectral / fastspec-derived columns in the multi-extension
-# dwarf catalog (not the iron fastspec VAC, which remains FASTSPEC).
-DWARF_CATALOG_SPEC_HDU = "SPEC_DERIVED"
+# FITS extension names in the multi-extension dwarf catalog. The FASTSPEC HDU
+# carries the matched fastspec line / continuum measurements plus the photometric
+# correction columns (DELTA_MAG_*, MAG_*_FIBER_NOEMI*, FLUX_SYNTH_*, model mags)
+# added during consolidate_photometry. The SPEC_DERIVED HDU is appended later by
+# add_nebular_props.py and holds spectroscopically derived properties only
+# (Halpha SFR, fiber Mstar/SFR, strong-line metallicity, etc.).
+# DWARF_CATALOG_SPEC_HDU keeps its historical name for backwards compatibility
+# with existing call sites; its value now points at "FASTSPEC".
+DWARF_CATALOG_SPEC_HDU = "FASTSPEC"
+DWARF_CATALOG_DERIVED_HDU = "SPEC_DERIVED"
 
 # ---------------------------------------------------------------------------
 # Utility helpers (needed to avoid circular imports with consolidate_photometry)
@@ -263,7 +270,7 @@ def _apply_delta_mag_corrections(
 
 
 # ---------------------------------------------------------------------------
-# SPEC_DERIVED HDU (dwarf catalog) delta-mag writer
+# FASTSPEC HDU (dwarf catalog) delta-mag writer
 # ---------------------------------------------------------------------------
 
 def add_delta_mag_to_fastspec(
@@ -273,16 +280,16 @@ def add_delta_mag_to_fastspec(
 ):
     """
     Copy tractor photometry correction deltas from INT_V2_NEBCORR tables into
-    the SPEC_DERIVED HDU (matched by TARGETID).
+    the FASTSPEC HDU (matched by TARGETID).
 
     BASS2DECAM columns are zero for south (is_south == 1); other deltas are
     copied unchanged.  is_south is read from the same NEBCORR rows.
 
-    New SPEC_DERIVED columns:
+    New FASTSPEC columns:
         DELTA_MAG_{G,R}_BASS2DECAM, _NEB, _DECAM2SDSS, _KCORR
     """
     print("=" * 60)
-    print("Adding DELTA_MAG photometric correction columns to SPEC_DERIVED HDU")
+    print("Adding DELTA_MAG photometric correction columns to FASTSPEC HDU")
     print("=" * 60)
 
     delta_tab = _load_nebcorr_delta_mag_table(save_folder=nebcorr_dir, verbose=verbose)
@@ -296,7 +303,7 @@ def add_delta_mag_to_fastspec(
     cat_tids = np.asarray(fspec_cat["TARGETID"])
 
     if verbose:
-        print(f"  SPEC_DERIVED HDU has {n_objects} rows")
+        print(f"  FASTSPEC HDU has {n_objects} rows")
 
     neb_tids = np.asarray(delta_tab["TARGETID"])
     tid_to_row = {int(t): i for i, t in enumerate(neb_tids)}
@@ -374,7 +381,7 @@ def add_delta_mag_to_fastspec(
         raise
 
     print(f"Updated {cat_path}:")
-    print(f"  SPEC_DERIVED HDU: added {', '.join(FASTSPEC_DELTA_MAG_COLS)}")
+    print(f"  FASTSPEC HDU: added {', '.join(FASTSPEC_DELTA_MAG_COLS)}")
     print("=" * 60)
 
 
@@ -540,7 +547,7 @@ def compute_emission_subtracted_photo_errors(
       - MAIN HDU: adds LOG_MSTAR_M24_ERR; sets MSTAR_MASKBIT bit 0 (low continuum
         SNR in nebular-subtracted g/r fiber photometry, threshold 10); refits
         bright bits as before
-      - SPEC_DERIVED HDU: adds MAG_G_FIBER_NOEMI, MAG_R_FIBER_NOEMI,
+      - FASTSPEC HDU: adds MAG_G_FIBER_NOEMI, MAG_R_FIBER_NOEMI,
         MAG_G_FIBER_NOEMI_ERR, MAG_R_FIBER_NOEMI_ERR
     """
     print("=" * 60)
@@ -799,7 +806,7 @@ def compute_emission_subtracted_photo_errors(
     main_hdu_new.name = "MAIN"
     main_hdu_new.add_checksum()
 
-    # ── 8. Update SPEC_DERIVED HDU with emission-subtracted fiber photometry ──
+    # ── 8. Update FASTSPEC HDU with emission-subtracted fiber photometry ──
     fspec_cat["MAG_G_FIBER_NOEMI"] = g_noemi.astype(np.float64)
     fspec_cat["MAG_R_FIBER_NOEMI"] = r_noemi.astype(np.float64)
     fspec_cat["MAG_G_FIBER_NOEMI_ERR"] = g_noemi_err.astype(np.float64)
@@ -809,7 +816,7 @@ def compute_emission_subtracted_photo_errors(
     fspec_hdu_new.name = DWARF_CATALOG_SPEC_HDU
     fspec_hdu_new.add_checksum()
 
-    # ── 9. Rewrite catalog (MAIN + SPEC_DERIVED) ───────────────────────────
+    # ── 9. Rewrite catalog (MAIN + FASTSPEC) ───────────────────────────
     # mode="update" + replace one HDU can leave later HDUs with stale
     # file offsets; verify then fails ("element 2 is not an extension HDU").
     # Build a fresh HDUList (unchanged HDUs via .copy()) and atomic writeto.
@@ -847,5 +854,5 @@ def compute_emission_subtracted_photo_errors(
     print(f"Updated {cat_path}:")
     print(f"  MAIN HDU: added LOG_MSTAR_M24_ERR; low-SNR fallback LOG_MSTAR_M24; "
           f"MSTAR_MASKBIT (bits 0, 1 as applicable); DWARF/MSTAR bright bits refit for low-SNR rows")
-    print(f"  SPEC_DERIVED HDU: added MAG_G_FIBER_NOEMI, MAG_R_FIBER_NOEMI, MAG_G_FIBER_NOEMI_ERR, MAG_R_FIBER_NOEMI_ERR")
+    print(f"  FASTSPEC HDU: added MAG_G_FIBER_NOEMI, MAG_R_FIBER_NOEMI, MAG_G_FIBER_NOEMI_ERR, MAG_R_FIBER_NOEMI_ERR")
     print("=" * 60)

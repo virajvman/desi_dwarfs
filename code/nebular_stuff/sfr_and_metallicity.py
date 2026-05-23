@@ -3,15 +3,18 @@ import tempfile
 
 import numpy as np
 import astropy.io.fits as fits
+from astropy.table import Table
 from astropy.cosmology import Planck18
 from desispec.interpolation import resample_flux
 
 from mass_and_photo_corrections import (
     DWARF_CATALOG_SPEC_HDU,
+    DWARF_CATALOG_DERIVED_HDU,
     FASTSPEC_DELTA_MAG_COLS,
     safe_read_table,
 )
 from desi_lowz_funcs import get_stellar_mass_mia, r_kcorr
+from data_model import spec_derived_hdu_datamodel
 
 def line_snr_mask(fastspec_cat, line_names=["HALPHA"], snr_val=3, min_lines=3):
     """
@@ -600,7 +603,7 @@ def _fiber_tot_mw_mags(flux_g, flux_r, mw_g, mw_r):
 
 def _spec_derived_delta_corrected_mags(fspec_cat, mag_g_base, mag_r_base, low_snr):
     """
-    Sum SPEC_DERIVED DELTA_MAG_* onto arbitrary apparent mags (MAIN totals or
+    Sum FASTSPEC DELTA_MAG_* onto arbitrary apparent mags (MAIN totals or
     FIBERTOT fiber mags). BASS2DECAM is already north-masked when columns were
     written. Rows with low_snr or non-finite deltas leave NaN in the corrected
     arrays (caller uses low-SNR Mr path instead).
@@ -642,30 +645,54 @@ def _mr_for_halpha_sfr(mag_r_base, gr_for_kcorr, mag_r_corr_high, low_snr, z_cmb
     return np.where(low_snr, mr_lo, mr_hi)
 
 
-def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
+def _apply_spec_derived_metadata(tab):
+    """Apply units / dtypes / descriptions from spec_derived_hdu_datamodel."""
+    for col in tab.colnames:
+        meta = spec_derived_hdu_datamodel.get(col)
+        if meta is None:
+            continue
+        desired_dtype = np.dtype(meta["dtype"])
+        if tab[col].dtype != desired_dtype:
+            tab[col] = tab[col].astype(desired_dtype)
+        if meta.get("description"):
+            tab[col].description = meta["description"]
+        if meta.get("unit") is not None:
+            tab[col].unit = meta["unit"]
+    return tab
+
+
+def build_spec_derived_hdu(cat_path, verbose=True):
     """
-    Append LOG_SFR_HALPHA, LOG_SFR_HALPHA_ERR, LOG_MSTAR_24_FIBER,
-    LOG_HALPHA_SFR_FIBER, and Z_GAS_R23_N2 to the SPEC_DERIVED HDU.
+    Build / refresh the SPEC_DERIVED HDU (DWARF_CATALOG_DERIVED_HDU) of a
+    consolidated dwarf catalog with the spectroscopically derived nebular
+    properties LOG_SFR_HALPHA, LOG_SFR_HALPHA_ERR, LOG_MSTAR_24_FIBER,
+    LOG_HALPHA_SFR_FIBER, and Z_GAS_R23_N2.
+
+    Reads MAIN, FASTSPEC (DWARF_CATALOG_SPEC_HDU), and TRACTOR. The function
+    does NOT modify any existing HDU; it builds a fresh BinTableHDU containing
+    TARGETID + the 5 derived columns and either replaces an existing
+    SPEC_DERIVED HDU or appends a new one. Existing HDUs (including FASTSPEC)
+    are preserved bit-for-bit using a temp-file + os.replace pattern.
 
     Must run after consolidate_associated_fiber_properties so MAIN MAG_R and
-    LUMI_DIST_MPC are group-consolidated; HALPHA_EW(_IVAR) remain per-fiber from
-    SPEC_DERIVED. TARGETID order must match between MAIN and SPEC_DERIVED.
+    LUMI_DIST_MPC are group-consolidated; HALPHA_EW(_IVAR) remain per-fiber
+    from FASTSPEC. TARGETID order must match between MAIN and FASTSPEC.
 
     Global and fiber Hα SFR share the same continuum-SNR split from
-    MAG_{G,R}_FIBER_NOEMI_ERR (threshold SNR 10). High SNR: sum SPEC_DERIVED
+    MAG_{G,R}_FIBER_NOEMI_ERR (threshold SNR 10). High SNR: sum FASTSPEC
     DELTA_MAG_* (nebular, filter, template k-term) onto MAIN mags (global) or
     FIBERTOT mags (fiber). Low SNR: skip deltas and use Chilingarian r_kcorr
-    with MAIN g−r (global) or FIBERTOT g−r (fiber). MAG_R_FIBER_NOEMI_ERR is
+    with MAIN g-r (global) or FIBERTOT g-r (fiber). MAG_R_FIBER_NOEMI_ERR is
     passed as Mr_err on the high-SNR branch only (DELTA_MAG terms exact in
     propagation). Fiber-derived DELTA_MAG values applied to MAIN totals for
     global SFR assumes those corrections represent the whole galaxy.
 
-    Stellar mass LOG_MSTAR_24_FIBER uses the same high/low SNR split as before
-    (DELTA_MAG on FIBERTOT vs get_stellar_mass_mia with Z_CMB).
+    Stellar mass LOG_MSTAR_24_FIBER uses the same high/low SNR split as
+    before (DELTA_MAG on FIBERTOT vs get_stellar_mass_mia with Z_CMB).
 
-    Z_GAS_R23_N2 is gas metallicity from Z_R23_N2 using SPEC_DERIVED line
-    fluxes; per-line SNR > 3 (r23_n2_line_snr_mask) with no BPT cuts; NaN
-    otherwise or if the fit fails.
+    Z_GAS_R23_N2 is gas metallicity from Z_R23_N2 using FASTSPEC line fluxes;
+    per-line SNR > 3 (r23_n2_line_snr_mask) with no BPT cuts; NaN otherwise
+    or if the fit fails.
 
     LOG_SFR_HALPHA, LOG_SFR_HALPHA_ERR, and LOG_HALPHA_SFR_FIBER are only set
     for rows with finite HALPHA_FLUX > 0, HBETA_FLUX > 0, HALPHA_EW > 0,
@@ -684,8 +711,8 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
     if verbose:
         print("=" * 60)
         print(
-            "Adding LOG_SFR_HALPHA, fiber Mstar/SFR, and Z_GAS_R23_N2 to "
-            "SPEC_DERIVED HDU"
+            f"Building {DWARF_CATALOG_DERIVED_HDU} HDU "
+            "(LOG_SFR_HALPHA, fiber Mstar/SFR, Z_GAS_R23_N2)"
         )
         print("=" * 60)
 
@@ -694,12 +721,13 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
     tractor_cat = safe_read_table(cat_path, hdu="TRACTOR")
 
     print("Finished reading tables!")
-    
+
     n_main = len(main_cat)
     n_fspec = len(fspec_cat)
     if n_main != n_fspec:
         raise ValueError(
-            f"MAIN ({n_main} rows) and {DWARF_CATALOG_SPEC_HDU} ({n_fspec} rows) length mismatch"
+            f"MAIN ({n_main} rows) and {DWARF_CATALOG_SPEC_HDU} "
+            f"({n_fspec} rows) length mismatch"
         )
     tid_main = np.asarray(main_cat["TARGETID"])
     tid_fspec = np.asarray(fspec_cat["TARGETID"])
@@ -758,7 +786,7 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
     n_below_bd = int(np.sum(ok_halpha_for_sfr & np.isfinite(bd_raw) & (bd_raw < 2.86)))
     n_eligible = int(np.sum(ok_halpha_for_sfr))
     print(
-        f"  add_sfr_halpha_to_spec_derived: {n_below_bd} / {n_eligible} "
+        f"  build_spec_derived_hdu: {n_below_bd} / {n_eligible} "
         "SFR-eligible objects had per-object BD < 2.86; clipped to 2.86"
     )
     bd_per_object = np.where(
@@ -796,7 +824,7 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
     )
 
     print("Collected the delta mags!")
-    
+
     mr_global = _mr_for_halpha_sfr(
         mag_r,
         mag_g - mag_r,
@@ -810,7 +838,7 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
     zeros = np.zeros_like(z, dtype=float)
 
     print("Computing SFR now!")
-    
+
     log_sfr, log_sfr_err = calc_SFR_Halpha(
         EW_Halpha=halpha_ew,
         EW_Halpha_ivar=halpha_ew_ivar,
@@ -825,8 +853,6 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
     )
     log_sfr = np.where(ok_halpha_for_sfr, log_sfr, np.nan)
     log_sfr_err = np.where(ok_halpha_for_sfr, log_sfr_err, np.nan)
-    fspec_cat["LOG_SFR_HALPHA"] = log_sfr
-    fspec_cat["LOG_SFR_HALPHA_ERR"] = log_sfr_err
 
     # --- Fiber-aperture stellar mass and fiber Hα SFR ---
     mag_g_fib, mag_r_fib = _fiber_tot_mw_mags(
@@ -882,8 +908,6 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
         imf_factor=0.94,
     )
     log_sfr_fiber = np.where(ok_halpha_for_sfr, log_sfr_fiber, np.nan)
-    fspec_cat["LOG_MSTAR_24_FIBER"] = log_mstar_fiber
-    fspec_cat["LOG_HALPHA_SFR_FIBER"] = log_sfr_fiber
 
     required_z = [
         f"{stem}_{suffix}"
@@ -893,8 +917,8 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
     missing_z = [c for c in required_z if c not in fspec_cat.colnames]
     if missing_z:
         raise ValueError(
-            f"add_sfr_halpha_to_spec_derived: SPEC_DERIVED missing columns {missing_z} "
-            "needed for Z_GAS_R23_N2"
+            f"build_spec_derived_hdu: {DWARF_CATALOG_SPEC_HDU} missing columns "
+            f"{missing_z} needed for Z_GAS_R23_N2"
         )
 
     z_gas = np.full(n_fspec, np.nan, dtype=np.float64)
@@ -913,35 +937,39 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
             z_gas[i] = z_i[0]
         except Exception:
             pass
-    fspec_cat["Z_GAS_R23_N2"] = z_gas
 
-    fspec_hdu_new = fits.table_to_hdu(fspec_cat)
-    fspec_hdu_new.name = DWARF_CATALOG_SPEC_HDU
-    fspec_hdu_new.add_checksum()
+    derived_tab = Table()
+    derived_tab["TARGETID"] = np.asarray(tid_main, dtype=np.int64)
+    derived_tab["LOG_SFR_HALPHA"] = log_sfr
+    derived_tab["LOG_SFR_HALPHA_ERR"] = log_sfr_err
+    derived_tab["LOG_MSTAR_24_FIBER"] = log_mstar_fiber
+    derived_tab["LOG_HALPHA_SFR_FIBER"] = log_sfr_fiber
+    derived_tab["Z_GAS_R23_N2"] = z_gas
+    _apply_spec_derived_metadata(derived_tab)
+
+    derived_hdu = fits.table_to_hdu(derived_tab)
+    derived_hdu.name = DWARF_CATALOG_DERIVED_HDU
+    derived_hdu.add_checksum()
 
     cat_abs = os.path.abspath(cat_path)
     cat_dir = os.path.dirname(cat_abs) or "."
     fd, tmp_path = tempfile.mkstemp(
-        suffix=".fits", prefix="log_sfr_halpha_", dir=cat_dir
+        suffix=".fits", prefix="spec_derived_", dir=cat_dir
     )
     os.close(fd)
     try:
         with fits.open(cat_abs, memmap=False) as hdul:
             hdu_names = [hdu.name for hdu in hdul]
-            main_idx = hdu_names.index("MAIN")
-            fspec_idx = hdu_names.index(DWARF_CATALOG_SPEC_HDU)
-            main_tab = safe_read_table(cat_abs, hdu="MAIN")
-            main_hdu_preserved = fits.table_to_hdu(main_tab)
-            main_hdu_preserved.name = "MAIN"
-            main_hdu_preserved.add_checksum()
             new_hdus = []
+            replaced = False
             for i, hdu in enumerate(hdul):
-                if i == main_idx:
-                    new_hdus.append(main_hdu_preserved)
-                elif i == fspec_idx:
-                    new_hdus.append(fspec_hdu_new)
+                if hdu_names[i] == DWARF_CATALOG_DERIVED_HDU:
+                    new_hdus.append(derived_hdu)
+                    replaced = True
                 else:
                     new_hdus.append(hdu.copy())
+            if not replaced:
+                new_hdus.append(derived_hdu)
             new_hdul = fits.HDUList(new_hdus)
             new_hdul[0].add_checksum()
             new_hdul.writeto(tmp_path, overwrite=True)
@@ -955,10 +983,12 @@ def add_sfr_halpha_to_spec_derived(cat_path, verbose=True):
         raise
 
     if verbose:
+        action = "Replaced" if replaced else "Appended"
         print(f"Updated {cat_path}:")
         print(
-            "  SPEC_DERIVED HDU: added LOG_SFR_HALPHA, LOG_SFR_HALPHA_ERR, "
-            "LOG_MSTAR_24_FIBER, LOG_HALPHA_SFR_FIBER, Z_GAS_R23_N2"
+            f"  {action} {DWARF_CATALOG_DERIVED_HDU} HDU with TARGETID, "
+            "LOG_SFR_HALPHA, LOG_SFR_HALPHA_ERR, LOG_MSTAR_24_FIBER, "
+            "LOG_HALPHA_SFR_FIBER, Z_GAS_R23_N2"
         )
         print("=" * 60)
 

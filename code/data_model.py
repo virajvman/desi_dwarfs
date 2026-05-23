@@ -1456,31 +1456,6 @@ fastspec_hdu_datamodel["HALPHA_EW_IVAR"] = {
     "description": "Inverse variance in HALPHA_EW.",
     "dtype": "float32"
 }
-fastspec_hdu_datamodel["LOG_SFR_HALPHA"] = {
-    "unit": None,
-    "description": (
-        "log10(SFR / (Msun/yr)) from Bauer et al. (2013) Eq. 2 / Kennicutt & Evans (2012) Halpha calibration "
-        "(Chabrier IMF, see calc_SFR_Halpha). Global aperture-corrected SFR using MAIN MAG_R and "
-        "LUMI_DIST_MPC (distance modulus), per-row fiber HALPHA_EW from SPEC_DERIVED."
-    ),
-    "dtype": "float64"
-}
-fastspec_hdu_datamodel["LOG_SFR_HALPHA_ERR"] = {
-    "unit": None,
-    "description": (
-        "1-sigma uncertainty on LOG_SFR_HALPHA in dex, from first-order error propagation in calc_SFR_Halpha. "
-        "With zero assumed errors on redshift, absolute r magnitude, and BD, this reflects Halpha EW uncertainty only "
-        "(HALPHA_EW_IVAR)."
-    ),
-    "dtype": "float64"
-}
-fastspec_hdu_datamodel["LOG_MSTAR_24_FIBER"] = {
-    "unit": None,
-    "description": (
-        "log10(Mstar / Msun) in the fiber aperture only"
-    ),
-    "dtype": "float32",
-}
 fastspec_hdu_datamodel["LOGMSTAR_FASTSPEC"] = {
     "unit": None,
     "description": (
@@ -1488,22 +1463,6 @@ fastspec_hdu_datamodel["LOGMSTAR_FASTSPEC"] = {
         "in the FastSpecFit SPECPHOT HDU); renamed from LOGMSTAR for clarity."
     ),
     "dtype": "float32",
-}
-fastspec_hdu_datamodel["LOG_HALPHA_SFR_FIBER"] = {
-    "unit": None,
-    "description": (
-        "log10(SFR / (Msun/yr)) in the fiber aperture only"
-    ),
-    "dtype": "float64",
-}
-fastspec_hdu_datamodel["Z_GAS_R23_N2"] = {
-    "unit": None,
-    "description": (
-        "Gas-phase strong-line metallicity from R23+N2 (see Scholte et al. 2024) "
-        "using SPEC_DERIVED Gaussian line fluxes; internal dust correction when Halpha/Hbeta > 2.86. "
-        "Filled where all seven lines pass line_snr (SNR > 3, flux > 0); NaN otherwise. "
-    ),
-    "dtype": "float64",
 }
 
 fastspec_hdu_datamodel["FLUX_SYNTH_G"] = {
@@ -1745,6 +1704,66 @@ fastspec_hdu_datamodel["DELTA_MAG_R_KCORR"] = {
 #     "description": "Inverse variance in HALPHA_SIGMA.",
 #     "dtype": "float32"
 # }
+
+
+# ---------------------------------------------------------------------------
+# SPEC_DERIVED HDU data model
+#
+# Spectroscopically derived nebular properties appended by
+# code/add_nebular_props.py. Row order / TARGETID order matches MAIN and
+# FASTSPEC. New nebular properties (e.g. AV from Balmer decrements,
+# direct-method metallicity) should be added to this datamodel as they
+# are introduced.
+# ---------------------------------------------------------------------------
+
+spec_derived_hdu_datamodel = {
+    "TARGETID": {
+        "unit": None,
+        "description": "DESI TARGET ID (matches MAIN.TARGETID and FASTSPEC.TARGETID row-by-row).",
+        "dtype": "int64",
+    },
+    "LOG_SFR_HALPHA": {
+        "unit": None,
+        "description": (
+            "log10(SFR / (Msun/yr)) from Bauer et al. (2013) Eq. 2 / Kennicutt & Evans (2012) Halpha calibration "
+            "(Chabrier IMF, see calc_SFR_Halpha). Global aperture-corrected SFR using MAIN MAG_R and "
+            "LUMI_DIST_MPC (distance modulus), per-row fiber HALPHA_EW from FASTSPEC."
+        ),
+        "dtype": "float64",
+    },
+    "LOG_SFR_HALPHA_ERR": {
+        "unit": None,
+        "description": (
+            "1-sigma uncertainty on LOG_SFR_HALPHA in dex, from first-order error propagation in calc_SFR_Halpha. "
+            "With zero assumed errors on redshift, absolute r magnitude, and BD, this reflects Halpha EW uncertainty only "
+            "(HALPHA_EW_IVAR)."
+        ),
+        "dtype": "float64",
+    },
+    "LOG_MSTAR_24_FIBER": {
+        "unit": None,
+        "description": (
+            "log10(Mstar / Msun) in the fiber aperture only"
+        ),
+        "dtype": "float32",
+    },
+    "LOG_HALPHA_SFR_FIBER": {
+        "unit": None,
+        "description": (
+            "log10(SFR / (Msun/yr)) in the fiber aperture only"
+        ),
+        "dtype": "float64",
+    },
+    "Z_GAS_R23_N2": {
+        "unit": None,
+        "description": (
+            "Gas-phase strong-line metallicity from R23+N2 (see Scholte et al. 2024) "
+            "using FASTSPEC Gaussian line fluxes; internal dust correction when Halpha/Hbeta > 2.86. "
+            "Filled where all seven lines pass line_snr (SNR > 3, flux > 0); NaN otherwise."
+        ),
+        "dtype": "float64",
+    },
+}
 
 
 
