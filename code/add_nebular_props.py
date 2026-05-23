@@ -37,6 +37,7 @@ _NEBULAR_DIR = os.path.join(_THIS_DIR, "nebular_stuff")
 if _NEBULAR_DIR not in sys.path:
     sys.path.insert(0, _NEBULAR_DIR)
 
+from code.desi_lowz_funcs import compute_separations
 from sfr_and_metallicity import build_spec_derived_hdu
 
 
@@ -68,3 +69,9 @@ def main(argv=None):
 
 if __name__ == "__main__":
     sys.exit(main())
+
+    TODO: need to find AV per object. For now just take Halpha, Hbeta and Hgamma 
+    if it exists and then fit AV to it assuming case b etc.
+
+    Need to check in the objects where we have high enough SNR to do ne and te compute_separations
+    if the ha/hb ratio changes a lot or not ... 
