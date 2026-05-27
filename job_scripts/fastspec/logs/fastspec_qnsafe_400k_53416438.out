@@ -1,0 +1,21 @@
+INFO:mpi-fastspecfit:330:main: Read 461488 rows from /pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_dr1_dwarfs.fits
+INFO:mpi.py:94:findfiles: Building file list for survey=main and program=bright
+INFO:mpi.py:94:findfiles: Building file list for survey=main and program=dark
+INFO:mpi.py:94:findfiles: Building file list for survey=special and program=bright
+INFO:mpi.py:94:findfiles: Building file list for survey=special and program=dark
+INFO:mpi.py:94:findfiles: Building file list for survey=special and program=other
+INFO:mpi.py:94:findfiles: Building file list for survey=sv1 and program=bright
+INFO:mpi.py:94:findfiles: Building file list for survey=sv1 and program=dark
+INFO:mpi.py:94:findfiles: Building file list for survey=sv1 and program=other
+INFO:mpi.py:94:findfiles: Building file list for survey=sv2 and program=bright
+INFO:mpi.py:94:findfiles: Building file list for survey=sv2 and program=dark
+INFO:mpi.py:94:findfiles: Building file list for survey=sv3 and program=bright
+INFO:mpi.py:94:findfiles: Building file list for survey=sv3 and program=dark
+INFO:mpi.py:360:plan: Found 1/28,464 redrockfiles left.
+INFO:mpi-fastspecfit:74:run_fastspecfit: fsftime 10.39 sec for plan at 2026-05-25T16:46:26.817
+INFO:mpi-fastspecfit:99:run_fastspecfit: Auto-selected per-file parallelism (avg 75.0 targets/file < mp=120)
+INFO:mpi.py:843:_perfile_run: Rank 0: ntargets=75: fastspec /global/cfs/cdirs/desi/spectro/redux/iron/healpix/sv3/dark/259/25933/redrock-sv3-dark-25933.fits -o=/pscratch/sd/v/virajvm/desi_dwarf_catalogs/fastspecfit_custom_run/iron/healpix/sv3/dark/259/25933/fastspec-sv3-dark-25933.fits.gz --mp=1 --ignore-quasarnet --templates=/global/cfs/cdirs/desi/users/dscholte/data/ohno/templates/9.9.9/ftemplates-chabrier-9.9.9.fits --emlinesfile=/global/homes/v/virajvm/DESI2_LOWZ/desi_dwarfs/data/data_metal/emlines.ecsv --nmonte=100 --vdisp-nominal=100.0 --vdisp-bounds 50.0 200.0 --seed=1 --targetids=39627746137085270,39627746141278990,39627752172690228,39627752176882779,39627752181076316,39627758208292448,39627758216678780,39627758220869702,39627758220869836,39627758220870788,39627758220874065,39627758225067724,39627758225068313,39627764256477950,39627764260667835,39627770300467921,39627770300468886,39627770300469408,39627746137086236,39627746141276061,39627752176878405,39627752176879311,39627752176879533,39627752181072514,39627752181076631,39627752185267120,39627752185268475,39627758208293321,39627758208293618,39627758212481187,39627758212482641,39627758212482761,39627758212483773,39627758212483916,39627758212484780,39627758212487099,39627758216675510,39627758216676123,39627758216676530,39627758216677804,39627758216679805,39627758216680402,39627758220872679,39627758220873279,39627758220874264,39627758225064605,39627758225067459,39627758225067705,39627758229261004,39627758229263025,39627764252282831,39627764252284750,39627764256473325,39627764256476510,39627764260667838,39627764260668354,39627764260670290,39627764260670633,39627764260671882,39627764260672653,39627764264862225,39627764264863088,39627764264863356,39627764264864523,39627764264864861,39627764264866678,39627764264867663,39627764269056211,39627770296272888,39627770296276311,39627752176880435,39627764256473870,39627764256477155,39627764260668896,39627770296275673 --firsttarget=0
+INFO:parallel.py:473:stdouterr_redirected: Begin log redirection to /pscratch/sd/v/virajvm/desi_dwarf_catalogs/fastspecfit_custom_run/iron/healpix/sv3/dark/259/25933/fastspec-sv3-dark-25933.log at Mon May 25 16:46:28 2026
+INFO:parallel.py:532:stdouterr_redirected: End log redirection to /pscratch/sd/v/virajvm/desi_dwarf_catalogs/fastspecfit_custom_run/iron/healpix/sv3/dark/259/25933/fastspec-sv3-dark-25933.log at Mon May 25 17:04:11 2026
+INFO:mpi.py:860:_perfile_run: fsftime 17.73 min for process_file [rank=0] at 2026-05-25T17:04:11.916
+INFO:mpi-fastspecfit:214:run_fastspecfit: All done at Mon May 25 17:04:12 2026
