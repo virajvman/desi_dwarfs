@@ -1,7 +1,7 @@
 #!/bin/bash
 
 source /global/cfs/cdirs/desi/software/desi_environment.sh main
-module load fastspecfit/main
+module load fastspecfit/3.4.1
 
 STACK_PATH="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/stack_files/mstar"
 NCORES=32

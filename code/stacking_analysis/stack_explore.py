@@ -1,11 +1,22 @@
-from astropy.table import Table, hstack, vstack
+import os
+import sys
+
+# This module lives in code/stacking_analysis/, but its helpers (and the
+# helpers' own transitive imports) reach into modules that live one level up
+# in code/: desi_lowz_funcs.py, mass_and_photo_corrections.py, and the
+# nnmf_pca_analysis package. Make code/ importable so the script works
+# regardless of the caller's cwd or PYTHONPATH.
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+_CODE_DIR = os.path.dirname(_THIS_DIR)
+if _CODE_DIR not in sys.path:
+    sys.path.insert(0, _CODE_DIR)
+
+from astropy.table import Table, hstack
 import h5py
 import numpy as np
-from tqdm import tqdm
 from nnmf_pca_analysis.nnmf_analysis import deredshift_resample_desi_spectra
-from desi_lowz_funcs import print_stage, check_path_existence
+from desi_lowz_funcs import print_stage
 from mass_and_photo_corrections import DWARF_CATALOG_SPEC_HDU
-import matplotlib.pyplot as plt
 
 ##deredshifting functions
 
@@ -107,12 +118,16 @@ def select_sample(catalog, sample_name, z_min=0.05, z_max=0.1,
     else:
         samp_mask = (catalog["SAMPLE"] == sample_name)
     
+    # Half-open mass interval (low-exclusive, high-inclusive) so a galaxy
+    # sitting exactly on a bin boundary lands in the lower-edge bin and is
+    # not silently dropped from both neighbors. Matches select_sample_2d in
+    # stack_mstar_haew.py.
     mask = (
          samp_mask &
         (catalog["Z"] > z_min) &
         (catalog["Z"] < z_max) &
         (catalog["LOG_MSTAR_M24"] > logmstar_min) &
-        (catalog["LOG_MSTAR_M24"] < logmstar_max)
+        (catalog["LOG_MSTAR_M24"] <= logmstar_max)
     )
 
     print(f"Total number selected = {np.sum(mask)}")
@@ -151,7 +166,7 @@ def get_sample_spectra_with_linenorm(catalog_subset, spectra_data,line_norm="HAL
     matched_cat_indices = np.array(matched_cat_indices)
     
     if len(matched_spec_indices) == 0:
-        return None, None, None, 0
+        return None, None, None, None
     
     fluxes = spectra_data["flux"][matched_spec_indices]
     ivars = spectra_data["flux_ivar"][matched_spec_indices]
