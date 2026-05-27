@@ -11,7 +11,10 @@ from mass_and_photo_corrections import (
     DWARF_CATALOG_SPEC_HDU,
     DWARF_CATALOG_DERIVED_HDU,
     FASTSPEC_DELTA_MAG_COLS,
+    NEBCORR_DEFAULT_FOLDER,
+    _load_nebcorr_delta_mag_table,
     safe_read_table,
+    safe_vstack,
 )
 from desi_lowz_funcs import get_stellar_mass_mia, r_kcorr
 from data_model import spec_derived_hdu_datamodel
@@ -661,18 +664,74 @@ def _apply_spec_derived_metadata(tab):
     return tab
 
 
-def build_spec_derived_hdu(cat_path, verbose=True):
+def build_spec_derived_hdu(
+    cat_path,
+    verbose=True,
+    n_jobs=1,
+    te_method="ultranest",
+    min_num_live_points=400,
+    te_line_names=("HALPHA", "HBETA", "HGAMMA",
+                   "OIII_4363", "OIII_5007", "OII_3726", "OII_3729"),
+    te_snr_val=5,
+    te_min_lines=7,
+):
     """
     Build / refresh the SPEC_DERIVED HDU (DWARF_CATALOG_DERIVED_HDU) of a
-    consolidated dwarf catalog with the spectroscopically derived nebular
-    properties LOG_SFR_HALPHA, LOG_SFR_HALPHA_ERR, LOG_MSTAR_24_FIBER,
-    LOG_HALPHA_SFR_FIBER, and Z_GAS_R23_N2.
+    consolidated dwarf catalog with spectroscopically derived nebular
+    properties.
+
+    Output columns:
+
+      Existing block (unchanged from previous version):
+        TARGETID, LOG_SFR_HALPHA, LOG_SFR_HALPHA_ERR, LOG_MSTAR_24_FIBER,
+        LOG_HALPHA_SFR_FIBER, Z_GAS_R23_N2
+
+      DELTA_MAG block (was previously written to the FASTSPEC HDU by
+      add_delta_mag_to_fastspec; now lives here, matched by TARGETID to the
+      NEBCORR INT_V2 tables, with BASS2DECAM north-masked):
+        DELTA_MAG_G_BASS2DECAM, DELTA_MAG_R_BASS2DECAM,
+        DELTA_MAG_G_NEB,        DELTA_MAG_R_NEB,
+        DELTA_MAG_G_DECAM2SDSS, DELTA_MAG_R_DECAM2SDSS,
+        DELTA_MAG_G_KCORR,      DELTA_MAG_R_KCORR
+
+      Direct-method nebular block (Scholte+2026 inference via
+      pn_functions.compute_direct_metallicities), populated only for rows
+      passing the te_mask (line_snr_mask on te_line_names, snr_val,
+      min_lines); NaN / False / 0 elsewhere:
+        TE_NE_OII, TE_T_OIII, TE_AV,
+        TE_LOG_O2_ABUND, TE_LOG_O3_ABUND, TE_12_LOG_OH
+            (each with _LO / _HI / _ERR siblings)
+        TE_N_RATIOS, TE_FIT_SUCCESS
 
     Reads MAIN, FASTSPEC (DWARF_CATALOG_SPEC_HDU), and TRACTOR. The function
-    does NOT modify any existing HDU; it builds a fresh BinTableHDU containing
-    TARGETID + the 5 derived columns and either replaces an existing
-    SPEC_DERIVED HDU or appends a new one. Existing HDUs (including FASTSPEC)
-    are preserved bit-for-bit using a temp-file + os.replace pattern.
+    does NOT modify any existing HDU; it builds a fresh BinTableHDU and either
+    replaces an existing SPEC_DERIVED HDU or appends a new one. Existing
+    HDUs (including FASTSPEC) are preserved bit-for-bit using a temp-file +
+    os.replace pattern.
+
+    Parameters
+    ----------
+    cat_path : str
+        Path to the multi-extension dwarf catalog FITS file.
+    verbose : bool
+        Print progress.
+    n_jobs : int
+        Number of parallel workers for the per-row direct-method fits
+        (forwarded to compute_direct_metallicities). Default 1 (serial).
+        Recommended on NERSC compute nodes: number of allocated cores.
+    te_method : {'ultranest', 'mle'}
+        Direct-method fitting backend. Default 'ultranest'.
+    min_num_live_points : int
+        UltraNest min_num_live_points (ignored for 'mle'). Default 400.
+    te_line_names : iterable of str
+        Emission lines fed to line_snr_mask for the te_mask. Default is the
+        seven lines required for n_e, T_e, A_V, O+/H+ and O++/H+:
+        HALPHA, HBETA, HGAMMA, OIII_4363, OIII_5007, OII_3726, OII_3729.
+    te_snr_val : float
+        Per-line SNR threshold for te_mask. Default 5.
+    te_min_lines : int
+        Minimum number of lines passing the per-line SNR cut for te_mask.
+        Default 7 (i.e. all of te_line_names must pass).
 
     Must run after consolidate_associated_fiber_properties so MAIN MAG_R and
     LUMI_DIST_MPC are group-consolidated; HALPHA_EW(_IVAR) remain per-fiber
@@ -712,7 +771,8 @@ def build_spec_derived_hdu(cat_path, verbose=True):
         print("=" * 60)
         print(
             f"Building {DWARF_CATALOG_DERIVED_HDU} HDU "
-            "(LOG_SFR_HALPHA, fiber Mstar/SFR, Z_GAS_R23_N2)"
+            "(LOG_SFR_HALPHA, fiber Mstar/SFR, Z_GAS_R23_N2, "
+            "DELTA_MAG_*, direct-method TE_*)"
         )
         print("=" * 60)
 
@@ -945,6 +1005,147 @@ def build_spec_derived_hdu(cat_path, verbose=True):
     derived_tab["LOG_MSTAR_24_FIBER"] = log_mstar_fiber
     derived_tab["LOG_HALPHA_SFR_FIBER"] = log_sfr_fiber
     derived_tab["Z_GAS_R23_N2"] = z_gas
+
+    # ------------------------------------------------------------------
+    # Block A: DELTA_MAG_* photometric correction columns from NEBCORR.
+    # Previously written to the FASTSPEC HDU by add_delta_mag_to_fastspec;
+    # now lives in SPEC_DERIVED. BASS2DECAM rows are zeroed for south
+    # (is_south == 1); other deltas copied verbatim. Unmatched TARGETIDs
+    # leave NaN.
+    # ------------------------------------------------------------------
+    if verbose:
+        print("Adding DELTA_MAG_* photometric correction columns")
+
+    delta_tab = _load_nebcorr_delta_mag_table(
+        save_folder=NEBCORR_DEFAULT_FOLDER, verbose=verbose,
+    )
+    if delta_tab is None:
+        if verbose:
+            print(
+                "  WARNING: No NEBCORR DELTA_MAG tables found; "
+                "DELTA_MAG_* columns filled with NaN."
+            )
+        for col in FASTSPEC_DELTA_MAG_COLS:
+            derived_tab[col] = np.full(n_fspec, np.nan, dtype=np.float64)
+    else:
+        neb_tids = np.asarray(delta_tab["TARGETID"])
+        tid_to_row = {int(t): i for i, t in enumerate(neb_tids)}
+        is_south_rows = np.asarray(delta_tab["is_south"], dtype=np.int64)
+        north_row = (is_south_rows == 0).astype(np.float64)
+
+        matched_rows = np.array(
+            [tid_to_row.get(int(t), -1) for t in tid_main], dtype=np.int64,
+        )
+        n_matched = int(np.sum(matched_rows >= 0))
+        if verbose:
+            print(
+                f"  Matched {n_matched}/{n_fspec} TARGETIDs to NEBCORR "
+                "delta-mag table"
+            )
+
+        for col in FASTSPEC_DELTA_MAG_COLS:
+            arr = np.full(n_fspec, np.nan, dtype=np.float64)
+            src = np.asarray(delta_tab[col], dtype=np.float64)
+            for j in range(n_fspec):
+                row = matched_rows[j]
+                if row < 0:
+                    continue
+                v = src[row]
+                if col in ("DELTA_MAG_G_BASS2DECAM",
+                           "DELTA_MAG_R_BASS2DECAM"):
+                    v = v * north_row[row]
+                arr[j] = v
+            derived_tab[col] = arr
+
+    # ------------------------------------------------------------------
+    # Block B: direct-method nebular fits via
+    # pn_functions.compute_direct_metallicities.
+    # Only rows passing the te_mask (line_snr_mask on te_line_names,
+    # snr_val=te_snr_val, min_lines=te_min_lines) get fits; all other rows
+    # have NaN / False / 0 fills.
+    # ------------------------------------------------------------------
+    if verbose:
+        print("Computing direct-method nebular properties (TE_*)")
+
+    # Lazy import: pn_functions builds PyNeb interpolation grids at module
+    # import time (~seconds), so we only pay that cost when this function
+    # actually runs.
+    from pn_functions import compute_direct_metallicities
+
+    # pn_functions PARAM_NAMES are
+    #   ['ne_oii', 'te_oiii', 'Av', 'log_O2_abund', 'log_O3_abund']
+    # plus the derived 'twelve_log_OH'. Rename to the SPEC_DERIVED TE_*
+    # convention.
+    _TE_RENAME = {
+        "ne_oii":        "TE_NE_OII",
+        "te_oiii":       "TE_T_OIII",
+        "Av":            "TE_AV",
+        "log_O2_abund":  "TE_LOG_O2_ABUND",
+        "log_O3_abund":  "TE_LOG_O3_ABUND",
+        "twelve_log_OH": "TE_12_LOG_OH",
+    }
+
+    te_mask = line_snr_mask(
+        fspec_cat,
+        line_names=list(te_line_names),
+        snr_val=te_snr_val,
+        min_lines=te_min_lines,
+    )
+    n_te = int(te_mask.sum())
+    if verbose:
+        print(
+            f"  te_mask (>= {te_min_lines} of {len(list(te_line_names))} "
+            f"lines @ SNR >= {te_snr_val}): {n_te}/{n_fspec} rows"
+        )
+
+    # Pre-fill all TE_* columns with default blank values so row order is
+    # preserved with no gaps.
+    for new_name in _TE_RENAME.values():
+        for suffix in ("", "_LO", "_HI", "_ERR"):
+            derived_tab[new_name + suffix] = np.full(
+                n_fspec, np.nan, dtype=np.float64
+            )
+    derived_tab["TE_N_RATIOS"] = np.zeros(n_fspec, dtype=np.int32)
+    derived_tab["TE_FIT_SUCCESS"] = np.zeros(n_fspec, dtype=bool)
+
+    if n_te > 0:
+        idx_te = np.flatnonzero(te_mask)
+        fit_tab = compute_direct_metallicities(
+            fspec_cat[idx_te],
+            method=te_method,
+            n_jobs=n_jobs,
+            min_num_live_points=min_num_live_points,
+            verbose=verbose,
+        )
+
+        # Scatter fit_tab rows back to full-length arrays. fit_tab has one
+        # row per row in fspec_cat[idx_te], in the same order, so positional
+        # assignment via idx_te is correct.
+        for orig_name, new_name in _TE_RENAME.items():
+            for src_suffix, dst_suffix in (
+                ("", ""), ("_lo", "_LO"), ("_hi", "_HI"), ("_err", "_ERR"),
+            ):
+                src_col = orig_name + src_suffix
+                dst_col = new_name + dst_suffix
+                if src_col not in fit_tab.colnames:
+                    continue
+                arr = np.asarray(derived_tab[dst_col], dtype=np.float64).copy()
+                arr[idx_te] = np.asarray(fit_tab[src_col], dtype=np.float64)
+                derived_tab[dst_col] = arr
+
+        if "n_ratios" in fit_tab.colnames:
+            arr = np.asarray(derived_tab["TE_N_RATIOS"], dtype=np.int32).copy()
+            arr[idx_te] = np.asarray(fit_tab["n_ratios"], dtype=np.int32)
+            derived_tab["TE_N_RATIOS"] = arr
+        if "fit_success" in fit_tab.colnames:
+            arr = np.asarray(derived_tab["TE_FIT_SUCCESS"], dtype=bool).copy()
+            arr[idx_te] = np.asarray(fit_tab["fit_success"], dtype=bool)
+            derived_tab["TE_FIT_SUCCESS"] = arr
+
+        if verbose:
+            n_ok = int(np.sum(derived_tab["TE_FIT_SUCCESS"]))
+            print(f"  TE_FIT_SUCCESS: {n_ok}/{n_te} fits converged")
+
     _apply_spec_derived_metadata(derived_tab)
 
     derived_hdu = fits.table_to_hdu(derived_tab)
@@ -988,7 +1189,146 @@ def build_spec_derived_hdu(cat_path, verbose=True):
         print(
             f"  {action} {DWARF_CATALOG_DERIVED_HDU} HDU with TARGETID, "
             "LOG_SFR_HALPHA, LOG_SFR_HALPHA_ERR, LOG_MSTAR_24_FIBER, "
-            "LOG_HALPHA_SFR_FIBER, Z_GAS_R23_N2"
+            "LOG_HALPHA_SFR_FIBER, Z_GAS_R23_N2, "
+            "DELTA_MAG_{G,R}_{BASS2DECAM,NEB,DECAM2SDSS,KCORR}, "
+            "TE_NE_OII, TE_T_OIII, TE_AV, TE_LOG_O2_ABUND, "
+            "TE_LOG_O3_ABUND, TE_12_LOG_OH (+_LO/_HI/_ERR), "
+            "TE_N_RATIOS, TE_FIT_SUCCESS"
         )
+        print("=" * 60)
+
+
+def add_model_photometry_to_spec_derived(
+    cat_path,
+    model_phot_dir="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs",
+    gal_types=("LOWZ", "BGS_FAINT", "BGS_BRIGHT", "ELG", "OTHER"),
+    verbose=True,
+):
+    """
+    Read pre-computed fastspec model photometry from
+    model_photometry_diffs_{gal_type}.fits files, cross-match by TARGETID,
+    and append 10 model-magnitude columns to the SPEC_DERIVED HDU of the
+    multi-extension catalog at *cat_path*.
+
+    Must be run after build_spec_derived_hdu has created the SPEC_DERIVED
+    HDU; the SPEC_DERIVED TARGETID order is identical to MAIN/FASTSPEC by
+    construction. Existing HDUs are preserved bit-for-bit via a temp-file
+    + os.replace swap; only the SPEC_DERIVED HDU is rewritten.
+
+    New SPEC_DERIVED columns:
+        MAG_{G,R}_DECAM_MODEL_NOEMI   - DECam model mags, continuum only
+        MAG_{G,R}_DECAM_MODEL_WEMI    - DECam model mags, continuum + emission
+        MAG_{G,R}_BASS_MODEL_WEMI     - BASS  model mags, continuum + emission
+        MAG_{G,R}_SDSS_MODEL_NOEMI    - SDSS  model mags, continuum only
+        MAG_{G,R}_SDSS_Z0_MODEL_NOEMI - SDSS  z=0 rest-frame model mags, continuum only
+    """
+    if verbose:
+        print("=" * 60)
+        print(
+            f"Adding fastspec model photometry columns to "
+            f"{DWARF_CATALOG_DERIVED_HDU} HDU"
+        )
+        print("=" * 60)
+
+    # Cache columns sourced from compute_photometry_catalog now describe the
+    # continuum-only model variants (smooth_continuum is no longer added in
+    # the photometry pipeline). The MAG_*_SDSS_MODEL_NOEMI / *_SDSS_Z0_MODEL_NOEMI
+    # values written here therefore use the continuum-only model template,
+    # matching the run_nebular_correction_int_v2 chain semantics.
+    _COL_MAP = {
+        "g_model_no_emi":   "MAG_G_DECAM_MODEL_NOEMI",
+        "r_model_no_emi":   "MAG_R_DECAM_MODEL_NOEMI",
+        "g_model_w_emi":    "MAG_G_DECAM_MODEL_WEMI",
+        "r_model_w_emi":    "MAG_R_DECAM_MODEL_WEMI",
+        "g_bass_w_emi":     "MAG_G_BASS_MODEL_WEMI",
+        "r_bass_w_emi":     "MAG_R_BASS_MODEL_WEMI",
+        "g_sdss_no_emi":    "MAG_G_SDSS_MODEL_NOEMI",
+        "r_sdss_no_emi":    "MAG_R_SDSS_MODEL_NOEMI",
+        "g_sdss_z0_no_emi": "MAG_G_SDSS_Z0_MODEL_NOEMI",
+        "r_sdss_z0_no_emi": "MAG_R_SDSS_Z0_MODEL_NOEMI",
+    }
+
+    tables = []
+    for gal_type in gal_types:
+        path = os.path.join(model_phot_dir, f"model_photometry_diffs_{gal_type}.fits")
+        if not os.path.exists(path):
+            print(f"  WARNING: {path} not found, skipping {gal_type}")
+            continue
+        tab = safe_read_table(path)
+        if verbose:
+            print(f"  Loaded {len(tab)} rows from {path}")
+        tables.append(tab)
+
+    if len(tables) == 0:
+        print("  ERROR: No model photometry files found. Aborting.")
+        return
+
+    model_phot = safe_vstack(tables)
+
+    # De-duplicate on TARGETID (keep first occurrence)
+    _, unique_idx = np.unique(np.asarray(model_phot["TARGETID"]), return_index=True)
+    model_phot = model_phot[np.sort(unique_idx)]
+    if verbose:
+        print(f"  Combined model photometry table: {len(model_phot)} unique TARGETIDs")
+
+    derived_cat = safe_read_table(cat_path, hdu=DWARF_CATALOG_DERIVED_HDU)
+    n_objects = len(derived_cat)
+    cat_tids = np.asarray(derived_cat["TARGETID"])
+
+    if verbose:
+        print(f"  {DWARF_CATALOG_DERIVED_HDU} HDU has {n_objects} rows")
+
+    model_tid_to_row = {int(t): i for i, t in enumerate(model_phot["TARGETID"])}
+
+    for old_col, new_col in _COL_MAP.items():
+        arr = np.full(n_objects, np.nan, dtype=np.float64)
+        src = np.asarray(model_phot[old_col], dtype=np.float64)
+        for j, tid in enumerate(cat_tids):
+            row = model_tid_to_row.get(int(tid))
+            if row is not None:
+                arr[j] = src[row]
+        derived_cat[new_col] = arr
+
+    n_matched = int(np.sum(np.isfinite(derived_cat["MAG_G_DECAM_MODEL_NOEMI"])))
+    if verbose:
+        print(f"  Matched {n_matched}/{n_objects} objects to model photometry")
+
+    _apply_spec_derived_metadata(derived_cat)
+
+    derived_hdu_new = fits.table_to_hdu(derived_cat)
+    derived_hdu_new.name = DWARF_CATALOG_DERIVED_HDU
+    derived_hdu_new.add_checksum()
+
+    cat_abs = os.path.abspath(cat_path)
+    cat_dir = os.path.dirname(cat_abs) or "."
+    fd, tmp_path = tempfile.mkstemp(
+        suffix=".fits", prefix="model_phot_", dir=cat_dir
+    )
+    os.close(fd)
+    try:
+        with fits.open(cat_abs, memmap=False) as hdul:
+            hdu_names = [hdu.name for hdu in hdul]
+            new_hdus = []
+            for i, hdu in enumerate(hdul):
+                if hdu_names[i] == DWARF_CATALOG_DERIVED_HDU:
+                    new_hdus.append(derived_hdu_new)
+                else:
+                    new_hdus.append(hdu.copy())
+            new_hdul = fits.HDUList(new_hdus)
+            new_hdul[0].add_checksum()
+            new_hdul.writeto(tmp_path, overwrite=True)
+        os.replace(tmp_path, cat_abs)
+    except BaseException:
+        if os.path.isfile(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        raise
+
+    new_cols_str = ", ".join(_COL_MAP.values())
+    if verbose:
+        print(f"Updated {cat_path}:")
+        print(f"  {DWARF_CATALOG_DERIVED_HDU} HDU: added {new_cols_str}")
         print("=" * 60)
 

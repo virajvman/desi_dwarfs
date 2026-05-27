@@ -1357,8 +1357,11 @@ import astropy.units as u
 def match_fastspec_catalog_targetid(gal_cat, vac_data):
     """
     Vectorized match of gal_cat to vac_data by TARGETID, keeping the row
-    with max SNR_R for duplicates. Missing TARGETIDs are filled with np.nan
-    for all columns except TARGETID, which is kept as is.
+    with max SNR_R for duplicates. Output has len(gal_cat) rows, in gal_cat
+    order. TARGETID is always preserved from gal_cat (even for unmatched
+    rows). All other columns are filled with dtype-appropriate sentinels
+    for unmatched rows: NaN for floats, -99 for ints, False for bools,
+    "" for strings, and 0 otherwise (mirrors make_catalog_unmasked).
     """
 
     # Step 1: remove duplicates in vac_data, keep row with max SNR_R
@@ -1381,62 +1384,107 @@ def match_fastspec_catalog_targetid(gal_cat, vac_data):
     found_mask = (inds >= 0) & (inds < len(vac_tgids_sorted))
     found_mask &= vac_tgids_sorted[inds] == gal_cat["TARGETID"]
 
-    # Step 5: create aligned array
+    # Step 5: create aligned array with dtype-appropriate sentinels for the
+    # rows that won't be filled by Step 6 (i.e. unmatched TARGETIDs).
     aligned_arr = np.empty(len(gal_cat), dtype=vac_arr.dtype)
 
     for name in vac_arr.dtype.names:
         if name == "TARGETID":
             aligned_arr[name] = gal_cat["TARGETID"]  # always preserve
+            continue
+        col_dtype = vac_arr.dtype[name]
+        if np.issubdtype(col_dtype, np.floating):
+            aligned_arr[name] = np.nan
+        elif np.issubdtype(col_dtype, np.integer):
+            aligned_arr[name] = -99
+        elif np.issubdtype(col_dtype, np.bool_):
+            aligned_arr[name] = False
+        elif col_dtype.kind in ("U", "S"):
+            aligned_arr[name] = ""
         else:
-            aligned_arr[name] = np.nan  # fill with NaN initially
+            aligned_arr[name] = 0
 
     # Step 6: fill matched rows with data from vac_arr_sorted
     aligned_arr_masked = aligned_arr.copy()
     aligned_arr_masked[found_mask] = vac_arr_sorted[inds[found_mask]]
 
+    n_miss = int(np.sum(~found_mask))
+    print(
+        f"match_fastspec_catalog_targetid: {n_miss}/{len(gal_cat)} gal_cat TARGETIDs "
+        f"not found in fastspec source (filled with dtype-appropriate blanks)"
+    )
+
     # Step 7: convert back to Astropy Table
     vac_aligned = Table(aligned_arr_masked)
 
-    # Step 8: compute separation for valid rows
-    valid_mask = ~np.isnan(vac_aligned["RA"])
-    if np.any(valid_mask):
-        # Ensure the units are proper floats in degrees
-        if "RA_TARGET" in gal_cat.keys():
-            ra_vals = np.array(gal_cat["RA_TARGET"][valid_mask], dtype=float)
-            dec_vals = np.array(gal_cat["DEC_TARGET"][valid_mask], dtype=float)
+    # Step 8: compute separation for valid rows. Skipped entirely when the
+    # source table has no RA column (e.g. fastspecfit FASTSPEC HDU, used by
+    # the custom-source path in match_fastspec_catalog).
+    if "RA" in vac_aligned.colnames:
+        valid_mask = ~np.isnan(vac_aligned["RA"])
+        if np.any(valid_mask):
+            # Ensure the units are proper floats in degrees
+            if "RA_TARGET" in gal_cat.keys():
+                ra_vals = np.array(gal_cat["RA_TARGET"][valid_mask], dtype=float)
+                dec_vals = np.array(gal_cat["DEC_TARGET"][valid_mask], dtype=float)
+            else:
+                ra_vals = np.array(gal_cat["RA"][valid_mask], dtype=float)
+                dec_vals = np.array(gal_cat["DEC"][valid_mask], dtype=float)
+
+            ra_vac = np.array(vac_aligned["RA"][valid_mask], dtype=float)
+            dec_vac = np.array(vac_aligned["DEC"][valid_mask], dtype=float)
+
+            c_gal = SkyCoord(ra=ra_vals * u.deg, dec=dec_vals * u.deg)
+            c_vac = SkyCoord(ra=ra_vac * u.deg, dec=dec_vac * u.deg)
+
+            sep = c_gal.separation(c_vac)
+            print("Maximum separation between input and matched catalog (arcsec):", np.max(sep.arcsec))
         else:
-            ra_vals = np.array(gal_cat["RA"][valid_mask], dtype=float)
-            dec_vals = np.array(gal_cat["DEC"][valid_mask], dtype=float)
-            
-        ra_vac = np.array(vac_aligned["RA"][valid_mask], dtype=float)
-        dec_vac = np.array(vac_aligned["DEC"][valid_mask], dtype=float)
-        
-        c_gal = SkyCoord(ra=ra_vals * u.deg, dec=dec_vals * u.deg)
-        c_vac = SkyCoord(ra=ra_vac * u.deg, dec=dec_vac * u.deg)
-
-        # c_gal = SkyCoord(ra=gal_cat["RA"][valid_mask].astype(float)*u.deg,
-        #                  dec=gal_cat["DEC"][valid_mask].astype(float)*u.deg)
-        # c_vac = SkyCoord(ra=vac_aligned["RA"][valid_mask].astype(float)*u.deg,
-        #                  dec=vac_aligned["DEC"][valid_mask].astype(float)*u.deg)
-        
-        sep = c_gal.separation(c_vac)
-        print("Maximum separation between input and matched catalog (arcsec):", np.max(sep.arcsec))
+            print("No valid matches found; all rows filled with NaN.")
     else:
-        print("No valid matches found; all rows filled with NaN.")
+        print("match_fastspec_catalog_targetid: source has no RA column; skipping separation diagnostic.")
 
-        
     return vac_aligned
 
 
-def match_fastspec_catalog(gal_cat,coord_name = "",match_method = "RADEC"):
+def match_fastspec_catalog(gal_cat, coord_name="", match_method="RADEC", source="default"):
     '''
     We match our catalog of interest with the total fastspec catalog (subselected to relevant columns) and save that matched subset.
+
+    Parameters
+    ----------
+    gal_cat : astropy.table.Table
+        Input catalog to match.
+    coord_name : str
+        Optional prefix for the RA/DEC columns in gal_cat (used when match_method=="RADEC").
+    match_method : str
+        Either "RADEC" or "TARGETID". For source="custom" this is forced to "TARGETID".
+    source : str
+        Which fastspec catalog to match against:
+          - "default": the precomputed combined v2.1 catalog
+            ``iron_fastspec_v21.fits`` (subset of columns, includes RA/DEC).
+          - "custom":  the FASTSPEC HDU (hdu=3) of the custom fastspecfit run at
+            ``/pscratch/sd/v/virajvm/desi_dwarf_catalogs/fastspecfit_custom_run/iron/catalogs/fastspec-iron-sample.fits``.
+            All columns from that HDU are returned verbatim (no subsetting).
+            The FASTSPEC HDU carries no RA/DEC, so matching is forced to TARGETID.
     '''
-    
-    #fastspec catalog
-    # vac_data = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_fastspec_catalog/iron_fastspec_v3.fits")
-    vac_data = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_fastspec_catalog/iron_fastspec_v21.fits")
-    
+
+    if source == "default":
+        vac_data = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_fastspec_catalog/iron_fastspec_v21.fits")
+    elif source == "custom":
+        custom_path = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/fastspecfit_custom_run/iron/catalogs/fastspec-iron-sample.fits"
+        print(f"match_fastspec_catalog: reading custom FASTSPEC HDU (hdu=3) from {custom_path}")
+        vac_data = Table.read(custom_path, hdu=3)
+        if match_method != "TARGETID":
+            print(
+                f"match_fastspec_catalog: source='custom' has no RA/DEC; "
+                f"forcing match_method='TARGETID' (was {match_method!r})"
+            )
+            match_method = "TARGETID"
+    else:
+        raise ValueError(
+            f"Unknown source={source!r}; expected one of {{'default', 'custom'}}"
+        )
 
     if match_method == "RADEC":
         

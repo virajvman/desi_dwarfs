@@ -1511,56 +1511,10 @@ fastspec_hdu_datamodel["FLUX_SYNTH_PHOTMODEL_Z"] = {
     "dtype": "float32"
 }
 
-fastspec_hdu_datamodel["MAG_G_DECAM_MODEL_NOEMI"] = {
-    "unit": "mag",
-    "description": "DECam g-band AB magnitude of the fastspecfit continuum-only model (no emission lines).",
-    "dtype": "float64"
-}
-fastspec_hdu_datamodel["MAG_R_DECAM_MODEL_NOEMI"] = {
-    "unit": "mag",
-    "description": "DECam r-band AB magnitude of the fastspecfit continuum-only model (no emission lines).",
-    "dtype": "float64"
-}
-fastspec_hdu_datamodel["MAG_G_DECAM_MODEL_WEMI"] = {
-    "unit": "mag",
-    "description": "DECam g-band AB magnitude of the fastspecfit model including emission lines.",
-    "dtype": "float64"
-}
-fastspec_hdu_datamodel["MAG_R_DECAM_MODEL_WEMI"] = {
-    "unit": "mag",
-    "description": "DECam r-band AB magnitude of the fastspecfit model including emission lines.",
-    "dtype": "float64"
-}
-fastspec_hdu_datamodel["MAG_G_BASS_MODEL_WEMI"] = {
-    "unit": "mag",
-    "description": "BASS g-band AB magnitude of the fastspecfit model including emission lines.",
-    "dtype": "float64"
-}
-fastspec_hdu_datamodel["MAG_R_BASS_MODEL_WEMI"] = {
-    "unit": "mag",
-    "description": "BASS r-band AB magnitude of the fastspecfit model including emission lines.",
-    "dtype": "float64"
-}
-fastspec_hdu_datamodel["MAG_G_SDSS_MODEL_NOEMI"] = {
-    "unit": "mag",
-    "description": "SDSS g-band AB magnitude of the fastspecfit continuum-only model (no emission lines) at observed redshift.",
-    "dtype": "float64"
-}
-fastspec_hdu_datamodel["MAG_R_SDSS_MODEL_NOEMI"] = {
-    "unit": "mag",
-    "description": "SDSS r-band AB magnitude of the fastspecfit continuum-only model (no emission lines) at observed redshift.",
-    "dtype": "float64"
-}
-fastspec_hdu_datamodel["MAG_G_SDSS_Z0_MODEL_NOEMI"] = {
-    "unit": "mag",
-    "description": "SDSS g-band AB magnitude of the fastspecfit continuum-only model (no emission lines) k-corrected to z=0.",
-    "dtype": "float64"
-}
-fastspec_hdu_datamodel["MAG_R_SDSS_Z0_MODEL_NOEMI"] = {
-    "unit": "mag",
-    "description": "SDSS r-band AB magnitude of the fastspecfit continuum-only model (no emission lines) k-corrected to z=0.",
-    "dtype": "float64"
-}
+# MAG_*_MODEL_* entries moved to spec_derived_hdu_datamodel (see below).
+# They are now written by code/add_nebular_props.py to the SPEC_DERIVED HDU
+# via add_model_photometry_to_spec_derived rather than to the FASTSPEC HDU.
+
 fastspec_hdu_datamodel["MAG_G_FIBER_NOEMI"] = {
     "unit": "mag",
     "description": "DECam g-band AB magnitude measured from the emission-subtracted DESI fiber spectrum.",
@@ -1582,54 +1536,9 @@ fastspec_hdu_datamodel["MAG_R_FIBER_NOEMI_ERR"] = {
     "dtype": "float64"
 }
 
-fastspec_hdu_datamodel["DELTA_MAG_G_BASS2DECAM"] = {
-    "unit": "mag",
-    "description": "Delta magnitude (add to Tractor g) for BASS-to-DECam conversion from fastspecfit models (north only; south typically ~0).",
-    "dtype": "float64",
-    "blank_value": np.nan,
-}
-fastspec_hdu_datamodel["DELTA_MAG_R_BASS2DECAM"] = {
-    "unit": "mag",
-    "description": "Same as DELTA_MAG_G_BASS2DECAM for r-band.",
-    "dtype": "float64",
-    "blank_value": np.nan,
-}
-fastspec_hdu_datamodel["DELTA_MAG_G_NEB"] = {
-    "unit": "mag",
-    "description": "Delta magnitude (add to working g mag) for nebular emission removal, from fastspecfit template difference.",
-    "dtype": "float64",
-    "blank_value": np.nan,
-}
-fastspec_hdu_datamodel["DELTA_MAG_R_NEB"] = {
-    "unit": "mag",
-    "description": "Same as DELTA_MAG_G_NEB for r-band.",
-    "dtype": "float64",
-    "blank_value": np.nan,
-}
-fastspec_hdu_datamodel["DELTA_MAG_G_DECAM2SDSS"] = {
-    "unit": "mag",
-    "description": "Delta magnitude (add to working g mag) for DECam-to-SDSS filter conversion from continuum-only model.",
-    "dtype": "float64",
-    "blank_value": np.nan,
-}
-fastspec_hdu_datamodel["DELTA_MAG_R_DECAM2SDSS"] = {
-    "unit": "mag",
-    "description": "Same as DELTA_MAG_G_DECAM2SDSS for r-band.",
-    "dtype": "float64",
-    "blank_value": np.nan,
-}
-fastspec_hdu_datamodel["DELTA_MAG_G_KCORR"] = {
-    "unit": "mag",
-    "description": "Delta magnitude (add to working g mag) for k-correction SDSS observed-z to z=0 from continuum-only model.",
-    "dtype": "float64",
-    "blank_value": np.nan,
-}
-fastspec_hdu_datamodel["DELTA_MAG_R_KCORR"] = {
-    "unit": "mag",
-    "description": "Same as DELTA_MAG_G_KCORR for r-band.",
-    "dtype": "float64",
-    "blank_value": np.nan,
-}
+# DELTA_MAG_{G,R}_* entries moved to spec_derived_hdu_datamodel (see below).
+# They are now written by code/add_nebular_props.py to the SPEC_DERIVED HDU
+# rather than to the FASTSPEC HDU.
 
 
 
@@ -1761,6 +1670,294 @@ spec_derived_hdu_datamodel = {
             "using FASTSPEC Gaussian line fluxes; internal dust correction when Halpha/Hbeta > 2.86. "
             "Filled where all seven lines pass line_snr (SNR > 3, flux > 0); NaN otherwise."
         ),
+        "dtype": "float64",
+    },
+
+    # ---------------------------------------------------------------
+    # DELTA_MAG_* photometric correction columns
+    #
+    # Previously written to the FASTSPEC HDU by
+    # mass_and_photo_corrections.add_delta_mag_to_fastspec; now written to
+    # SPEC_DERIVED by code/add_nebular_props.py (matched by TARGETID to the
+    # NEBCORR INT_V2 tables). BASS2DECAM columns are zeroed for south
+    # (is_south == 1); all other deltas copied verbatim. Unmatched
+    # TARGETIDs leave NaN.
+    # ---------------------------------------------------------------
+    "DELTA_MAG_G_BASS2DECAM": {
+        "unit": "mag",
+        "description": "Delta magnitude (add to Tractor g) for BASS-to-DECam conversion from fastspecfit models (north only; south typically ~0).",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "DELTA_MAG_R_BASS2DECAM": {
+        "unit": "mag",
+        "description": "Same as DELTA_MAG_G_BASS2DECAM for r-band.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "DELTA_MAG_G_NEB": {
+        "unit": "mag",
+        "description": "Delta magnitude (add to working g mag) for nebular emission removal, from fastspecfit template difference.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "DELTA_MAG_R_NEB": {
+        "unit": "mag",
+        "description": "Same as DELTA_MAG_G_NEB for r-band.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "DELTA_MAG_G_DECAM2SDSS": {
+        "unit": "mag",
+        "description": "Delta magnitude (add to working g mag) for DECam-to-SDSS filter conversion from continuum-only model.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "DELTA_MAG_R_DECAM2SDSS": {
+        "unit": "mag",
+        "description": "Same as DELTA_MAG_G_DECAM2SDSS for r-band.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "DELTA_MAG_G_KCORR": {
+        "unit": "mag",
+        "description": "Delta magnitude (add to working g mag) for k-correction SDSS observed-z to z=0 from continuum-only model.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "DELTA_MAG_R_KCORR": {
+        "unit": "mag",
+        "description": "Same as DELTA_MAG_G_KCORR for r-band.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+
+    # ---------------------------------------------------------------
+    # Direct-method nebular properties (TE_*)
+    #
+    # Produced by pn_functions.compute_direct_metallicities (UltraNest
+    # nested sampling, matching Scholte+2026, Table 3). Populated only for
+    # rows passing line_snr_mask([HALPHA, HBETA, HGAMMA, OIII_4363,
+    # OIII_5007, OII_3726, OII_3729], snr_val=5, min_lines=7); all other
+    # rows are NaN / False / 0.
+    #
+    # Each *_LO / *_HI / *_ERR sibling holds the 16th percentile, 84th
+    # percentile and half the 84-16 spread of the posterior (or the
+    # Hessian error for method='mle').
+    # ---------------------------------------------------------------
+    "TE_NE_OII": {
+        "unit": "cm-3",
+        "description": "Direct-method electron density inferred from the [O II] 3726/3729 doublet ratio (posterior median; NaN if te_mask fails or fit failed).",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_NE_OII_LO": {
+        "unit": "cm-3",
+        "description": "16th percentile of the TE_NE_OII posterior.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_NE_OII_HI": {
+        "unit": "cm-3",
+        "description": "84th percentile of the TE_NE_OII posterior.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_NE_OII_ERR": {
+        "unit": "cm-3",
+        "description": "Half-width 0.5*(TE_NE_OII_HI - TE_NE_OII_LO) of the TE_NE_OII posterior.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_T_OIII": {
+        "unit": "K",
+        "description": "Direct-method [O III]-zone electron temperature T_high (posterior median) inferred from [O III] 4363/5007 (Scholte+2026).",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_T_OIII_LO": {
+        "unit": "K",
+        "description": "16th percentile of the TE_T_OIII posterior.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_T_OIII_HI": {
+        "unit": "K",
+        "description": "84th percentile of the TE_T_OIII posterior.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_T_OIII_ERR": {
+        "unit": "K",
+        "description": "Half-width 0.5*(TE_T_OIII_HI - TE_T_OIII_LO) of the TE_T_OIII posterior.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_AV": {
+        "unit": "mag",
+        "description": "Direct-method V-band attenuation A_V (Cardelli+1989, R_V=3.1) jointly constrained by Halpha/Hbeta and Hgamma/Hbeta in the pn_functions fit.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_AV_LO": {
+        "unit": "mag",
+        "description": "16th percentile of the TE_AV posterior.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_AV_HI": {
+        "unit": "mag",
+        "description": "84th percentile of the TE_AV posterior.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_AV_ERR": {
+        "unit": "mag",
+        "description": "Half-width 0.5*(TE_AV_HI - TE_AV_LO) of the TE_AV posterior.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_LOG_O2_ABUND": {
+        "unit": None,
+        "description": "log10(O+/H+) ionic abundance (posterior median) from the pn_functions direct-method fit.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_LOG_O2_ABUND_LO": {
+        "unit": None,
+        "description": "16th percentile of the TE_LOG_O2_ABUND posterior.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_LOG_O2_ABUND_HI": {
+        "unit": None,
+        "description": "84th percentile of the TE_LOG_O2_ABUND posterior.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_LOG_O2_ABUND_ERR": {
+        "unit": None,
+        "description": "Half-width 0.5*(TE_LOG_O2_ABUND_HI - TE_LOG_O2_ABUND_LO) of the TE_LOG_O2_ABUND posterior.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_LOG_O3_ABUND": {
+        "unit": None,
+        "description": "log10(O++/H+) ionic abundance (posterior median) from the pn_functions direct-method fit.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_LOG_O3_ABUND_LO": {
+        "unit": None,
+        "description": "16th percentile of the TE_LOG_O3_ABUND posterior.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_LOG_O3_ABUND_HI": {
+        "unit": None,
+        "description": "84th percentile of the TE_LOG_O3_ABUND posterior.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_LOG_O3_ABUND_ERR": {
+        "unit": None,
+        "description": "Half-width 0.5*(TE_LOG_O3_ABUND_HI - TE_LOG_O3_ABUND_LO) of the TE_LOG_O3_ABUND posterior.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_12_LOG_OH": {
+        "unit": None,
+        "description": "Direct-method 12 + log10(O/H) = 12 + log10(10^TE_LOG_O2_ABUND + 10^TE_LOG_O3_ABUND), computed per posterior sample so the O+/O++ anti-correlation is preserved.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_12_LOG_OH_LO": {
+        "unit": None,
+        "description": "16th percentile of the TE_12_LOG_OH posterior.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_12_LOG_OH_HI": {
+        "unit": None,
+        "description": "84th percentile of the TE_12_LOG_OH posterior.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_12_LOG_OH_ERR": {
+        "unit": None,
+        "description": "Half-width 0.5*(TE_12_LOG_OH_HI - TE_12_LOG_OH_LO) of the TE_12_LOG_OH posterior.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_N_RATIOS": {
+        "unit": None,
+        "description": "Number of usable emission-line ratios fed to the direct-method fit (out of 6: [O II] 3726/3729, Hbeta/Halpha, Hgamma/Hbeta, [O III] 4363/5007, ([O II] 3726+3729)/Hbeta, [O III] 5007/Hbeta). 0 for rows without an attempted fit.",
+        "dtype": "int32",
+    },
+    "TE_FIT_SUCCESS": {
+        "unit": None,
+        "description": "True if the direct-method fit converged for this row (te_mask passed AND pn_functions.compute_direct_metallicities returned success). False otherwise.",
+        "dtype": "bool",
+    },
+
+    # ---------------------------------------------------------------
+    # MAG_*_MODEL_* fastspec model photometry columns
+    #
+    # Previously written to the FASTSPEC HDU by
+    # consolidate_photometry.add_model_photometry_to_fastspec; now written
+    # to SPEC_DERIVED by code/add_nebular_props.py via
+    # sfr_and_metallicity.add_model_photometry_to_spec_derived, matched by
+    # TARGETID to the pre-computed model_photometry_diffs_{gal_type}.fits
+    # tables. Unmatched TARGETIDs leave NaN.
+    # ---------------------------------------------------------------
+    "MAG_G_DECAM_MODEL_NOEMI": {
+        "unit": "mag",
+        "description": "DECam g-band AB magnitude of the fastspecfit continuum-only model (no emission lines).",
+        "dtype": "float64",
+    },
+    "MAG_R_DECAM_MODEL_NOEMI": {
+        "unit": "mag",
+        "description": "DECam r-band AB magnitude of the fastspecfit continuum-only model (no emission lines).",
+        "dtype": "float64",
+    },
+    "MAG_G_DECAM_MODEL_WEMI": {
+        "unit": "mag",
+        "description": "DECam g-band AB magnitude of the fastspecfit model including emission lines.",
+        "dtype": "float64",
+    },
+    "MAG_R_DECAM_MODEL_WEMI": {
+        "unit": "mag",
+        "description": "DECam r-band AB magnitude of the fastspecfit model including emission lines.",
+        "dtype": "float64",
+    },
+    "MAG_G_BASS_MODEL_WEMI": {
+        "unit": "mag",
+        "description": "BASS g-band AB magnitude of the fastspecfit model including emission lines.",
+        "dtype": "float64",
+    },
+    "MAG_R_BASS_MODEL_WEMI": {
+        "unit": "mag",
+        "description": "BASS r-band AB magnitude of the fastspecfit model including emission lines.",
+        "dtype": "float64",
+    },
+    "MAG_G_SDSS_MODEL_NOEMI": {
+        "unit": "mag",
+        "description": "SDSS g-band AB magnitude of the fastspecfit continuum-only model (no emission lines) at observed redshift.",
+        "dtype": "float64",
+    },
+    "MAG_R_SDSS_MODEL_NOEMI": {
+        "unit": "mag",
+        "description": "SDSS r-band AB magnitude of the fastspecfit continuum-only model (no emission lines) at observed redshift.",
+        "dtype": "float64",
+    },
+    "MAG_G_SDSS_Z0_MODEL_NOEMI": {
+        "unit": "mag",
+        "description": "SDSS g-band AB magnitude of the fastspecfit continuum-only model (no emission lines) k-corrected to z=0.",
+        "dtype": "float64",
+    },
+    "MAG_R_SDSS_Z0_MODEL_NOEMI": {
+        "unit": "mag",
+        "description": "SDSS r-band AB magnitude of the fastspecfit continuum-only model (no emission lines) k-corrected to z=0.",
         "dtype": "float64",
     },
 }

@@ -46,7 +46,6 @@ from mass_and_photo_corrections import (
     _bass2decam_apply_mask,
     _load_nebcorr_delta_mag_table,
     _apply_delta_mag_corrections,
-    add_delta_mag_to_fastspec,
     compute_emission_subtracted_photo_errors,
     NEBCORR_DEFAULT_FOLDER,
     NEBCORR_INT_V2_BASENAMES,
@@ -1088,26 +1087,49 @@ def load_and_filter_qso_scnd_candidates(
     return cats
 
 
-def get_fastspec_matched_catalog(gal_cat, save_name, match_method = "TARGETID"):
+def get_fastspec_matched_catalog(gal_cat, save_name, match_method="TARGETID", source="default"):
     '''
-    Get the RA,DEC matched fastspec catalog and save it   
+    Match gal_cat against the chosen fastspec source and save the row-aligned
+    matched table as ``save_name``.
+
+    Parameters
+    ----------
+    gal_cat : astropy.table.Table
+        Input catalog (typically a per-sample MAIN-aligned table such as
+        tot_shred, clean_cat, or qso_scnd_cat).
+    save_name : str
+        Output FITS path for the matched FASTSPEC-HDU contents.
+    match_method : str
+        "TARGETID" (default here) or "RADEC". Overridden to "TARGETID" inside
+        match_fastspec_catalog when source="custom".
+    source : str
+        Passed through to match_fastspec_catalog. One of:
+          - "default": precomputed v2.1 combined catalog (current behavior).
+          - "custom":  HDU=3 of the custom fastspecfit run; all columns kept.
     '''
 
-    #make sure the catalog being matched to us v2
-    fastspec_cat = match_fastspec_catalog(gal_cat,coord_name = "",match_method = match_method)
+    fastspec_cat = match_fastspec_catalog(
+        gal_cat, coord_name="", match_method=match_method, source=source
+    )
 
-    #make sure this is not a masked column!
     fastspec_cat = make_catalog_unmasked(fastspec_cat)
 
     if "LOGMSTAR" in fastspec_cat.colnames and "LOGMSTAR_FASTSPEC" not in fastspec_cat.colnames:
         fastspec_cat.rename_column("LOGMSTAR", "LOGMSTAR_FASTSPEC")
 
-    #save this 
-    fastspec_cat.write(f"{save_name}",overwrite=True)
+    # Row-alignment tripwire: match_fastspec_catalog must return rows in
+    # gal_cat input order, with TARGETID preserved per row (including for
+    # unmatched rows). Trip immediately if that contract is ever broken.
+    if not (np.asarray(fastspec_cat["TARGETID"]) == np.asarray(gal_cat["TARGETID"])).all():
+        raise ValueError(
+            f"FASTSPEC row order does not match input gal_cat TARGETID order for {save_name}"
+        )
 
-    #see what fraction of the catalog has np.nans in catalog
-    mask = np.isnan(fastspec_cat["RA"])
-    print(f"{np.sum(mask)}/{len(mask)} objects have no match in Fastspecfit catalog!")
+    fastspec_cat.write(f"{save_name}", overwrite=True)
+
+    if "RA" in fastspec_cat.colnames:
+        mask = np.isnan(fastspec_cat["RA"])
+        print(f"{np.sum(mask)}/{len(mask)} objects have no match in Fastspecfit catalog!")
     return
 
 
@@ -2087,147 +2109,11 @@ def add_wrong_redrock_maskbit(cat_path, main_datamodel, bit=16):
     print(f"Set DWARF_MASKBIT bit {bit} for {weird_mask.sum()} objects (MAIN HDU updated).")
 
 
-def add_model_photometry_to_fastspec(
-    cat_path,
-    model_phot_dir="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs",
-    gal_types=("LOWZ", "BGS_FAINT", "BGS_BRIGHT", "ELG", "OTHER"),
-    verbose=True,
-):
-    """
-    Read pre-computed fastspec model photometry from
-    model_photometry_diffs_{gal_type}.fits files, cross-match by TARGETID,
-    and append 10 model-magnitude columns to the FASTSPEC HDU of the
-    multi-extension catalog at *cat_path*.
-
-    New FASTSPEC columns:
-        MAG_{G,R}_DECAM_MODEL_NOEMI   - DECam model mags, continuum only
-        MAG_{G,R}_DECAM_MODEL_WEMI    - DECam model mags, continuum + emission
-        MAG_{G,R}_BASS_MODEL_WEMI     - BASS  model mags, continuum + emission
-        MAG_{G,R}_SDSS_MODEL_NOEMI    - SDSS  model mags, continuum only
-        MAG_{G,R}_SDSS_Z0_MODEL_NOEMI - SDSS  z=0 rest-frame model mags, continuum only
-    """
-    print("=" * 60)
-    print("Adding fastspec model photometry columns to FASTSPEC HDU")
-    print("=" * 60)
-
-    # Cache columns sourced from compute_photometry_catalog now describe the
-    # continuum-only model variants (smooth_continuum is no longer added in
-    # the photometry pipeline). The MAG_*_SDSS_MODEL_NOEMI / *_SDSS_Z0_MODEL_NOEMI
-    # values written here therefore use the continuum-only model template,
-    # matching the run_nebular_correction_int_v2 chain semantics.
-    _COL_MAP = {
-        "g_model_no_emi":   "MAG_G_DECAM_MODEL_NOEMI",
-        "r_model_no_emi":   "MAG_R_DECAM_MODEL_NOEMI",
-        "g_model_w_emi":    "MAG_G_DECAM_MODEL_WEMI",
-        "r_model_w_emi":    "MAG_R_DECAM_MODEL_WEMI",
-        "g_bass_w_emi":     "MAG_G_BASS_MODEL_WEMI",
-        "r_bass_w_emi":     "MAG_R_BASS_MODEL_WEMI",
-        "g_sdss_no_emi":    "MAG_G_SDSS_MODEL_NOEMI",
-        "r_sdss_no_emi":    "MAG_R_SDSS_MODEL_NOEMI",
-        "g_sdss_z0_no_emi": "MAG_G_SDSS_Z0_MODEL_NOEMI",
-        "r_sdss_z0_no_emi": "MAG_R_SDSS_Z0_MODEL_NOEMI",
-    }
-
-    # ── 1. Read and combine model photometry tables ────────────────────
-    tables = []
-    for gal_type in gal_types:
-        path = os.path.join(model_phot_dir, f"model_photometry_diffs_{gal_type}.fits")
-        if not os.path.exists(path):
-            print(f"  WARNING: {path} not found, skipping {gal_type}")
-            continue
-        tab = safe_read_table(path)
-        if verbose:
-            print(f"  Loaded {len(tab)} rows from {path}")
-        tables.append(tab)
-
-    if len(tables) == 0:
-        print("  ERROR: No model photometry files found. Aborting.")
-        return
-
-    model_phot = safe_vstack(tables)
-
-    # De-duplicate on TARGETID (keep first occurrence)
-    _, unique_idx = np.unique(np.asarray(model_phot["TARGETID"]), return_index=True)
-    model_phot = model_phot[np.sort(unique_idx)]
-    if verbose:
-        print(f"  Combined model photometry table: {len(model_phot)} unique TARGETIDs")
-
-    # ── 2. Read FASTSPEC HDU from the catalog ──────────────────────────
-    fspec_cat = safe_read_table(cat_path, hdu=DWARF_CATALOG_SPEC_HDU)
-    n_objects = len(fspec_cat)
-    cat_tids = np.asarray(fspec_cat["TARGETID"])
-
-    if verbose:
-        print(f"  FASTSPEC HDU has {n_objects} rows")
-
-    # ── 3. Build TARGETID lookup and fill columns ──────────────────────
-    model_tid_to_row = {int(t): i for i, t in enumerate(model_phot["TARGETID"])}
-
-    for old_col, new_col in _COL_MAP.items():
-        arr = np.full(n_objects, np.nan, dtype=np.float64)
-        src = np.asarray(model_phot[old_col], dtype=np.float64)
-        for j, tid in enumerate(cat_tids):
-            row = model_tid_to_row.get(int(tid))
-            if row is not None:
-                arr[j] = src[row]
-        fspec_cat[new_col] = arr
-
-    n_matched = int(np.sum(np.isfinite(fspec_cat["MAG_G_DECAM_MODEL_NOEMI"])))
-    if verbose:
-        print(f"  Matched {n_matched}/{n_objects} objects to model photometry")
-
-    # ── 4. Rewrite catalog (FASTSPEC only) ─────────────────────────────
-    # Same as compute_emission_subtracted_photo_errors: mode="update" after
-    # resizing an extension breaks verify on the following HDU (here el. 5).
-    # MAIN must use table_to_hdu (not hdu.copy()) so VLAs e.g. ASSOCIATED_TARGETIDS
-    # do not hit "Could not find heap data" on copy.
-    fspec_hdu_new = fits.table_to_hdu(fspec_cat)
-    fspec_hdu_new.name = DWARF_CATALOG_SPEC_HDU
-    fspec_hdu_new.add_checksum()
-
-    cat_abs = os.path.abspath(cat_path)
-    cat_dir = os.path.dirname(cat_abs) or "."
-    fd, tmp_path = tempfile.mkstemp(
-        suffix=".fits", prefix="model_phot_", dir=cat_dir
-    )
-    os.close(fd)
-    try:
-        with fits.open(cat_abs, memmap=False) as hdul:
-            hdu_names = [hdu.name for hdu in hdul]
-            main_idx = hdu_names.index("MAIN")
-            fspec_idx = hdu_names.index(DWARF_CATALOG_SPEC_HDU)
-            main_tab = safe_read_table(cat_abs, hdu="MAIN")
-            main_hdu_preserved = fits.table_to_hdu(main_tab)
-            main_hdu_preserved.name = "MAIN"
-            main_hdu_preserved.add_checksum()
-            new_hdus = []
-            for i, hdu in enumerate(hdul):
-                if i == main_idx:
-                    new_hdus.append(main_hdu_preserved)
-                elif i == fspec_idx:
-                    new_hdus.append(fspec_hdu_new)
-                else:
-                    new_hdus.append(hdu.copy())
-            new_hdul = fits.HDUList(new_hdus)
-            new_hdul[0].add_checksum()
-            new_hdul.writeto(tmp_path, overwrite=True)
-        os.replace(tmp_path, cat_abs)
-    except BaseException:
-        if os.path.isfile(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
-        raise
-
-    new_cols_str = ", ".join(_COL_MAP.values())
-    print(f"Updated {cat_path}:")
-    print(f"  FASTSPEC HDU: added {new_cols_str}")
-    print("=" * 60)
-
-
 # _load_nebcorr_delta_mag_table and add_delta_magDA_to_fastspec
 # are imported from mass_and_photo_corrections
+# MAG_*_MODEL_* columns are now written to the SPEC_DERIVED HDU by
+# code/add_nebular_props.py via add_model_photometry_to_spec_derived
+# (see code/nebular_stuff/sfr_and_metallicity.py).
 
 
 def load_clean_dwarf_catalog(
@@ -2271,12 +2157,23 @@ if __name__ == '__main__':
     process_shreds = True
     process_clean = True
     compute_mstar_err = True
-    add_model_phot = True
     process_qso_scnd = True
     process_post_hdu = True
 
     #make sure the get_fastspec_fit_catalog_V2 function is run before hand in case there are any new columns added
     process_fastspec=True
+
+    # Which fastspec catalog to use when filling the FASTSPEC HDU for the
+    # shred / clean / qso_scnd interim files.
+    #   "default": precomputed v2.1 combined catalog (iron_fastspec_v21.fits)
+    #   "custom":  HDU=3 of the custom fastspecfit run
+    #              (/pscratch/sd/v/virajvm/desi_dwarf_catalogs/fastspecfit_custom_run/iron/catalogs/fastspec-iron-sample.fits)
+    # The QSO/SCND SNR pre-filter inside load_and_filter_qso_scnd_candidates
+    # always uses the default v2.1 file, regardless of this setting.
+    fastspec_source = "custom"
+    assert fastspec_source in ("default", "custom"), (
+        f"Unknown fastspec_source={fastspec_source!r}; expected one of {{'default','custom'}}"
+    )
 
     main_cat_outpath = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits"
 
@@ -2361,8 +2258,13 @@ if __name__ == '__main__':
         
         ##get the fastspecfit hdu
         if process_fastspec:
-            print("Creating the shred fastspecfit hdu")
-            get_fastspec_matched_catalog(tot_shred, save_path + "/shreds_FASTSPEC_hdu.fits", match_method="TARGETID")
+            print(f"Creating the shred fastspecfit hdu (source={fastspec_source!r})")
+            get_fastspec_matched_catalog(
+                tot_shred,
+                save_path + "/shreds_FASTSPEC_hdu.fits",
+                match_method="TARGETID",
+                source=fastspec_source,
+            )
             
         ##get the other hdus
 
@@ -2385,8 +2287,13 @@ if __name__ == '__main__':
 
         ##get the fastspecfit hdu
         if process_fastspec:
-            print("Creating the clean fastspecfit hdu")
-            get_fastspec_matched_catalog(clean_cat, save_path + "/clean_FASTSPEC_hdu.fits", match_method="TARGETID")
+            print(f"Creating the clean fastspecfit hdu (source={fastspec_source!r})")
+            get_fastspec_matched_catalog(
+                clean_cat,
+                save_path + "/clean_FASTSPEC_hdu.fits",
+                match_method="TARGETID",
+                source=fastspec_source,
+            )
 
     if process_qso_scnd:
         qso_scnd_input = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_other_qso_scnd_candidates_INT_V2_NEBCORR.fits"
@@ -2401,8 +2308,13 @@ if __name__ == '__main__':
         create_zcat_data_model(qso_scnd_entire, save_path + "/qso_scnd_ZCAT_hdu.fits")
 
         if process_fastspec:
-            print("Creating the QSO/SCND fastspecfit hdu")
-            get_fastspec_matched_catalog(qso_scnd_cat, save_path + "/qso_scnd_FASTSPEC_hdu.fits", match_method="TARGETID")
+            print(f"Creating the QSO/SCND fastspecfit hdu (source={fastspec_source!r})")
+            get_fastspec_matched_catalog(
+                qso_scnd_cat,
+                save_path + "/qso_scnd_FASTSPEC_hdu.fits",
+                match_method="TARGETID",
+                source=fastspec_source,
+            )
 
     #then we consolidate it all into a multi-ext file!
     #make sure the REPROCESS_PHOTO_CAT is also last in the below list!
@@ -2411,9 +2323,9 @@ if __name__ == '__main__':
                  output_file=main_cat_outpath,
                  extra_prefixes=["qso_scnd"] if process_qso_scnd else [])
 
-    if add_model_phot:
-        add_model_photometry_to_fastspec(main_cat_outpath)
-        add_delta_mag_to_fastspec(main_cat_outpath)
+    # NOTE: MAG_*_MODEL_* and DELTA_MAG_* columns are now written to the
+    # SPEC_DERIVED HDU by code/add_nebular_props.py rather than to the
+    # FASTSPEC HDU.
 
     if compute_mstar_err:
         print("Computing emission-subtracted photometry and stellar mass errors")
