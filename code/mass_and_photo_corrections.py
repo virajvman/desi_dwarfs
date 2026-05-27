@@ -509,6 +509,7 @@ def compute_emission_subtracted_photo_errors(
     ncores=8,
     verbose=True,
     rerun_nans=True,
+    compute_missing=True,
 ):
     """
     Subtract fastspec emission-line models from observed spectra, measure
@@ -542,6 +543,15 @@ def compute_emission_subtracted_photo_errors(
     rerun_nans : bool
         If True, cached rows whose g_noemi_err is NaN are treated as missing
         and reprocessed. Useful after re-downloading the spectra HDF5 file.
+    compute_missing : bool
+        If True (default), TARGETIDs not present in the cache (or cached-but-NaN
+        when ``rerun_nans=True``) are processed by loading spectra and running
+        emission subtraction. If False, the expensive emission-subtraction step
+        is skipped entirely: cached error values are propagated into
+        LOG_MSTAR_M24_ERR as usual, missing/NaN TARGETIDs get
+        LOG_MSTAR_M24_ERR = 0, and LOG_MSTAR_M24 / MSTAR_MASKBIT /
+        DWARF_MASKBIT are left untouched for those rows. The cache file is not
+        rewritten in this mode.
 
     Updates the multi-extension FITS catalog at *cat_path*:
       - MAIN HDU: adds LOG_MSTAR_M24_ERR; sets MSTAR_MASKBIT bit 0 (low continuum
@@ -595,23 +605,50 @@ def compute_emission_subtracted_photo_errors(
         r_noemi[hit] = cached['r_noemi'][idx_map[hit]]
         g_noemi_err[hit] = cached['g_noemi_err'][idx_map[hit]]
         r_noemi_err[hit] = cached['r_noemi_err'][idx_map[hit]]
-        missing_idx = np.flatnonzero(~hit)
+        not_in_cache_idx = np.flatnonzero(~hit)
+        nan_in_cache_idx = np.flatnonzero(hit & ~np.isfinite(g_noemi_err))
+        missing_idx = np.array(not_in_cache_idx, dtype=int)
 
         if rerun_nans:
-            nan_idx = np.flatnonzero(hit & ~np.isfinite(g_noemi_err))
-            if verbose and len(nan_idx) > 0:
-                print(f"  rerun_nans: {len(nan_idx)} cached rows have NaN errors; "
+            if verbose and len(nan_in_cache_idx) > 0:
+                print(f"  rerun_nans: {len(nan_in_cache_idx)} cached rows have NaN errors; "
                       f"adding to reprocess queue")
-            missing_idx = np.union1d(missing_idx, nan_idx)
+            missing_idx = np.union1d(missing_idx, nan_in_cache_idx)
 
         if verbose:
             print(f"  Matched {int(hit.sum())}/{n_objects} TARGETIDs from cache; "
                   f"{len(missing_idx)} need emission-subtracted photometry")
     else:
+        not_in_cache_idx = np.arange(n_objects, dtype=int)
+        nan_in_cache_idx = np.array([], dtype=int)
         missing_idx = np.arange(n_objects, dtype=int)
 
+    # Diagnostic example TARGETIDs (printed in both compute_missing modes so
+    # they appear in normal full-run logs as well).
+    n_example = 10
+    print(f"  Diagnostic: TARGETIDs missing from cache "
+          f"({len(not_in_cache_idx)} total); first {min(n_example, len(not_in_cache_idx))} examples: "
+          f"{targetids[not_in_cache_idx[:n_example]].tolist()}")
+    print(f"  Diagnostic: TARGETIDs cached-but-NaN "
+          f"({len(nan_in_cache_idx)} total); first {min(n_example, len(nan_in_cache_idx))} examples: "
+          f"{targetids[nan_in_cache_idx[:n_example]].tolist()}")
+
+    # missing_mask flags rows that will NOT be processed in this run. It is
+    # only non-empty when compute_missing=False; with compute_missing=True
+    # everything in missing_idx is processed below and missing_mask stays empty
+    # (NaN rows after compute are then handled by the low_cont_snr_mask path).
+    missing_mask = np.zeros(n_objects, dtype=bool)
+    if not compute_missing:
+        missing_mask[missing_idx] = True
+        n_missing = int(missing_mask.sum())
+        print(f"  compute_missing=False: {n_missing}/{n_objects} TARGETIDs "
+              f"missing from cache (or cached-but-NaN); setting "
+              f"LOG_MSTAR_M24_ERR = 0 for them; LOG_MSTAR_M24, MSTAR_MASKBIT, "
+              f"and DWARF_MASKBIT left untouched for these objects. Skipping "
+              f"emission-subtraction step.")
+
     # ── 3–5. Emission subtraction only for rows not in cache ────────
-    if len(missing_idx) > 0:
+    if compute_missing and len(missing_idx) > 0:
         if verbose:
             print(f"Loading observed spectra from {spectra_h5_path} ...")
         with h5py.File(spectra_h5_path, "r") as f:
@@ -705,8 +742,13 @@ def compute_emission_subtracted_photo_errors(
         | (g_noemi_err >= mag_err_limit)
         | (r_noemi_err >= mag_err_limit)
     )
+    # When compute_missing=False, rows that we deliberately skipped should not
+    # be treated as low-SNR (no fallback mass, no maskbit flips); they only
+    # get LOG_MSTAR_M24_ERR = 0 below.
+    if not compute_missing:
+        low_cont_snr_mask &= ~missing_mask
 
-    if results_cache_path is not None:
+    if results_cache_path is not None and compute_missing:
         os.makedirs(emi_cache_dir, exist_ok=True)
         np.savez(results_cache_path,
                  targetids=targetids,
@@ -745,6 +787,10 @@ def compute_emission_subtracted_photo_errors(
 
     err_arr = np.asarray(main_cat["LOG_MSTAR_M24_ERR"], dtype=np.float64).copy()
     err_arr[low_cont_snr_mask] = 0.0
+    # Force LOG_MSTAR_M24_ERR = 0 for rows we deliberately did not compute
+    # (compute_missing=False); get_stellar_mass_mia would otherwise propagate
+    # the NaN mag errors into NaN log_mstar_err for these rows.
+    err_arr[missing_mask] = 0.0
     main_cat["LOG_MSTAR_M24_ERR"] = err_arr
     print(
         "TODO: LOG_MSTAR_M24_ERR is set to 0 for low continuum-SNR objects using "

@@ -2157,6 +2157,11 @@ if __name__ == '__main__':
     process_shreds = True
     process_clean = True
     compute_mstar_err = True
+    # If False, compute_emission_subtracted_photo_errors only reads cached
+    # results, sets LOG_MSTAR_M24_ERR = 0 for any TARGETID missing from the
+    # cache (or cached-but-NaN), and leaves LOG_MSTAR_M24 / MSTAR_MASKBIT /
+    # DWARF_MASKBIT untouched for those rows. The cache file is not rewritten.
+    compute_missing_tgid_err = False
     process_qso_scnd = True
     process_post_hdu = True
 
@@ -2329,7 +2334,10 @@ if __name__ == '__main__':
 
     if compute_mstar_err:
         print("Computing emission-subtracted photometry and stellar mass errors")
-        compute_emission_subtracted_photo_errors(main_cat_outpath)
+        compute_emission_subtracted_photo_errors(
+            main_cat_outpath,
+            compute_missing=compute_missing_tgid_err,
+        )
 
     apply_post_emission_mstar_dwarf_cut(main_cat_outpath)
 
@@ -2356,14 +2364,11 @@ if __name__ == '__main__':
     # separate SPEC_DERIVED HDU by code/add_nebular_props.py, which is run
     # after after consolidate_photometry.py finishes.
 
-    #get the stacked spectra of stellar mass in bins of stellar mass and also in bins of fiber sSFR or Halpha EW
-    ##need to confirm this, and save all the stacked spectra 
-
-
     # can we maybe apply a photometry cut for very red , low-redshift objects?
 
     # In MSTAR_MASKBIT, we do not flag the low continuum objects in our error budget? confirm for low-continuum objects, how their mstars are computed.
     # Describe in paper, how much of an impact happens if we were to do approximate stellar mass comp as for these low-cont vs. full method. 
+    # TODO: need to confirm for objects with nan errors or missing spectra, what MSTAR_MASKBIT they get and if they should go back to fall back mass or not.
 
 
 
