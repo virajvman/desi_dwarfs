@@ -389,12 +389,6 @@ def sfr_log_cz_BPASS(linear_zmet):
 # Bauer et al. 2013 Eq. 2 which is natively in SI)
 # -----------------------------------------------------------------------------
 
-#these are the SFR calibrations from Korhonen Cuestas+25
-
-logZ_star = np.log10(np.array([0.001, 0.002, 0.003, 0.004, 0.006, 0.008, 0.010, 0.014, 0.020])/0.02)
-log_C_Z_star = np.array([41.680, 41.647, 41.619, 41.595, 41.544, 41.512, 41.473, 41.411, 41.373])
-
-
 # Kennicutt & Evans (2012), Table 1: log C_Hα = 41.27 [erg/s per M_sun/yr],
 # natively Kroupa (2001). We rescale to Chabrier (2003) IMF for consistency
 # with Chabrier-based stellar masses.
