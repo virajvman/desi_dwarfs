@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash -l
 #SBATCH --job-name=combine_dwarfs
 #SBATCH --account=desi
 #SBATCH --constraint=cpu
@@ -7,29 +7,37 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=128
 #SBATCH --time=01:00:00
-#SBATCH --output=logs/combine_fastspec.out
-#SBATCH --error=logs/combine_fastspec.err
+#SBATCH --output=logs/combine_fastspec_%j.out
+#SBATCH --error=logs/combine_fastspec_%j.err
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=virajvm@stanford.edu
 
-source /global/common/software/desi/desi_environment.sh main
+# Match the production run's module setup exactly
+source /dvs_ro/common/software/desi/desi_environment.sh main-2.2.0
+module swap desitarget/4.7.2
+module load fastspecfit/3.4.1
 
-module load fastspecfit/main
-module swap desiutil/3.4.3
-module swap desispec/0.68.1
-module swap desitarget/2.8.0
-module swap desimodel/0.19.2
-module swap speclite/v0.20
+# Fail fast if anything's off
+if ! command -v mpi-fastspecfit &>/dev/null; then
+    echo "ERROR: mpi-fastspecfit not on PATH after module load. Aborting."
+    module avail fastspecfit 2>&1
+    exit 1
+fi
 
-export DESI_SPECTRO_REDUX=/global/cfs/cdirs/desi/spectro/redux
-export DUST_DIR=/global/cfs/cdirs/cosmo/data/dust/v0_1
-export FPHOTO_DIR=/global/cfs/cdirs/desi/external/legacysurvey/dr9
-export FTEMPLATES_DIR=/global/cfs/cdirs/desi/public/external/templates/fastspecfit
+echo "=== Loaded modules ==="
+module list 2>&1 | grep -E 'fastspecfit|desiutil|desispec|desitarget|speclite|desiconda'
+echo "======================"
+
+export DESI_SPECTRO_REDUX=/dvs_ro/cfs/cdirs/desi/spectro/redux
+export DUST_DIR=/dvs_ro/cfs/cdirs/cosmo/data/dust/v0_1
+export FPHOTO_DIR=/dvs_ro/cfs/cdirs/desi/external/legacysurvey/dr9
+export FTEMPLATES_DIR=/dvs_ro/cfs/cdirs/desi/public/external/templates/fastspecfit
 
 mkdir -p logs
 
-srun -n 1 mpi-fastspecfit \
+time srun -n 1 -c 128 --cpu-bind=none mpi-fastspecfit \
     --samplefile=/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_dr1_dwarfs.fits \
     --outdir-data=/pscratch/sd/v/virajvm/desi_dwarf_catalogs/fastspecfit_custom_run/ \
     --specprod iron \
-    --merge --mp 64
+    --merge --merge-suffix dr1-dwarfs \
+    --mp 32

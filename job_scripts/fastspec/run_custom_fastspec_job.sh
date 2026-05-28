@@ -25,12 +25,22 @@ outdir_data=/pscratch/sd/v/virajvm/desi_dwarf_catalogs/fastspecfit_custom_run/
 # Match the recommended stack in etc/fastspecfit-env.sh
 export FASTSPECFIT_VERSION=3.4.1
 export DESITARGET_VERSION=4.7.2
-source /dvs_ro/common/software/desi/desi_environment.sh main
+source /dvs_ro/common/software/desi/desi_environment.sh main-2.2.0
 module swap desitarget/${DESITARGET_VERSION}
 module load fastspecfit/${FASTSPECFIT_VERSION}
+
+# ADD THIS BLOCK ---->
+if ! command -v mpi-fastspecfit &>/dev/null; then
+    echo "ERROR: mpi-fastspecfit not on PATH after module load. Aborting."
+    module avail fastspecfit 2>&1
+    exit 1
+fi
+
 echo "=== Loaded modules ==="
 module list 2>&1 | grep -E 'fastspecfit|desiutil|desispec|desitarget|speclite|specsim'
 echo "======================"
+
+
 
 export DESI_SPECTRO_REDUX=/dvs_ro/cfs/cdirs/desi/spectro/redux
 export DUST_DIR=/dvs_ro/cfs/cdirs/cosmo/data/dust/v0_1
