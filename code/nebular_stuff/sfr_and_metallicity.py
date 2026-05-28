@@ -362,7 +362,25 @@ def stellar_mass_msz(logmstar):
     z_value = -1.69 + 0.30 * (logmstar - 6)
     return z_value
 
-# then need to paramerize the C_Zsun 
+def sfr_log_cz_BPASS(linear_zmet):
+    '''
+    This is the fit to data from Table 2 of Nathalie A. Korhonen Cuestas 2025 paper. We simply fit a line to linear metallicity (relative to solar) and C_SFR conversion factor between Halpha luminosity and SFR 
+
+    Z_star =  np.array([0.001, 0.002, 0.003, 0.004, 0.006, 0.008, 0.010, 0.014, 0.020])/0.02 #this is the linear metallicity relative to solar 
+    log_C_Z_star = np.array([41.680, 41.647, 41.619, 41.595, 41.544, 41.512, 41.473, 41.411, 41.373]) #this is the conversion factor I am trying to get!
+    
+    # Fit: returns [slope, intercept]
+    slope, intercept = np.polyfit(Z_star[Z_star < 0.25], log_C_Z_star[Z_star < 0.25], 1)
+
+    '''
+
+    slope = -0.5659999999999248
+    intercept = 41.70599999999998
+
+    TODO: if linear_zmet is below 0.005 or 0.3, just print saying values appear beyond the extrapolation, but return the c_z as is
+
+    return linear_zmet * slope + intercept
+
 
 #then validate how Halpha luminosity is being computed!
 
