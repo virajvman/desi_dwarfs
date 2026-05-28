@@ -1742,8 +1742,7 @@ spec_derived_hdu_datamodel = {
     # rows are NaN / False / 0.
     #
     # Each *_LO / *_HI / *_ERR sibling holds the 16th percentile, 84th
-    # percentile and half the 84-16 spread of the posterior (or the
-    # Hessian error for method='mle').
+    # percentile and half the 84-16 spread of the posterior.
     # ---------------------------------------------------------------
     "TE_NE_OII": {
         "unit": "cm-3",

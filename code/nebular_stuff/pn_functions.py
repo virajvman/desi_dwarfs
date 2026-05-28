@@ -10,14 +10,12 @@ Changes from the original:
   * Typo in r_O2_Hb fixed (second term now uses transmission at 3729 A,
     not 3726 A).
   * Catalog driver accepts an astropy.table.Table and returns one.
-  * Two fitting methods supported: UltraNest nested sampling (default,
-    matches Scholte+2026) and L-BFGS-B + Hessian (faster, less reliable).
+  * Inference uses UltraNest nested sampling (matches Scholte+2026).
   * Interpolation grids now extrapolate silently for tiny out-of-bound
-    queries from the optimizer's finite-difference gradient.
+    queries from the sampler's grid lookups near the prior edges.
 """
 import numpy as np
 from astropy.table import Table
-from scipy.optimize import minimize
 from scipy.interpolate import RegularGridInterpolator
 import pyneb as pn
 
@@ -198,10 +196,6 @@ PARAM_NAMES = ['ne_oii', 'te_oiii', 'Av', 'log_O2_abund', 'log_O3_abund']
 PRIOR_LOWS = np.array([den_min * 1.001, tem_min * 1.001, 0.0, -6.0, -6.0])
 PRIOR_HIGHS = np.array([den_max * 0.999, tem_max * 0.999, 5.0, -2.0, -2.0])
 
-# MLE starting point
-THETA0 = np.array([1e2, 1.2e4, 0.3, -4.0, -3.5])
-BOUNDS = list(zip(PRIOR_LOWS, PRIOR_HIGHS))
-
 
 def _flux_and_err(row, line):
     """Return (flux, sigma) for a line key like 'OIII_4363'.
@@ -270,71 +264,7 @@ def _nan_fit_result(n_par, n_used, success=False):
 
 
 # ---------------------------------------------------------------------------
-# Method 1: MLE via L-BFGS-B with Hessian-based errors
-# ---------------------------------------------------------------------------
-def _neg_log_like_masked(theta, r, r_err, mask):
-    model = r_model(np.asarray(theta))
-    return 0.5 * np.sum(((r[mask] - model[mask]) / r_err[mask]) ** 2)
-
-
-def _fit_row_mle(r, r_err, mask, theta0=THETA0, bounds=BOUNDS):
-    """L-BFGS-B + inverse-Hessian errors. Fast; can be unreliable near bounds
-    or in strongly degenerate likelihoods."""
-    n_used = int(mask.sum())
-    n_par = len(theta0)
-    if n_used < 3:
-        return _nan_fit_result(n_par, n_used)
-
-    res = minimize(
-        _neg_log_like_masked,
-        theta0,
-        args=(r, r_err, mask),
-        method='L-BFGS-B',
-        bounds=bounds,
-    )
-
-    try:
-        cov = (res.hess_inv.todense()
-               if hasattr(res.hess_inv, 'todense')
-               else np.asarray(res.hess_inv))
-        theta_err = np.sqrt(np.clip(np.diag(cov), 0, np.inf))
-    except Exception:
-        theta_err = np.full(n_par, np.nan)
-
-    theta_best = res.x
-    i2 = PARAM_NAMES.index('log_O2_abund')
-    i3 = PARAM_NAMES.index('log_O3_abund')
-    log_O2, log_O3 = theta_best[i2], theta_best[i3]
-    e_O2, e_O3 = theta_err[i2], theta_err[i3]
-
-    if np.isfinite(log_O2) and np.isfinite(log_O3):
-        O_over_H = 10**log_O2 + 10**log_O3
-        twelve_logOH = 12 + np.log10(O_over_H)
-        w2 = 10**log_O2 / O_over_H
-        w3 = 10**log_O3 / O_over_H
-        twelve_logOH_err = np.sqrt((w2 * e_O2) ** 2 + (w3 * e_O3) ** 2)
-        twelve_logOH_lo = twelve_logOH - twelve_logOH_err
-        twelve_logOH_hi = twelve_logOH + twelve_logOH_err
-    else:
-        twelve_logOH = twelve_logOH_err = np.nan
-        twelve_logOH_lo = twelve_logOH_hi = np.nan
-
-    return {
-        'theta': theta_best,
-        'theta_lo': theta_best - theta_err,
-        'theta_hi': theta_best + theta_err,
-        'theta_err': theta_err,
-        'twelve_log_OH': twelve_logOH,
-        'twelve_log_OH_lo': twelve_logOH_lo,
-        'twelve_log_OH_hi': twelve_logOH_hi,
-        'twelve_log_OH_err': twelve_logOH_err,
-        'success': bool(res.success),
-        'n_ratios': n_used,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Method 2: UltraNest nested sampling (matches Scholte+2026)
+# Per-row UltraNest fit (matches Scholte+2026)
 # ---------------------------------------------------------------------------
 def _make_prior_transform(lows, highs):
     """Uniform priors via unit-cube transform."""
@@ -456,33 +386,27 @@ def _fit_row_ultranest(r, r_err, mask,
 # ---------------------------------------------------------------------------
 # Public driver
 # ---------------------------------------------------------------------------
-def _fit_one_row(row, method, theta0, bounds, min_num_live_points,
-                 verbose_sampler, sampler_kwargs):
-    """Top-level per-row worker. Returns the fit dict from
-    _fit_row_ultranest or _fit_row_mle. Defined at module level (not nested)
-    so it can be pickled for use with multiprocessing pools."""
+def _fit_one_row(row, min_num_live_points, verbose_sampler, sampler_kwargs):
+    """Top-level per-row worker. Defined at module level (not nested) so it
+    can be pickled for joblib's loky workers."""
     r, r_err, mask = _build_ratios(row)
-    if method == 'ultranest':
-        return _fit_row_ultranest(
-            r, r_err, mask,
-            min_num_live_points=min_num_live_points,
-            verbose_sampler=verbose_sampler,
-            sampler_kwargs=sampler_kwargs,
-        )
-    return _fit_row_mle(r, r_err, mask, theta0=theta0, bounds=bounds)
+    return _fit_row_ultranest(
+        r, r_err, mask,
+        min_num_live_points=min_num_live_points,
+        verbose_sampler=verbose_sampler,
+        sampler_kwargs=sampler_kwargs,
+    )
 
 
 def compute_direct_metallicities(catalog,
-                                 method='ultranest',
                                  n_jobs=1,
-                                 theta0=THETA0,
-                                 bounds=BOUNDS,
                                  min_num_live_points=400,
                                  verbose=False,
                                  verbose_sampler=False,
                                  sampler_kwargs=None):
     """
-    Compute direct-Te oxygen abundances row-by-row from a line-flux catalog.
+    Compute direct-Te oxygen abundances row-by-row from a line-flux catalog
+    using UltraNest nested sampling (matches Scholte+2026).
 
     Parameters
     ----------
@@ -490,14 +414,6 @@ def compute_direct_metallicities(catalog,
         Must contain {LINE}_FLUX and {LINE}_FLUX_IVAR columns. Required lines:
         OIII_4363, OIII_5007, OII_3726, OII_3729, HBETA.
         At least one of HALPHA or HGAMMA must be present to constrain A_V.
-    method : {'ultranest', 'mle'}
-        'ultranest' (default): nested sampling with UltraNest, matching the
-        Scholte+2026 approach. Returns full posterior 16/50/84 percentiles.
-        Robust to bound-pinning and parameter degeneracies, but ~seconds/row.
-        'mle': L-BFGS-B optimization with inverse-Hessian errors. Fast
-        (~0.1 s/row) but unreliable near parameter bounds and when the
-        likelihood has strong curvature -- can produce hugely overestimated
-        error bars (e.g. 12+log(O/H) = 7 +/- 2).
     n_jobs : int
         Number of parallel worker processes for the per-row fits.
         1 (default) runs serially in the main process.
@@ -506,30 +422,27 @@ def compute_direct_metallicities(catalog,
         Recommended on NERSC compute nodes: set to the number of cores you
         allocated (e.g., 64 or 128 on Perlmutter CPU nodes). Do NOT use n_jobs
         > 1 on login nodes.
-    theta0, bounds : starting point and bounds for the 'mle' method.
-    min_num_live_points : passed to UltraNest's run() for 'ultranest' method.
+    min_num_live_points : passed to UltraNest's run().
     verbose : print per-row metallicity status. With n_jobs > 1 the per-row
         prints arrive out of order and are buffered; for clean progress
         tracking with parallel jobs use a joblib-aware progress bar instead.
     verbose_sampler : print UltraNest's own status output (default False).
         Strongly recommended to leave False when n_jobs > 1 -- otherwise
         many workers will interleave their UltraNest progress to stderr.
-    sampler_kwargs : extra kwargs passed to sampler.run() for 'ultranest'.
+    sampler_kwargs : extra kwargs passed to sampler.run().
 
     Returns
     -------
     astropy.table.Table with one row per input row, containing for each
     parameter (ne_oii, te_oiii, Av, log_O2_abund, log_O3_abund) the columns:
-        {name}        : posterior median ('ultranest') or MLE ('mle')
-        {name}_lo     : 16th percentile (or MLE - err)
-        {name}_hi     : 84th percentile (or MLE + err)
-        {name}_err    : 0.5*(hi - lo)  (or Hessian error)
+        {name}        : posterior median
+        {name}_lo     : 16th percentile
+        {name}_hi     : 84th percentile
+        {name}_err    : 0.5 * (hi - lo)
     plus:
         twelve_log_OH, twelve_log_OH_lo, twelve_log_OH_hi, twelve_log_OH_err,
         n_ratios, fit_success.
     """
-    if method not in ('ultranest', 'mle'):
-        raise ValueError(f"method must be 'ultranest' or 'mle', got {method!r}")
     if not isinstance(catalog, Table):
         raise TypeError('catalog must be an astropy.table.Table')
 
@@ -543,13 +456,13 @@ def compute_direct_metallicities(catalog,
         # Serial path -- avoids joblib overhead and preserves print ordering.
         fits = []
         for idx, row in enumerate(catalog):
-            fit = _fit_one_row(row, method, theta0, bounds,
-                               min_num_live_points, verbose_sampler,
-                               sampler_kwargs)
+            fit = _fit_one_row(
+                row, min_num_live_points, verbose_sampler, sampler_kwargs,
+            )
             fits.append(fit)
             if verbose:
                 tid = targetids[idx] if targetids is not None else None
-                _print_row_status(idx, fit, method, targetid=tid)
+                _print_row_status(idx, fit, targetid=tid)
     else:
         try:
             from joblib import Parallel, delayed
@@ -572,8 +485,7 @@ def compute_direct_metallicities(catalog,
         fits = Parallel(n_jobs=n_jobs, backend='loky',
                         verbose=10 if verbose else 0)(
             delayed(_fit_one_row)(
-                row, method, theta0, bounds,
-                min_num_live_points, verbose_sampler, sampler_kwargs,
+                row, min_num_live_points, verbose_sampler, sampler_kwargs,
             )
             for row in catalog
         )
@@ -583,7 +495,7 @@ def compute_direct_metallicities(catalog,
             # results in order now that all fits are complete.
             for idx, fit in enumerate(fits):
                 tid = targetids[idx] if targetids is not None else None
-                _print_row_status(idx, fit, method, targetid=tid)
+                _print_row_status(idx, fit, targetid=tid)
 
     # Assemble output table
     out_cols = {}
@@ -618,7 +530,7 @@ def compute_direct_metallicities(catalog,
     return Table(out_cols)
 
 
-def _print_row_status(idx, fit, method, targetid=None):
+def _print_row_status(idx, fit, targetid=None):
     """Pretty-print a single row's fit result. Includes TARGETID if given."""
     prefix = f"row {idx}"
     if targetid is not None:
@@ -628,11 +540,10 @@ def _print_row_status(idx, fit, method, targetid=None):
         lo = fit['twelve_log_OH'] - fit['twelve_log_OH_lo']
         print(
             f"{prefix}: 12+log(O/H) = {fit['twelve_log_OH']:.3f} "
-            f"(+{hi:.3f} / -{lo:.3f}) "
-            f"[n_ratios={fit['n_ratios']}, method={method}]"
+            f"(+{hi:.3f} / -{lo:.3f}) [n_ratios={fit['n_ratios']}]"
         )
     else:
         print(
             f"{prefix}: fit failed or insufficient data "
-            f"[n_ratios={fit['n_ratios']}, method={method}]"
+            f"[n_ratios={fit['n_ratios']}]"
         )

@@ -40,8 +40,18 @@ The operation is idempotent: re-running replaces any existing
 ``SPEC_DERIVED`` HDU. Existing HDUs (including ``FASTSPEC``) are preserved
 bit-for-bit via a temp-file + ``os.replace`` swap.
 
+The per-row direct-method UltraNest fits are cached by TARGETID at
+``<NEBCORR_DEFAULT_FOLDER>/te_fit_cache_ultranest.fits``. Subsequent runs
+reuse cached rows and only fit TARGETIDs that are new (or whose cached row
+has ``fit_success=False`` / NaN ``twelve_log_OH``, which are always
+retried). The cache is cumulative across catalog versions; pass
+``--overwrite-te-cache`` to force a fresh UltraNest fit for every TARGETID
+in the current ``te_mask`` and upsert the results into the cache file.
+
 Usage:
     python add_nebular_props.py /path/to/desi_dr1_dwarf_catalog.fits
+    python add_nebular_props.py /path/to/desi_dr1_dwarf_catalog.fits \\
+        --overwrite-te-cache
 """
 
 import argparse
@@ -74,12 +84,7 @@ from sfr_and_metallicity import (
 # CPU nodes). Do NOT use N_JOBS > 1 on login nodes.
 N_JOBS = 64
 
-# Fitting method for compute_direct_metallicities:
-#   "ultranest" : nested sampling (matches Scholte+2026), slow but reliable
-#   "mle"       : L-BFGS-B + Hessian errors, fast but less reliable
-TE_METHOD = "ultranest"
-
-# UltraNest min_num_live_points (ignored for "mle").
+# UltraNest min_num_live_points for compute_direct_metallicities.
 TE_MIN_NUM_LIVE_POINTS = 400
 
 # Line-SNR gating for the direct-method fits. Only rows with at least
@@ -110,6 +115,16 @@ def main(argv=None):
         action="store_true",
         help="Suppress progress output.",
     )
+    parser.add_argument(
+        "--overwrite-te-cache",
+        action="store_true",
+        help=(
+            "Refit every TARGETID in the current te_mask with UltraNest even "
+            "if a usable cache row exists, and upsert the new results into "
+            "the cache file. Cache rows for TARGETIDs outside the current "
+            "te_mask are left untouched."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if not os.path.isfile(args.catalog_path):
@@ -119,11 +134,11 @@ def main(argv=None):
         args.catalog_path,
         verbose=not args.quiet,
         n_jobs=N_JOBS,
-        te_method=TE_METHOD,
         min_num_live_points=TE_MIN_NUM_LIVE_POINTS,
         te_line_names=TE_LINE_NAMES,
         te_snr_val=TE_SNR_VAL,
         te_min_lines=TE_MIN_LINES,
+        overwrite_te_cache=args.overwrite_te_cache,
     )
 
     add_model_photometry_to_spec_derived(

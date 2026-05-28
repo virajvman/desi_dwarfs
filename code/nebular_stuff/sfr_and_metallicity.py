@@ -346,10 +346,36 @@ def get_metallicity_S22(fastspec_cat):
 ##########################################################
 ##########################################################
 
+NOTES: ADD PRINT STATEMENTS ON HOW MANY SPECTRA HAVE DETECTIONS!
+#FOR EACH line how many significant detections >3 do we have?
+
+def stellar_mass_msz(logmstar):
+    '''
+    This is the stellar mass metallicity relation from Kirby+13, the [Fe/H] = 0 when solar, so this is essentially
+    the log fraction metallicity relative to solar.
+    Parameters
+    ----------
+    Mstar : float
+        Stellar mass in Msun
+    Returns
+    '''
+    z_value = -1.69 + 0.30 * (logmstar - 6)
+    return z_value
+
+# then need to paramerize the C_Zsun 
+
+#then validate how Halpha luminosity is being computed!
+
 # -----------------------------------------------------------------------------
 # Physical / calibration constants (SI units — Watts throughout, matching
 # Bauer et al. 2013 Eq. 2 which is natively in SI)
 # -----------------------------------------------------------------------------
+
+#these are the SFR calibrations from Korhonen Cuestas+25
+
+logZ_star = np.log10(np.array([0.001, 0.002, 0.003, 0.004, 0.006, 0.008, 0.010, 0.014, 0.020])/0.02)
+log_C_Z_star = np.array([41.680, 41.647, 41.619, 41.595, 41.544, 41.512, 41.473, 41.411, 41.373])
+
 
 # Kennicutt & Evans (2012), Table 1: log C_Hα = 41.27 [erg/s per M_sun/yr],
 # natively Kroupa (2001). We rescale to Chabrier (2003) IMF for consistency
@@ -664,16 +690,141 @@ def _apply_spec_derived_metadata(tab):
     return tab
 
 
+# ---------------------------------------------------------------------------
+# UltraNest TE-fit cache (used by build_spec_derived_hdu)
+# ---------------------------------------------------------------------------
+
+# Filename for the cumulative per-TARGETID UltraNest fit cache. Kept separate
+# from the catalog file so it persists across catalog rebuilds.
+TE_FIT_CACHE_FILENAME = "te_fit_cache_ultranest.fits"
+
+# Schema = exact output of pn_functions.compute_direct_metallicities (lowercase
+# fitter-native names plus TARGETID). The scatter-back loop in
+# build_spec_derived_hdu uses these same names, so the cache table can be
+# consumed without any renaming.
+_TE_CACHE_FLOAT_PARAMS = (
+    "ne_oii", "te_oiii", "Av",
+    "log_O2_abund", "log_O3_abund", "twelve_log_OH",
+)
+_TE_CACHE_FLOAT_COLS = tuple(
+    f"{name}{suffix}"
+    for name in _TE_CACHE_FLOAT_PARAMS
+    for suffix in ("", "_lo", "_hi", "_err")
+)
+_TE_CACHE_COLS = ("TARGETID",) + _TE_CACHE_FLOAT_COLS + ("n_ratios", "fit_success")
+
+
+def _load_te_cache(cache_path, verbose=True):
+    """
+    Load the UltraNest TE-fit cache from *cache_path*.
+
+    Returns ``(cache_tab, tid_to_row)`` on success, or ``(None, {})`` if the
+    file does not exist, cannot be read, or is missing required columns (in
+    which case a warning is printed when verbose=True and the file will be
+    overwritten on the next write).
+    """
+    if not cache_path or not os.path.exists(cache_path):
+        return None, {}
+    try:
+        tab = safe_read_table(cache_path)
+    except Exception as exc:
+        if verbose:
+            print(
+                f"  TE cache: failed to read {cache_path} ({exc!r}); "
+                "ignoring cache for this run."
+            )
+        return None, {}
+    missing = [c for c in _TE_CACHE_COLS if c not in tab.colnames]
+    if missing:
+        if verbose:
+            print(
+                f"  TE cache: {cache_path} is missing columns {missing}; "
+                "ignoring cache for this run (will be overwritten on next write)."
+            )
+        return None, {}
+    tids = np.asarray(tab["TARGETID"], dtype=np.int64)
+    tid_to_row = {int(t): i for i, t in enumerate(tids)}
+    return tab, tid_to_row
+
+
+def _write_te_cache(cache_path, cache_tab_old, fit_tab_new, tids_to_compute,
+                    verbose=True):
+    """
+    Persist the merged TE cache atomically.
+
+    Rows in *cache_tab_old* whose TARGETID appears in *tids_to_compute* are
+    dropped and replaced by the corresponding rows in *fit_tab_new* (upsert).
+    All other rows in *cache_tab_old* are preserved verbatim, so the cache
+    stays cumulative across catalog versions. No-op if *cache_path* is None
+    or *tids_to_compute* is empty.
+    """
+    if cache_path is None:
+        return
+    tids_to_compute = np.asarray(tids_to_compute, dtype=np.int64)
+    if tids_to_compute.size == 0:
+        return
+    if fit_tab_new is None or len(fit_tab_new) == 0:
+        return
+
+    keep_cols = [c for c in _TE_CACHE_COLS if c in fit_tab_new.colnames]
+    new_sub = fit_tab_new[keep_cols]
+
+    if cache_tab_old is None or len(cache_tab_old) == 0:
+        merged = new_sub
+    else:
+        tids_compute_set = {int(t) for t in tids_to_compute}
+        old_tids = np.asarray(cache_tab_old["TARGETID"], dtype=np.int64)
+        keep_mask = np.array(
+            [int(t) not in tids_compute_set for t in old_tids], dtype=bool,
+        )
+        old_kept = cache_tab_old[keep_mask]
+        if len(old_kept) == 0:
+            merged = new_sub
+        else:
+            # Restrict old rows to the same column set to keep dtypes aligned.
+            old_keep_cols = [c for c in keep_cols if c in old_kept.colnames]
+            merged = safe_vstack([old_kept[old_keep_cols], new_sub])
+
+    cache_dir = os.path.dirname(cache_path) or "."
+    os.makedirs(cache_dir, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        suffix=".fits", prefix="te_fit_cache_", dir=cache_dir,
+    )
+    os.close(fd)
+    try:
+        hdu = fits.table_to_hdu(merged)
+        hdu.name = "TE_FIT_CACHE"
+        hdu.add_checksum()
+        hdul = fits.HDUList([fits.PrimaryHDU(), hdu])
+        hdul[0].add_checksum()
+        hdul.writeto(tmp_path, overwrite=True)
+        os.replace(tmp_path, cache_path)
+    except BaseException:
+        if os.path.isfile(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        raise
+
+    if verbose:
+        print(
+            f"  TE cache: wrote {int(tids_to_compute.size)} new/updated rows "
+            f"({len(merged)} total) to {cache_path}"
+        )
+
+
 def build_spec_derived_hdu(
     cat_path,
     verbose=True,
     n_jobs=1,
-    te_method="ultranest",
     min_num_live_points=400,
     te_line_names=("HALPHA", "HBETA", "HGAMMA",
                    "OIII_4363", "OIII_5007", "OII_3726", "OII_3729"),
     te_snr_val=5,
     te_min_lines=7,
+    te_cache_dir=NEBCORR_DEFAULT_FOLDER,
+    overwrite_te_cache=False,
 ):
     """
     Build / refresh the SPEC_DERIVED HDU (DWARF_CATALOG_DERIVED_HDU) of a
@@ -719,10 +870,8 @@ def build_spec_derived_hdu(
         Number of parallel workers for the per-row direct-method fits
         (forwarded to compute_direct_metallicities). Default 1 (serial).
         Recommended on NERSC compute nodes: number of allocated cores.
-    te_method : {'ultranest', 'mle'}
-        Direct-method fitting backend. Default 'ultranest'.
     min_num_live_points : int
-        UltraNest min_num_live_points (ignored for 'mle'). Default 400.
+        UltraNest min_num_live_points. Default 400.
     te_line_names : iterable of str
         Emission lines fed to line_snr_mask for the te_mask. Default is the
         seven lines required for n_e, T_e, A_V, O+/H+ and O++/H+:
@@ -732,6 +881,19 @@ def build_spec_derived_hdu(
     te_min_lines : int
         Minimum number of lines passing the per-line SNR cut for te_mask.
         Default 7 (i.e. all of te_line_names must pass).
+    te_cache_dir : str or None
+        Directory holding the cumulative per-TARGETID UltraNest fit cache
+        (``te_fit_cache_ultranest.fits``). Default ``NEBCORR_DEFAULT_FOLDER``.
+        Set to None to disable caching entirely. Cache rows are upserted by
+        TARGETID and rows whose ``fit_success`` is False or ``twelve_log_OH``
+        is NaN are always retried. The cache is cumulative: TARGETIDs absent
+        from the current catalog are preserved on disk so they remain
+        available for future catalog versions.
+    overwrite_te_cache : bool
+        If True, recompute every TARGETID in the current ``te_mask`` even if
+        a usable cache row exists, and upsert the new results into the cache
+        file. Pre-existing cache rows for TARGETIDs not in the current
+        ``te_mask`` are left untouched.
 
     Must run after consolidate_associated_fiber_properties so MAIN MAG_R and
     LUMI_DIST_MPC are group-consolidated; HALPHA_EW(_IVAR) remain per-fiber
@@ -1110,13 +1272,109 @@ def build_spec_derived_hdu(
 
     if n_te > 0:
         idx_te = np.flatnonzero(te_mask)
-        fit_tab = compute_direct_metallicities(
-            fspec_cat[idx_te],
-            method=te_method,
-            n_jobs=n_jobs,
-            min_num_live_points=min_num_live_points,
-            verbose=verbose,
+        tids_te = np.asarray(tid_fspec[idx_te], dtype=np.int64)
+
+        # Cumulative per-TARGETID UltraNest fit cache. Disable entirely by
+        # passing te_cache_dir=None.
+        use_cache = (te_cache_dir is not None)
+        te_cache_path = (
+            os.path.join(te_cache_dir, TE_FIT_CACHE_FILENAME)
+            if use_cache else None
         )
+
+        cache_tab = None
+        tid_to_cache_row = {}
+        cached_mask_in_te = np.zeros(n_te, dtype=bool)
+        cache_rows_for_cached = np.empty(0, dtype=np.int64)
+
+        if use_cache:
+            cache_tab, tid_to_cache_row = _load_te_cache(
+                te_cache_path, verbose=verbose,
+            )
+            if cache_tab is not None and not overwrite_te_cache:
+                # Only treat a cached row as usable if the fit actually
+                # converged. Failed / NaN rows go back into idx_to_compute so
+                # transient failures retry automatically on the next run.
+                cache_fit_success = np.asarray(
+                    cache_tab["fit_success"], dtype=bool,
+                )
+                cache_oh = np.asarray(
+                    cache_tab["twelve_log_OH"], dtype=np.float64,
+                )
+                rows_for_te = np.full(n_te, -1, dtype=np.int64)
+                for i, tid in enumerate(tids_te):
+                    row = tid_to_cache_row.get(int(tid), -1)
+                    if row < 0:
+                        continue
+                    if not cache_fit_success[row]:
+                        continue
+                    if not np.isfinite(cache_oh[row]):
+                        continue
+                    rows_for_te[i] = row
+                cached_mask_in_te = rows_for_te >= 0
+                cache_rows_for_cached = rows_for_te[cached_mask_in_te]
+
+        tocomp_mask_in_te = ~cached_mask_in_te
+        idx_to_compute = idx_te[tocomp_mask_in_te]
+        tids_to_compute = tids_te[tocomp_mask_in_te]
+        n_cached = int(cached_mask_in_te.sum())
+        n_to_compute = int(tocomp_mask_in_te.sum())
+
+        if verbose and use_cache:
+            print(
+                f"  TE cache: reused {n_cached}/{n_te} rows; "
+                f"computing {n_to_compute} new rows"
+            )
+
+        if n_to_compute > 0:
+            fit_tab_new = compute_direct_metallicities(
+                fspec_cat[idx_to_compute],
+                n_jobs=n_jobs,
+                min_num_live_points=min_num_live_points,
+                verbose=verbose,
+            )
+        else:
+            fit_tab_new = None
+
+        # Assemble a full-length fit_tab of n_te rows in idx_te order by
+        # interleaving cached rows with newly computed rows. Keeping this
+        # contract lets the existing scatter-back loop below work unchanged.
+        fit_tab = Table()
+        fit_tab["TARGETID"] = tids_te
+        for col in _TE_CACHE_FLOAT_COLS:
+            arr = np.full(n_te, np.nan, dtype=np.float64)
+            if n_cached > 0 and cache_tab is not None and col in cache_tab.colnames:
+                arr[cached_mask_in_te] = np.asarray(
+                    cache_tab[col], dtype=np.float64,
+                )[cache_rows_for_cached]
+            if (n_to_compute > 0 and fit_tab_new is not None
+                    and col in fit_tab_new.colnames):
+                arr[tocomp_mask_in_te] = np.asarray(
+                    fit_tab_new[col], dtype=np.float64,
+                )
+            fit_tab[col] = arr
+        n_ratios_arr = np.zeros(n_te, dtype=np.int32)
+        if n_cached > 0 and cache_tab is not None and "n_ratios" in cache_tab.colnames:
+            n_ratios_arr[cached_mask_in_te] = np.asarray(
+                cache_tab["n_ratios"], dtype=np.int32,
+            )[cache_rows_for_cached]
+        if (n_to_compute > 0 and fit_tab_new is not None
+                and "n_ratios" in fit_tab_new.colnames):
+            n_ratios_arr[tocomp_mask_in_te] = np.asarray(
+                fit_tab_new["n_ratios"], dtype=np.int32,
+            )
+        fit_tab["n_ratios"] = n_ratios_arr
+        fit_success_arr = np.zeros(n_te, dtype=bool)
+        if n_cached > 0 and cache_tab is not None and "fit_success" in cache_tab.colnames:
+            fit_success_arr[cached_mask_in_te] = np.asarray(
+                cache_tab["fit_success"], dtype=bool,
+            )[cache_rows_for_cached]
+        if (n_to_compute > 0 and fit_tab_new is not None
+                and "fit_success" in fit_tab_new.colnames):
+            fit_success_arr[tocomp_mask_in_te] = np.asarray(
+                fit_tab_new["fit_success"], dtype=bool,
+            )
+        fit_tab["fit_success"] = fit_success_arr
 
         # Scatter fit_tab rows back to full-length arrays. fit_tab has one
         # row per row in fspec_cat[idx_te], in the same order, so positional
@@ -1145,6 +1403,12 @@ def build_spec_derived_hdu(
         if verbose:
             n_ok = int(np.sum(derived_tab["TE_FIT_SUCCESS"]))
             print(f"  TE_FIT_SUCCESS: {n_ok}/{n_te} fits converged")
+
+        if use_cache and n_to_compute > 0:
+            _write_te_cache(
+                te_cache_path, cache_tab, fit_tab_new, tids_to_compute,
+                verbose=verbose,
+            )
 
     _apply_spec_derived_metadata(derived_tab)
 
