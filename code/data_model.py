@@ -1634,9 +1634,11 @@ spec_derived_hdu_datamodel = {
     "LOG_SFR_HALPHA": {
         "unit": None,
         "description": (
-            "log10(SFR / (Msun/yr)) from Bauer et al. (2013) Eq. 2 / Kennicutt & Evans (2012) Halpha calibration "
-            "(Chabrier IMF, see calc_SFR_Halpha). Global aperture-corrected SFR using MAIN MAG_R and "
-            "LUMI_DIST_MPC (distance modulus), per-row fiber HALPHA_EW from FASTSPEC."
+            "log10(SFR / (Msun/yr)) from Bauer et al. (2013) Eq. 2 L(Halpha) combined with a per-object, "
+            "metallicity-dependent Halpha->SFR calibration (sfr_log_cz_BPASS; BPASS, Korhonen Cuestas 2025). "
+            "The calibration metallicity is set from MAIN LOG_MSTAR_M24 via the Kirby+13 mass-metallicity "
+            "relation (stellar_mass_msz), replacing the previous fixed Chabrier constant. Global aperture-corrected "
+            "SFR using MAIN MAG_R and LUMI_DIST_MPC (distance modulus), per-row fiber HALPHA_EW from FASTSPEC."
         ),
         "dtype": "float64",
     },
@@ -1644,8 +1646,8 @@ spec_derived_hdu_datamodel = {
         "unit": None,
         "description": (
             "1-sigma uncertainty on LOG_SFR_HALPHA in dex, from first-order error propagation in calc_SFR_Halpha. "
-            "With zero assumed errors on redshift, absolute r magnitude, and BD, this reflects Halpha EW uncertainty only "
-            "(HALPHA_EW_IVAR)."
+            "The metallicity-dependent calibration constant is treated as exact, so with zero assumed errors on "
+            "redshift, absolute r magnitude, and BD this reflects Halpha EW uncertainty only (HALPHA_EW_IVAR)."
         ),
         "dtype": "float64",
     },
@@ -1659,7 +1661,8 @@ spec_derived_hdu_datamodel = {
     "LOG_HALPHA_SFR_FIBER": {
         "unit": None,
         "description": (
-            "log10(SFR / (Msun/yr)) in the fiber aperture only"
+            "log10(SFR / (Msun/yr)) in the fiber aperture only. Same metallicity-dependent BPASS Halpha->SFR "
+            "calibration as LOG_SFR_HALPHA (metallicity from MAIN LOG_MSTAR_M24 via stellar_mass_msz)."
         ),
         "dtype": "float64",
     },

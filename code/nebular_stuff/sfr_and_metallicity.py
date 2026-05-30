@@ -93,6 +93,98 @@ def r23_n2_line_snr_mask(fastspec_cat):
     return mask
 
 
+SPEC_DERIVED_SNR_LINES = (
+    "NEV_3346", "NEV_3426",
+    "OII_3726", "OII_3729",
+    "NEIII_3869", "H6", "NEIII_3968",
+    "HEPSILON", "HDELTA", "HGAMMA", "OIII_4363",
+    "HEII_4686", "HBETA", "OIII_4959", "OIII_5007",
+    "HEI_5876", "OI_6300", "SIII_6312", "OI_6364",
+    "NII_6548", "HALPHA", "NII_6584",
+    "SII_6716", "SII_6731", "ARIII_7135",
+    "OII_7320", "OII_7330",
+    "SIII_9069", "SIII_9532",
+)
+
+
+def print_line_snr_detection_stats(
+    fastspec_cat,
+    line_names=SPEC_DERIVED_SNR_LINES,
+    snr_val=3.0,
+    n_examples=3,
+    rng_seed=0,
+):
+    """Print a per-line SNR detection report for the FASTSPEC table.
+
+    For each line name in ``line_names``, compute the boolean detection
+    mask ``(_FLUX > 0) & (_FLUX * sqrt(_FLUX_IVAR) > snr_val)`` (with
+    finite-value guards on flux and ivar) and print:
+
+        - the percentage of rows passing the cut
+        - the integer count of detections
+        - up to ``n_examples`` example TARGETIDs (deterministic; first
+          ``n_examples`` in catalog order from the detected set)
+
+    Lines whose ``_FLUX`` / ``_FLUX_IVAR`` columns are not present in
+    ``fastspec_cat`` are collected and reported once at the end so this
+    function never raises if the input schema changes.
+
+    Parameters
+    ----------
+    fastspec_cat : astropy.table.Table-like
+        The FASTSPEC HDU as a Table (or anything supporting ``[col]`` and
+        ``colnames``). Must have ``TARGETID``.
+    line_names : iterable of str
+        Stems (without ``_FLUX`` / ``_FLUX_IVAR`` suffixes). Defaults to
+        ``SPEC_DERIVED_SNR_LINES``.
+    snr_val : float
+        SNR threshold (strict inequality). Default 3.
+    n_examples : int
+        Number of example TARGETIDs to print per detected line.
+    rng_seed : int
+        Reserved for future random-sampling support; currently ignored
+        (examples are taken deterministically in catalog order).
+    """
+    n_rows = len(fastspec_cat)
+    colnames = set(getattr(fastspec_cat, "colnames", []))
+    if "TARGETID" in colnames:
+        tids = np.asarray(fastspec_cat["TARGETID"])
+    else:
+        tids = np.arange(n_rows, dtype=np.int64)
+
+    print(f"SNR>{snr_val:g} detection report (N = {n_rows} rows)")
+    header = f"  {'line':<14} {'count':>8} {'frac':>10}   example TARGETIDs"
+    print(header)
+
+    missing = []
+    for line in line_names:
+        flux_col = f"{line}_FLUX"
+        ivar_col = f"{line}_FLUX_IVAR"
+        if flux_col not in colnames or ivar_col not in colnames:
+            missing.append(line)
+            continue
+
+        flux = np.asarray(fastspec_cat[flux_col], dtype=np.float64)
+        ivar = np.asarray(fastspec_cat[ivar_col], dtype=np.float64)
+        with np.errstate(invalid="ignore"):
+            snr = flux * np.sqrt(ivar)
+        mask = (
+            np.isfinite(flux)
+            & np.isfinite(ivar)
+            & (ivar > 0)
+            & (flux > 0)
+            & (snr > snr_val)
+        )
+        count = int(mask.sum())
+        frac = (count / n_rows) if n_rows > 0 else 0.0
+        idx = np.flatnonzero(mask)[:n_examples]
+        examples = ", ".join(str(int(t)) for t in tids[idx]) if idx.size else "-"
+        print(f"  {line:<14} {count:>8d} {frac * 100:>9.2f}%   {examples}")
+
+    if missing:
+        print(f"  missing columns: {missing}")
+
+
 def return_metallicity_estimates_PG16(R2, R3, N2):
     """
     function estimates the metallicity using the PG16 calibrations
@@ -346,8 +438,8 @@ def get_metallicity_S22(fastspec_cat):
 ##########################################################
 ##########################################################
 
-NOTES: ADD PRINT STATEMENTS ON HOW MANY SPECTRA HAVE DETECTIONS!
-#FOR EACH line how many significant detections >3 do we have?
+# NOTES: ADD PRINT STATEMENTS ON HOW MANY SPECTRA HAVE DETECTIONS!
+# FOR EACH line how many significant detections >3 do we have?
 
 def stellar_mass_msz(logmstar):
     '''
@@ -357,10 +449,11 @@ def stellar_mass_msz(logmstar):
     ----------
     Mstar : float
         Stellar mass in Msun
-    Returns
+    Returns:
+        linear metallicity relative to solar
     '''
     z_value = -1.69 + 0.30 * (logmstar - 6)
-    return z_value
+    return 10**z_value
 
 def sfr_log_cz_BPASS(linear_zmet):
     '''
@@ -368,7 +461,7 @@ def sfr_log_cz_BPASS(linear_zmet):
 
     Z_star =  np.array([0.001, 0.002, 0.003, 0.004, 0.006, 0.008, 0.010, 0.014, 0.020])/0.02 #this is the linear metallicity relative to solar 
     log_C_Z_star = np.array([41.680, 41.647, 41.619, 41.595, 41.544, 41.512, 41.473, 41.411, 41.373]) #this is the conversion factor I am trying to get!
-    
+     zem4    0.00010       -2.301      41.754
     # Fit: returns [slope, intercept]
     slope, intercept = np.polyfit(Z_star[Z_star < 0.25], log_C_Z_star[Z_star < 0.25], 1)
 
@@ -377,7 +470,13 @@ def sfr_log_cz_BPASS(linear_zmet):
     slope = -0.5659999999999248
     intercept = 41.70599999999998
 
-    TODO: if linear_zmet is below 0.005 or 0.3, just print saying values appear beyond the extrapolation, but return the c_z as is
+    zmet = np.atleast_1d(np.asarray(linear_zmet, dtype=float))
+    n_out = int(np.sum(np.isfinite(zmet) & ((zmet < 0.005) | (zmet > 0.3))))
+    if n_out > 0:
+        print(
+            f"sfr_log_cz_BPASS: {n_out} objects with linear_zmet outside "
+            "[0.005, 0.3]; extrapolating the calibration"
+        )
 
     return linear_zmet * slope + intercept
 
@@ -406,6 +505,9 @@ def sfr_log_cz_BPASS(linear_zmet):
 # systematics (aperture correction, stochastic IMF sampling in dwarfs, dust),
 # so this rescaling is a consistency choice, not a physically important shift.
 # _KENNICUTT_EVANS_12_HA_W_CHABRIER = 10.0**34.30   # W per (M_sun/yr), Chabrier IMF
+# Superseded: the fixed Hα→SFR constant is no longer used. calc_SFR_Halpha now
+# uses a per-object, metallicity-dependent calibration from sfr_log_cz_BPASS
+# (with metallicity from stellar_mass_msz). Kept here only for reference.
 _BPASS_LOWZ_12_HA_W_CHABRIER = (3.63 * 10**34)   # W per (M_sun/yr), Chabrier IMF
 
 _HALPHA_REST_A    = 6564.61   # Hα rest wavelength [Å]
@@ -413,6 +515,7 @@ _BALMER_INTRINSIC = 2.86      # Case B Hα/Hβ at T_e=1e4 K, n_e=100 cm^-3
 _DUST_EXPONENT    = 2.36      # Bauer+13 Eq. 2 dust-correction exponent
 _AB_MAG_ZPT       = 34.10     # Bauer+13 Eq. 2 zeropoint; gives L_nu in [W/Hz]
                               # when applied as 10^(-0.4*(M_r - 34.10))
+_C_ANGSTROM_PER_S = 2.99792458e18  # speed of light [Å/s] (L_nu -> L_lambda via c/λ^2)
 def calc_SFR_Halpha(
     EW_Halpha,
     EW_Halpha_ivar,
@@ -420,19 +523,21 @@ def calc_SFR_Halpha(
     spec_z_err,
     Mr,
     Mr_err,
+    logmstar,
     EWc=0.0,
     BD=3.25,
     BD_err=0.1,
-    imf_factor=0.94,
+    imf_factor=1.0,
 ):
     """
     Hα star formation rate from fiber spectroscopy via the Bauer+13 / Hopkins+03
     EW × continuum prescription.
 
-    Uses the Kennicutt & Evans (2012) Hα→SFR calibration, rescaled from its
-    native Kroupa IMF to a Chabrier (2003) IMF for consistency with Chabrier-
-    based stellar masses (the ~8% / ~0.03 dex offset from Madau & Dickinson
-    2014).
+    Uses a per-object, metallicity-dependent Hα→SFR calibration from
+    sfr_log_cz_BPASS (BPASS, fit to Korhonen Cuestas 2025). The linear
+    metallicity (relative to solar) is set by the stellar mass `logmstar`
+    through the Kirby+13 mass-metallicity relation (stellar_mass_msz), and
+    sfr_log_cz_BPASS returns log10(C_Hα / [erg/s per (M_sun/yr)]).
 
     Implements Eq. 2 of Bauer et al. (2013, MNRAS 434, 209):
 
@@ -440,15 +545,12 @@ def calc_SFR_Halpha(
                     * 3e18 / (6564.61 * (1+z))^2
                     * (BD / 2.86)^2.36
 
-    where 3e18 is the speed of light in Å/s (for the L_ν → L_λ conversion
-    via c/λ^2), and 34.10 is the AB absolute-magnitude zeropoint that gives
-    L_ν in [W/Hz]. L(Hα) comes out in Watts, and is then divided by
-    10^34.30 W/(M_sun/yr) (Kennicutt & Evans 2012 Kroupa, rescaled to
-    Chabrier) to get the SFR.
-    
-    SFR normalization uses the Kennicutt & Evans (2012) Kroupa-calibrated
-    value (log C_Hα = 41.27 [erg/s per M_sun/yr] = 34.27 in SI [W per M_sun/yr]),
-    which supersedes Kennicutt (1998) Salpeter.
+    where c = 2.99792458e18 is the speed of light in Å/s (for the L_ν → L_λ
+    conversion via c/λ^2), and 34.10 is the AB absolute-magnitude zeropoint that gives
+    L_ν in [W/Hz]. L(Hα) comes out in Watts; it is multiplied by 1e7 to
+    convert to erg/s, then divided by the per-object calibration constant
+    C_Hα = 10^(sfr_log_cz_BPASS(stellar_mass_msz(logmstar))) [erg/s per
+    (M_sun/yr)] to get the SFR.
 
     FIBER vs. GLOBAL SFR — which one you get depends on Mr
     -----------------------------------------------------
@@ -499,6 +601,11 @@ def calc_SFR_Halpha(
           usually negligible compared to other systematics.
     Mr_err : array_like
         1-sigma uncertainty on Mr [mag].
+    logmstar : array_like
+        log10(stellar mass / M_sun). Sets the per-object linear metallicity
+        via stellar_mass_msz (Kirby+13), which in turn sets the Hα→SFR
+        calibration constant via sfr_log_cz_BPASS. Non-finite values yield
+        NaN SFRs.
     EWc : float, optional
         Constant stellar-absorption correction to add to the emission EW [Å].
         Default 0. Bauer+13 use 2.5 Å for a population-averaged correction.
@@ -512,11 +619,9 @@ def calc_SFR_Halpha(
         1-sigma uncertainty on BD. Default 0.1.
     imf_factor : float, optional
         Optional additional multiplicative rescaling of the SFR. Default 1.0
-        (Chabrier IMF, baked into the divisor). Pass a non-unity value only
-        if you want to convert to a different IMF:
-            Salpeter: imf_factor = 1.00 / 0.61 ≈ 1.64
-            Kroupa:   imf_factor = 0.66 / 0.61 ≈ 1.08
-        Normally leave as 1.0.
+        (the BPASS calibration is applied directly via the metallicity-
+        dependent divisor). Pass a non-unity value only if you want to
+        rescale the SFR (e.g. for an IMF conversion). Normally leave as 1.0.
 
     Returns
     -------
@@ -562,13 +667,20 @@ def calc_SFR_Halpha(
     #   term2: c/λ_obs^2 (c in Å/s), converts L_ν → L_λ  [Hz/Å]
     #   term3: Balmer-decrement dust correction  [dimensionless]
     term1 = EW_total * 10.0 ** (-0.4 * (Mr - _AB_MAG_ZPT))
-    term2 = 3.0e18 / (_HALPHA_REST_A * (1.0 + spec_z)) ** 2
+    term2 = _C_ANGSTROM_PER_S / (_HALPHA_REST_A * (1.0 + spec_z)) ** 2
     term3 = (BD / _BALMER_INTRINSIC) ** _DUST_EXPONENT
 
     L_Halpha = term1 * term2 * term3  # [W]
+    L_Halpha_cgs = L_Halpha * 1.0e7    # [erg/s]; calibration is in erg/s units
 
-    # Kennicutt & Evans 2012, Kroupa-native, optionally rescaled to another IMF
-    SFR = L_Halpha * imf_factor / _BPASS_LOWZ_12_HA_W_CHABRIER
+    # Per-object, metallicity-dependent Hα→SFR calibration. The linear
+    # metallicity (relative to solar) is set by the stellar mass via the
+    # Kirby+13 mass-metallicity relation, and sfr_log_cz_BPASS returns
+    # log10(C_Hα / [erg/s per (M_sun/yr)]) (BPASS, Korhonen Cuestas 2025).
+    linear_zmet = stellar_mass_msz(np.asarray(logmstar, dtype=float))
+    C_Halpha = 10.0 ** sfr_log_cz_BPASS(linear_zmet)  # [erg/s per (M_sun/yr)]
+
+    SFR = L_Halpha_cgs * imf_factor / C_Halpha
 
     with np.errstate(divide="ignore", invalid="ignore"):
         log_SFR = np.log10(SFR)
@@ -588,7 +700,7 @@ def calc_SFR_Halpha(
     return log_SFR, log_SFR_err
 
 
-def get_halpha_sfrs(cat, halpha_ew, halpha_ew_ivar):
+def get_halpha_sfrs(cat, halpha_ew, halpha_ew_ivar, logmstar=None):
     """
     Convenience wrapper: compute aperture-corrected (global) Hα SFRs for a
     catalog with DECam Tractor photometry and DESI spectroscopic redshifts.
@@ -609,17 +721,25 @@ def get_halpha_sfrs(cat, halpha_ew, halpha_ew_ivar):
     ----------
     cat : Table-like
         Must contain columns MAG_R (DECam r, AB, total/model), Z (spec
-        redshift), and LUMI_DIST_MPC.
+        redshift), and LUMI_DIST_MPC. If `logmstar` is None it must also
+        contain LOG_MSTAR_M24.
     halpha_ew, halpha_ew_ivar : array_like
         Rest-frame fiber Hα EW [Å] and inverse variance.
+    logmstar : array_like, optional
+        log10(stellar mass / M_sun) used for the metallicity-dependent
+        Hα→SFR calibration (see calc_SFR_Halpha). Defaults to
+        cat["LOG_MSTAR_M24"].
 
     Returns
     -------
     log_halpha_sfr : ndarray
-        log10(global SFR / [M_sun yr^-1]), Kroupa IMF (Kennicutt & Evans 2012).
+        log10(global SFR / [M_sun yr^-1]).
     """
     absm_r = cat["MAG_R"] + 5.0 - 5.0 * np.log10(1e6 * cat["LUMI_DIST_MPC"])
     zeros = np.zeros_like(np.asarray(cat["Z"]), dtype=float)
+
+    if logmstar is None:
+        logmstar = np.asarray(cat["LOG_MSTAR_M24"], dtype=float)
 
     log_halpha_sfr, _ = calc_SFR_Halpha(
         EW_Halpha=halpha_ew,
@@ -628,6 +748,7 @@ def get_halpha_sfrs(cat, halpha_ew, halpha_ew_ivar):
         spec_z_err=zeros,
         Mr=absm_r,
         Mr_err=zeros,
+        logmstar=logmstar,
     )
     return log_halpha_sfr
 
@@ -642,28 +763,108 @@ def _fiber_tot_mw_mags(flux_g, flux_r, mw_g, mw_r):
     return mag_g, mag_r
 
 
-def _spec_derived_delta_corrected_mags(fspec_cat, mag_g_base, mag_r_base, low_snr):
+def _build_spec_derived_delta_mag_arrays(tid_main, verbose=True):
     """
-    Sum FASTSPEC DELTA_MAG_* onto arbitrary apparent mags (MAIN totals or
-    FIBERTOT fiber mags). BASS2DECAM is already north-masked when columns were
-    written. Rows with low_snr or non-finite deltas leave NaN in the corrected
-    arrays (caller uses low-SNR Mr path instead).
+    Build the per-row DELTA_MAG_* arrays for the SPEC_DERIVED HDU by matching
+    the NEBCORR INT_V2 delta-mag table to ``tid_main`` (the MAIN/FASTSPEC
+    TARGETID order).
+
+    These are the single source of truth for the photometric corrections: the
+    same arrays are both written to the SPEC_DERIVED HDU (Block A) and summed
+    onto the working magnitudes for the Halpha SFR / fiber-mass computations
+    (via _spec_derived_delta_corrected_mags), so the two can never disagree.
+
+    The two ``*_BASS2DECAM`` columns are north-masked (zeroed where
+    ``is_south == 1``); all other deltas are copied verbatim. Unmatched
+    TARGETIDs (and every row when the NEBCORR table is absent) are NaN.
+
+    Returns
+    -------
+    arrays : dict[str, np.ndarray]
+        One float64 array of length ``len(tid_main)`` per name in
+        FASTSPEC_DELTA_MAG_COLS.
+    n_matched : int
+        Number of TARGETIDs matched to the NEBCORR table.
     """
-    n = len(fspec_cat)
-    mag_g_corr = np.full(n, np.nan, dtype=np.float64)
-    mag_r_corr = np.full(n, np.nan, dtype=np.float64)
-    for c in FASTSPEC_DELTA_MAG_COLS:
-        if c not in fspec_cat.colnames:
-            return mag_g_corr, mag_r_corr
-    stacks = np.column_stack(
-        [np.asarray(fspec_cat[c].data, dtype=np.float64) for c in FASTSPEC_DELTA_MAG_COLS]
+    tid_main = np.asarray(tid_main, dtype=np.int64)
+    n = tid_main.shape[0]
+
+    delta_tab = _load_nebcorr_delta_mag_table(
+        save_folder=NEBCORR_DEFAULT_FOLDER, verbose=verbose,
     )
-    all_finite = np.all(np.isfinite(stacks), axis=1)
-    g_sum = stacks[:, 0] + stacks[:, 2] + stacks[:, 4] + stacks[:, 6]
-    r_sum = stacks[:, 1] + stacks[:, 3] + stacks[:, 5] + stacks[:, 7]
-    ok = (~low_snr) & all_finite
+    if delta_tab is None:
+        if verbose:
+            print(
+                "  WARNING: No NEBCORR DELTA_MAG tables found; "
+                "DELTA_MAG_* columns filled with NaN."
+            )
+        return (
+            {col: np.full(n, np.nan, dtype=np.float64)
+             for col in FASTSPEC_DELTA_MAG_COLS},
+            0,
+        )
+
+    neb_tids = np.asarray(delta_tab["TARGETID"], dtype=np.int64)
+    tid_to_row = {int(t): i for i, t in enumerate(neb_tids)}
+    north_row = (np.asarray(delta_tab["is_south"], dtype=np.int64) == 0).astype(
+        np.float64
+    )
+
+    matched_rows = np.array(
+        [tid_to_row.get(int(t), -1) for t in tid_main], dtype=np.int64,
+    )
+    valid = matched_rows >= 0
+    n_matched = int(np.sum(valid))
+
+    arrays = {}
+    for col in FASTSPEC_DELTA_MAG_COLS:
+        arr = np.full(n, np.nan, dtype=np.float64)
+        src = np.asarray(delta_tab[col], dtype=np.float64)
+        arr[valid] = src[matched_rows[valid]]
+        if col in ("DELTA_MAG_G_BASS2DECAM", "DELTA_MAG_R_BASS2DECAM"):
+            arr[valid] *= north_row[matched_rows[valid]]
+        arrays[col] = arr
+
+    return arrays, n_matched
+
+
+def _spec_derived_delta_corrected_mags(delta_arrays, mag_g_base, mag_r_base, low_snr):
+    """
+    Sum the SPEC_DERIVED DELTA_MAG_* arrays onto arbitrary apparent mags (MAIN
+    totals or FIBERTOT fiber mags). ``delta_arrays`` is the dict returned by
+    _build_spec_derived_delta_mag_arrays (BASS2DECAM already north-masked), so
+    the corrections applied here are identical to the columns written to the
+    SPEC_DERIVED HDU. Rows with low_snr or non-finite deltas leave NaN in the
+    corrected arrays (caller uses the low-SNR Mr path instead).
+    """
     mag_g_base = np.asarray(mag_g_base, dtype=np.float64)
     mag_r_base = np.asarray(mag_r_base, dtype=np.float64)
+    n = mag_g_base.shape[0]
+    mag_g_corr = np.full(n, np.nan, dtype=np.float64)
+    mag_r_corr = np.full(n, np.nan, dtype=np.float64)
+
+    for c in FASTSPEC_DELTA_MAG_COLS:
+        if c not in delta_arrays:
+            return mag_g_corr, mag_r_corr
+
+    # Partition by band from the column name so the sum is independent of the
+    # ordering of FASTSPEC_DELTA_MAG_COLS.
+    g_cols = [c for c in FASTSPEC_DELTA_MAG_COLS if c.startswith("DELTA_MAG_G_")]
+    r_cols = [c for c in FASTSPEC_DELTA_MAG_COLS if c.startswith("DELTA_MAG_R_")]
+    g_stack = np.column_stack(
+        [np.asarray(delta_arrays[c], dtype=np.float64) for c in g_cols]
+    )
+    r_stack = np.column_stack(
+        [np.asarray(delta_arrays[c], dtype=np.float64) for c in r_cols]
+    )
+    all_finite = (
+        np.all(np.isfinite(g_stack), axis=1)
+        & np.all(np.isfinite(r_stack), axis=1)
+    )
+    g_sum = g_stack.sum(axis=1)
+    r_sum = r_stack.sum(axis=1)
+
+    ok = (~low_snr) & all_finite
     mag_g_corr[ok] = mag_g_base[ok] + g_sum[ok]
     mag_r_corr[ok] = mag_r_base[ok] + r_sum[ok]
     return mag_g_corr, mag_r_corr
@@ -956,6 +1157,9 @@ def build_spec_derived_hdu(
 
     print("Finished reading tables!")
 
+    if verbose:
+        print_line_snr_detection_stats(fspec_cat)
+
     n_main = len(main_cat)
     n_fspec = len(fspec_cat)
     if n_main != n_fspec:
@@ -975,6 +1179,7 @@ def build_spec_derived_hdu(
     mag_r = np.asarray(main_cat["MAG_R"].data, dtype=float)
     lumi_dist = np.asarray(main_cat["LUMI_DIST_MPC"].data, dtype=float)
     z_cmb = np.asarray(main_cat["Z_CMB"].data, dtype=float)
+    logmstar_global = np.asarray(main_cat["LOG_MSTAR_M24"].data, dtype=float)
 
     halpha_ew = np.asarray(fspec_cat["HALPHA_EW"].data, dtype=float)
     halpha_ew_ivar = np.asarray(fspec_cat["HALPHA_EW_IVAR"].data, dtype=float)
@@ -1053,8 +1258,16 @@ def build_spec_derived_hdu(
                 "all rows use low-SNR fallback (no DELTA_MAG) for Hα SFR / fiber mass."
             )
 
+    # Single source of truth for the photometric corrections: the same matched
+    # NEBCORR DELTA_MAG_* arrays are summed onto the working mags here (for the
+    # Halpha SFR / fiber mass) and written verbatim to the SPEC_DERIVED HDU in
+    # Block A below, so the two can never disagree.
+    delta_mag_arrays, n_delta_matched = _build_spec_derived_delta_mag_arrays(
+        tid_main, verbose=verbose,
+    )
+
     mag_g_corr_main, mag_r_corr_main = _spec_derived_delta_corrected_mags(
-        fspec_cat, mag_g, mag_r, low_snr
+        delta_mag_arrays, mag_g, mag_r, low_snr
     )
 
     print("Collected the delta mags!")
@@ -1080,10 +1293,11 @@ def build_spec_derived_hdu(
         spec_z_err=zeros,
         Mr=mr_global,
         Mr_err=mr_err,
+        logmstar=logmstar_global,
         EWc=0.0,
         BD=bd_per_object,
         BD_err=0.0,
-        imf_factor=0.94,
+        imf_factor=1.0,
     )
     log_sfr = np.where(ok_halpha_for_sfr, log_sfr, np.nan)
     log_sfr_err = np.where(ok_halpha_for_sfr, log_sfr_err, np.nan)
@@ -1097,7 +1311,7 @@ def build_spec_derived_hdu(
     )
 
     mag_g_corr_fib, mag_r_corr_fib = _spec_derived_delta_corrected_mags(
-        fspec_cat, mag_g_fib, mag_r_fib, low_snr
+        delta_mag_arrays, mag_g_fib, mag_r_fib, low_snr
     )
 
     print("Collected the delta mags for fiber-based!")
@@ -1136,10 +1350,11 @@ def build_spec_derived_hdu(
         spec_z_err=zeros,
         Mr=mr_fiber,
         Mr_err=mr_err,
+        logmstar=logmstar_global,
         EWc=0.0,
         BD=bd_per_object,
         BD_err=0.0,
-        imf_factor=0.94,
+        imf_factor=1.0,
     )
     log_sfr_fiber = np.where(ok_halpha_for_sfr, log_sfr_fiber, np.nan)
 
@@ -1183,53 +1398,22 @@ def build_spec_derived_hdu(
     # ------------------------------------------------------------------
     # Block A: DELTA_MAG_* photometric correction columns from NEBCORR.
     # Previously written to the FASTSPEC HDU by add_delta_mag_to_fastspec;
-    # now lives in SPEC_DERIVED. BASS2DECAM rows are zeroed for south
-    # (is_south == 1); other deltas copied verbatim. Unmatched TARGETIDs
-    # leave NaN.
+    # now lives in SPEC_DERIVED. These are the same arrays already used above
+    # for the Halpha SFR / fiber-mass corrections (built once by
+    # _build_spec_derived_delta_mag_arrays), so the written columns and the
+    # corrections are guaranteed consistent. BASS2DECAM rows are zeroed for
+    # south (is_south == 1); other deltas copied verbatim; unmatched
+    # TARGETIDs leave NaN.
     # ------------------------------------------------------------------
     if verbose:
         print("Adding DELTA_MAG_* photometric correction columns")
-
-    delta_tab = _load_nebcorr_delta_mag_table(
-        save_folder=NEBCORR_DEFAULT_FOLDER, verbose=verbose,
-    )
-    if delta_tab is None:
-        if verbose:
-            print(
-                "  WARNING: No NEBCORR DELTA_MAG tables found; "
-                "DELTA_MAG_* columns filled with NaN."
-            )
-        for col in FASTSPEC_DELTA_MAG_COLS:
-            derived_tab[col] = np.full(n_fspec, np.nan, dtype=np.float64)
-    else:
-        neb_tids = np.asarray(delta_tab["TARGETID"])
-        tid_to_row = {int(t): i for i, t in enumerate(neb_tids)}
-        is_south_rows = np.asarray(delta_tab["is_south"], dtype=np.int64)
-        north_row = (is_south_rows == 0).astype(np.float64)
-
-        matched_rows = np.array(
-            [tid_to_row.get(int(t), -1) for t in tid_main], dtype=np.int64,
+        print(
+            f"  Matched {n_delta_matched}/{n_fspec} TARGETIDs to NEBCORR "
+            "delta-mag table"
         )
-        n_matched = int(np.sum(matched_rows >= 0))
-        if verbose:
-            print(
-                f"  Matched {n_matched}/{n_fspec} TARGETIDs to NEBCORR "
-                "delta-mag table"
-            )
 
-        for col in FASTSPEC_DELTA_MAG_COLS:
-            arr = np.full(n_fspec, np.nan, dtype=np.float64)
-            src = np.asarray(delta_tab[col], dtype=np.float64)
-            for j in range(n_fspec):
-                row = matched_rows[j]
-                if row < 0:
-                    continue
-                v = src[row]
-                if col in ("DELTA_MAG_G_BASS2DECAM",
-                           "DELTA_MAG_R_BASS2DECAM"):
-                    v = v * north_row[row]
-                arr[j] = v
-            derived_tab[col] = arr
+    for col in FASTSPEC_DELTA_MAG_COLS:
+        derived_tab[col] = delta_mag_arrays[col]
 
     # ------------------------------------------------------------------
     # Block B: direct-method nebular fits via
