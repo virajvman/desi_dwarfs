@@ -183,7 +183,7 @@ if __name__ == "__main__":
             va="bottom")
 
     ax.set_xlabel(r"$\log_{10}(Z/Z_\odot)$")
-    ax.set_ylabel(r"$\log_{10}\,C(Z_*)$ [ergs/s]")
+    ax.set_ylabel(r"$\log_{10}\,C(Z_*)$ [erg/s]")
     ax.set_xlim(-2.35, 0)
     ax.set_ylim(41.25, 42)
 

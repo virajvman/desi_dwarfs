@@ -151,4 +151,4 @@ def main(argv=None):
 if __name__ == "__main__":
     sys.exit(main())
 
-    #TODO: use BOXFLUX as fiducial flux value for stuff. Make note that is it likely biased for 20% time
+    #TODO: use BOXFLUX as fiducial flux value for stuff. Make note that is it likely biased for 20% of the toime

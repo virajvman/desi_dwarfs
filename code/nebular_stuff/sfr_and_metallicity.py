@@ -455,6 +455,10 @@ def stellar_mass_msz(logmstar):
     z_value = -1.69 + 0.30 * (logmstar - 6)
     return 10**z_value
 
+_LOG_ZMET_MIN = -2.35
+_LOG_ZMET_MAX = -0.6
+
+
 def sfr_log_cz_BPASS(linear_zmet):
     '''
     This is the fit to data from Table 2 of Nathalie A. Korhonen Cuestas 2025 paper. We simply fit a line to linear metallicity (relative to solar) and C_SFR conversion factor between Halpha luminosity and SFR 
@@ -462,23 +466,33 @@ def sfr_log_cz_BPASS(linear_zmet):
     Z_star =  np.array([0.001, 0.002, 0.003, 0.004, 0.006, 0.008, 0.010, 0.014, 0.020])/0.02 #this is the linear metallicity relative to solar 
     log_C_Z_star = np.array([41.680, 41.647, 41.619, 41.595, 41.544, 41.512, 41.473, 41.411, 41.373]) #this is the conversion factor I am trying to get!
      zem4    0.00010       -2.301      41.754
-    # Fit: returns [slope, intercept]
-    slope, intercept = np.polyfit(Z_star[Z_star < 0.25], log_C_Z_star[Z_star < 0.25], 1)
 
+    coeffs = np.polyfit( np.log10(Z_star[Z_star < 0.2]), log_C_Z_star[Z_star < 0.2], 2)
+
+    log10(linear_zmet) is clipped to [_LOG_ZMET_MIN, _LOG_ZMET_MAX] before evaluation;
+    values outside the fit range receive log C at the nearest boundary.
     '''
 
-    slope = -0.5659999999999248
-    intercept = 41.70599999999998
+    coeffs = np.array([-3.70148004e-02, -2.06139022e-01,  4.14755688e+01])
 
-    zmet = np.atleast_1d(np.asarray(linear_zmet, dtype=float))
-    n_out = int(np.sum(np.isfinite(zmet) & ((zmet < 0.005) | (zmet > 0.3))))
+    log_zmet = np.log10(np.atleast_1d(np.asarray(linear_zmet, dtype=float)))
+
+    n_out = int(
+        np.sum(
+            np.isfinite(log_zmet)
+            & ((log_zmet < _LOG_ZMET_MIN) | (log_zmet > _LOG_ZMET_MAX))
+        )
+    )
+
     if n_out > 0:
         print(
             f"sfr_log_cz_BPASS: {n_out} objects with linear_zmet outside "
-            "[0.005, 0.3]; extrapolating the calibration"
+            f"[10**{_LOG_ZMET_MIN:.2g}, 10**{_LOG_ZMET_MAX:.2g}]; "
+            "capping calibration at fit boundaries"
         )
 
-    return linear_zmet * slope + intercept
+    log_zmet_fit = np.clip(log_zmet, _LOG_ZMET_MIN, _LOG_ZMET_MAX)
+    return np.polyval(coeffs, log_zmet_fit)
 
 
 #then validate how Halpha luminosity is being computed!
