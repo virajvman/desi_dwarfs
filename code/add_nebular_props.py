@@ -82,7 +82,7 @@ from sfr_and_metallicity import (
 # Number of parallel worker processes for the per-row direct-method fits.
 # Set to the number of cores you allocated (e.g., 64 or 128 on Perlmutter
 # CPU nodes). Do NOT use N_JOBS > 1 on login nodes.
-N_JOBS = 64
+N_JOBS = 128
 
 # UltraNest min_num_live_points for compute_direct_metallicities.
 TE_MIN_NUM_LIVE_POINTS = 400
