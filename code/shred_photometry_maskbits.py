@@ -2,9 +2,19 @@
 Script contains functions to construct the SHRED_MASKBITS for the photometry outputs
 '''
 
+import os
+import sys
+
 import numpy as np
 from desi_lowz_funcs import save_table, get_useful_cat_colms, _n_or_more_gt, _n_or_more_lt, get_remove_flag
 from easyquery import Query, QueryMaker
+
+# ``sfr_and_metallicity`` lives in the flat ``code/nebular_stuff/`` folder (no
+# __init__.py). Make it importable so this module works regardless of which
+# script imports it (e.g. ``consolidate_photometry.py``).
+_NEBULAR_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nebular_stuff")
+if _NEBULAR_DIR not in sys.path:
+    sys.path.insert(0, _NEBULAR_DIR)
 
 #####
 #####
