@@ -1701,7 +1701,7 @@ def get_remove_flag(catalog, remove_queries):
     except AttributeError:
         iter_queries = enumerate(remove_queries)
 
-    remove_flag = np.zeros(len(catalog), dtype=np.int)
+    remove_flag = np.zeros(len(catalog), dtype=int)
     for i, remove_query in iter_queries:
         remove_flag[Query(remove_query).mask(catalog)] += 1 << i
     return remove_flag
