@@ -1472,7 +1472,7 @@ def match_fastspec_catalog(gal_cat, coord_name="", match_method="RADEC", source=
     if source == "default":
         vac_data = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_fastspec_catalog/iron_fastspec_v21.fits")
     elif source == "custom":
-        custom_path = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/fastspecfit_custom_run/iron/catalogs/fastspec-iron-sample.fits"
+        custom_path  = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/fastspecfit_custom_run/iron/catalogs/fastspec-iron-dr1-dwarfs.fits"
         print(f"match_fastspec_catalog: reading custom FASTSPEC HDU (hdu=3) from {custom_path}")
         vac_data = Table.read(custom_path, hdu=3)
         if match_method != "TARGETID":

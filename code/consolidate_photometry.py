@@ -2370,6 +2370,8 @@ if __name__ == '__main__':
     # Describe in paper, how much of an impact happens if we were to do approximate stellar mass comp as for these low-cont vs. full method. 
     # TODO: need to confirm for objects with nan errors or missing spectra, what MSTAR_MASKBIT they get and if they should go back to fall back mass or not.
 
+    #TODO: WHAT IS CAUSING THE MISSING TARGETIDS FROM THE CUSTOM FASTSPECFIT CATALOG? THERE IS A SIGNIFICANT FRACTION OF SOURCES. Oh maybe it is because some objects were removed?
+
 
 
 
