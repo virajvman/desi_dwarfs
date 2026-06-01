@@ -67,7 +67,7 @@ _NEBULAR_DIR = os.path.join(_THIS_DIR, "nebular_stuff")
 if _NEBULAR_DIR not in sys.path:
     sys.path.insert(0, _NEBULAR_DIR)
 
-from code.desi_lowz_funcs import compute_separations
+from desi_lowz_funcs import compute_separations
 from sfr_and_metallicity import (
     build_spec_derived_hdu,
     add_model_photometry_to_spec_derived,
