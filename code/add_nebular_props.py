@@ -104,7 +104,7 @@ TE_MIN_NUM_LIVE_POINTS = 400
 TE_LINE_NAMES = ["HALPHA", "HBETA", "HGAMMA",
                  "OIII_4363", "OIII_5007",
                  "OII_3726", "OII_3729"]
-TE_SNR_VAL = 5
+TE_SNR_VAL = 3
 TE_MIN_LINES = 7
 
 # UltraNest run() termination guards. Bound pathological fits so a few hard
