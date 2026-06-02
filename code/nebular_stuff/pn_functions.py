@@ -274,6 +274,74 @@ def _make_prior_transform(lows, highs):
     return transform
 
 
+def ptform_1d_from_samples(samples, lo, hi):
+    """Build a 1D informative prior transform from posterior samples.
+
+    Returns a vectorized callable mapping unit-cube value(s) u in [0, 1] to
+    parameter value(s) via the empirical inverse CDF of *samples*, clipped to
+    [lo, hi]. Used for Stage-2 of the two-stage fit so the Stage-1 posterior
+    on ne/Te/Av becomes the Stage-2 prior (matches the collaborator's
+    ptform_1d_from_samples usage)."""
+    s = np.sort(np.asarray(samples, dtype=float))
+    n = len(s)
+    # Midpoint quantile grid: q_i = (i + 0.5) / n.
+    q = (np.arange(n) + 0.5) / n
+
+    def transform(u):
+        v = np.interp(u, q, s)
+        return np.clip(v, lo, hi)
+
+    return transform
+
+
+def _run_sampler(param_names, loglike, transform,
+                 min_num_live_points=400,
+                 verbose_sampler=False,
+                 sampler_kwargs=None):
+    """Run one UltraNest fit and return equal-weight resampled posterior
+    points, or ``None`` on failure.
+
+    Shared by both stages of the two-stage fit. Applies the same run_kwargs +
+    sampler_kwargs termination-guard logic and the same seed-42 weighted
+    resampling as ``_fit_row_ultranest`` so the two code paths behave
+    consistently."""
+    try:
+        import ultranest
+    except ImportError as e:
+        raise ImportError(
+            "method='ultranest' requires the ultranest package "
+            "(pip install ultranest)"
+        ) from e
+
+    import logging
+    if not verbose_sampler:
+        logging.getLogger('ultranest').setLevel(logging.WARNING)
+
+    sampler = ultranest.ReactiveNestedSampler(
+        list(param_names), loglike, transform,
+        vectorized=True,
+    )
+    run_kwargs = {'min_num_live_points': min_num_live_points,
+                  'show_status': verbose_sampler,
+                  'viz_callback': False}
+    if sampler_kwargs:
+        run_kwargs.update(sampler_kwargs)
+
+    try:
+        result = sampler.run(**run_kwargs)
+    except Exception:
+        return None
+
+    ws = result['weighted_samples']
+    pts = np.asarray(ws['points'])      # (N_samples, n_par)
+    wts = np.asarray(ws['weights'])     # (N_samples,)
+    wts_norm = wts / wts.sum()
+    n_resample = min(10_000, max(2_000, len(pts)))
+    rng = np.random.default_rng(42)
+    idx = rng.choice(len(pts), size=n_resample, replace=True, p=wts_norm)
+    return pts[idx]
+
+
 def _fit_row_ultranest(r, r_err, mask,
                        min_num_live_points=400,
                        verbose_sampler=False,
@@ -384,6 +452,156 @@ def _fit_row_ultranest(r, r_err, mask,
 
 
 # ---------------------------------------------------------------------------
+# Two-stage informative-prior fit (Plan B)
+# ---------------------------------------------------------------------------
+# Stage 1 fits {ne_oii, te_oiii, Av} from the density / Balmer / OIII-auroral
+# ratios (indices 0-3); Stage 2 then fits {log_O2_abund, log_O3_abund} from
+# the abundance ratios (indices 4-5) while marginalizing over ne/Te/Av with
+# informative priors built from the Stage-1 posterior. Splitting the joint
+# fit this way collapses the degeneracy that makes the single-stage 5D fit
+# pathological for low-SNR objects. Mirrors the collaborator's abundance stage.
+_STAGE1_RATIO_IDX = (0, 1, 2, 3)   # n_e, A_V (x2), T_high
+_STAGE2_RATIO_IDX = (4, 5)         # O+/H+, O++/H+
+_I_O2 = PARAM_NAMES.index('log_O2_abund')
+_I_O3 = PARAM_NAMES.index('log_O3_abund')
+
+
+def _twelve_logOH_from_samples(samples):
+    """Compute 12 + log10(O+/H+ + O++/H+) percentiles from posterior samples
+    (columns in PARAM_NAMES order). Per-sample so the O+/O++ anti-correlation
+    is captured. Returns (med, lo, hi, err)."""
+    O_over_H_samples = 10 ** samples[:, _I_O2] + 10 ** samples[:, _I_O3]
+    twelve_logOH_samples = 12 + np.log10(O_over_H_samples)
+    lo = np.percentile(twelve_logOH_samples, 16)
+    med = np.percentile(twelve_logOH_samples, 50)
+    hi = np.percentile(twelve_logOH_samples, 84)
+    return med, lo, hi, 0.5 * (hi - lo)
+
+
+def _fit_row_ultranest_twostage(r, r_err, mask,
+                                min_num_live_points=400,
+                                verbose_sampler=False,
+                                sampler_kwargs=None):
+    """Two-stage informative-prior nested-sampling fit (Plan B).
+
+    Returns the same result-dict contract as ``_fit_row_ultranest`` so the
+    catalog driver and cache are agnostic to which method produced a row."""
+    n_used = int(mask.sum())
+    n_par = len(PARAM_NAMES)
+    if n_used < 3:
+        return _nan_fit_result(n_par, n_used)
+
+    idx1 = [i for i in _STAGE1_RATIO_IDX if mask[i]]
+    idx2 = [i for i in _STAGE2_RATIO_IDX if mask[i]]
+    if len(idx1) < 3 or len(idx2) < 1:
+        return _nan_fit_result(n_par, n_used, success=False)
+
+    r1 = r[idx1]
+    e1 = r_err[idx1]
+    r2 = r[idx2]
+    e2 = r_err[idx2]
+    r1_col = r1[:, None]
+    e1_col = e1[:, None]
+    r2_col = r2[:, None]
+    e2_col = e2[:, None]
+
+    # --- Stage 1: {ne_oii, te_oiii, Av} with uniform priors --------------
+    lows1 = PRIOR_LOWS[:3]
+    highs1 = PRIOR_HIGHS[:3]
+    spans1 = highs1 - lows1
+
+    def transform1(cubes):
+        return lows1 + np.asarray(cubes) * spans1
+
+    def loglike1(thetas):
+        thetas = np.asarray(thetas)
+        if thetas.ndim == 1:
+            # Pad with dummy abundances; ratios 0-3 don't depend on them.
+            theta5 = np.concatenate([thetas, [-4.0, -4.0]])
+            model = r_model(theta5)
+            return -0.5 * np.sum(((r1 - model[idx1]) / e1) ** 2)
+        pad = np.full((thetas.shape[0], 2), -4.0)
+        theta5 = np.hstack([thetas, pad])
+        models = r_model(theta5)                   # (n_ratios, N)
+        resid = (r1_col - models[idx1]) / e1_col
+        return -0.5 * np.sum(resid ** 2, axis=0)
+
+    samples1 = _run_sampler(
+        PARAM_NAMES[:3], loglike1, transform1,
+        min_num_live_points=min_num_live_points,
+        verbose_sampler=verbose_sampler,
+        sampler_kwargs=sampler_kwargs,
+    )
+    if samples1 is None:
+        return _nan_fit_result(n_par, n_used, success=False)
+
+    # --- Stage 2: full 5-param fit; ne/Te/Av get informative priors ------
+    ne_tf = ptform_1d_from_samples(samples1[:, 0], PRIOR_LOWS[0], PRIOR_HIGHS[0])
+    te_tf = ptform_1d_from_samples(samples1[:, 1], PRIOR_LOWS[1], PRIOR_HIGHS[1])
+    av_tf = ptform_1d_from_samples(samples1[:, 2], PRIOR_LOWS[2], PRIOR_HIGHS[2])
+    o2_lo, o2_hi = PRIOR_LOWS[_I_O2], PRIOR_HIGHS[_I_O2]
+    o3_lo, o3_hi = PRIOR_LOWS[_I_O3], PRIOR_HIGHS[_I_O3]
+    o2_span = o2_hi - o2_lo
+    o3_span = o3_hi - o3_lo
+
+    def transform2(cubes):
+        cubes = np.asarray(cubes)
+        if cubes.ndim == 1:
+            out = np.empty(5)
+            out[0] = ne_tf(cubes[0])
+            out[1] = te_tf(cubes[1])
+            out[2] = av_tf(cubes[2])
+            out[3] = o2_lo + cubes[3] * o2_span
+            out[4] = o3_lo + cubes[4] * o3_span
+            return out
+        out = np.empty_like(cubes, dtype=float)
+        out[:, 0] = ne_tf(cubes[:, 0])
+        out[:, 1] = te_tf(cubes[:, 1])
+        out[:, 2] = av_tf(cubes[:, 2])
+        out[:, 3] = o2_lo + cubes[:, 3] * o2_span
+        out[:, 4] = o3_lo + cubes[:, 4] * o3_span
+        return out
+
+    def loglike2(thetas):
+        thetas = np.asarray(thetas)
+        if thetas.ndim == 1:
+            model = r_model(thetas)
+            return -0.5 * np.sum(((r2 - model[idx2]) / e2) ** 2)
+        models = r_model(thetas)                   # (n_ratios, N)
+        resid = (r2_col - models[idx2]) / e2_col
+        return -0.5 * np.sum(resid ** 2, axis=0)
+
+    samples2 = _run_sampler(
+        PARAM_NAMES, loglike2, transform2,
+        min_num_live_points=min_num_live_points,
+        verbose_sampler=verbose_sampler,
+        sampler_kwargs=sampler_kwargs,
+    )
+    if samples2 is None:
+        return _nan_fit_result(n_par, n_used, success=False)
+
+    theta_lo = np.percentile(samples2, 16, axis=0)
+    theta_med = np.percentile(samples2, 50, axis=0)
+    theta_hi = np.percentile(samples2, 84, axis=0)
+    theta_err = 0.5 * (theta_hi - theta_lo)
+
+    oh_med, oh_lo, oh_hi, oh_err = _twelve_logOH_from_samples(samples2)
+
+    return {
+        'theta': theta_med,
+        'theta_lo': theta_lo,
+        'theta_hi': theta_hi,
+        'theta_err': theta_err,
+        'twelve_log_OH': oh_med,
+        'twelve_log_OH_lo': oh_lo,
+        'twelve_log_OH_hi': oh_hi,
+        'twelve_log_OH_err': oh_err,
+        'success': True,
+        'n_ratios': n_used,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Public driver
 # ---------------------------------------------------------------------------
 def _fit_one_row(row, min_num_live_points, verbose_sampler, sampler_kwargs):
@@ -398,12 +616,26 @@ def _fit_one_row(row, min_num_live_points, verbose_sampler, sampler_kwargs):
     )
 
 
+def _fit_one_row_twostage(row, min_num_live_points, verbose_sampler,
+                          sampler_kwargs):
+    """Top-level per-row worker for the two-stage fit (Plan B). Module-level
+    so it can be pickled for joblib's loky workers."""
+    r, r_err, mask = _build_ratios(row)
+    return _fit_row_ultranest_twostage(
+        r, r_err, mask,
+        min_num_live_points=min_num_live_points,
+        verbose_sampler=verbose_sampler,
+        sampler_kwargs=sampler_kwargs,
+    )
+
+
 def compute_direct_metallicities(catalog,
                                  n_jobs=1,
                                  min_num_live_points=400,
                                  verbose=False,
                                  verbose_sampler=False,
-                                 sampler_kwargs=None):
+                                 sampler_kwargs=None,
+                                 use_informative_priors=False):
     """
     Compute direct-Te oxygen abundances row-by-row from a line-flux catalog
     using UltraNest nested sampling (matches Scholte+2026).
@@ -430,6 +662,12 @@ def compute_direct_metallicities(catalog,
         Strongly recommended to leave False when n_jobs > 1 -- otherwise
         many workers will interleave their UltraNest progress to stderr.
     sampler_kwargs : extra kwargs passed to sampler.run().
+    use_informative_priors : bool
+        If False (default) use the single-stage joint 5-parameter fit
+        (``_fit_row_ultranest``, Plan A). If True use the two-stage
+        informative-prior fit (``_fit_row_ultranest_twostage``, Plan B):
+        fit ne/Te/Av first, then the abundances using the Stage-1 posteriors
+        as priors. Both methods return the identical result-table schema.
 
     Returns
     -------
@@ -451,12 +689,15 @@ def compute_direct_metallicities(catalog,
     # Cache TARGETIDs if available so the verbose printer can show them.
     targetids = catalog['TARGETID'] if 'TARGETID' in catalog.colnames else None
 
+    # Select the per-row fitter: single-stage (Plan A) or two-stage (Plan B).
+    worker = _fit_one_row_twostage if use_informative_priors else _fit_one_row
+
     # Run the per-row fits (parallel or serial)
     if n_jobs == 1 or n_rows == 1:
         # Serial path -- avoids joblib overhead and preserves print ordering.
         fits = []
         for idx, row in enumerate(catalog):
-            fit = _fit_one_row(
+            fit = worker(
                 row, min_num_live_points, verbose_sampler, sampler_kwargs,
             )
             fits.append(fit)
@@ -484,7 +725,7 @@ def compute_direct_metallicities(catalog,
 
         fits = Parallel(n_jobs=n_jobs, backend='loky',
                         verbose=10 if verbose else 0)(
-            delayed(_fit_one_row)(
+            delayed(worker)(
                 row, min_num_live_points, verbose_sampler, sampler_kwargs,
             )
             for row in catalog

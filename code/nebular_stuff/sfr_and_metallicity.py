@@ -924,6 +924,10 @@ def _apply_spec_derived_metadata(tab):
 # Filename for the cumulative per-TARGETID UltraNest fit cache. Kept separate
 # from the catalog file so it persists across catalog rebuilds.
 TE_FIT_CACHE_FILENAME = "te_fit_cache_ultranest.fits"
+# Separate cache for the two-stage informative-prior method (Plan B) so its
+# results never mix with the single-stage (Plan A) cache keyed by the same
+# TARGETIDs.
+TE_FIT_CACHE_FILENAME_INFPRIOR = "te_fit_cache_ultranest_infprior.fits"
 
 # Schema = exact output of pn_functions.compute_direct_metallicities (lowercase
 # fitter-native names plus TARGETID). The scatter-back loop in
@@ -1050,6 +1054,8 @@ def build_spec_derived_hdu(
                    "OIII_4363", "OIII_5007", "OII_3726", "OII_3729"),
     te_snr_val=5,
     te_min_lines=7,
+    sampler_kwargs=None,
+    use_informative_priors=False,
     te_cache_dir=NEBCORR_DEFAULT_FOLDER,
     overwrite_te_cache=False,
 ):
@@ -1099,6 +1105,20 @@ def build_spec_derived_hdu(
         Recommended on NERSC compute nodes: number of allocated cores.
     min_num_live_points : int
         UltraNest min_num_live_points. Default 400.
+    sampler_kwargs : dict or None
+        Extra keyword arguments forwarded to UltraNest's ``sampler.run()``
+        for the per-row direct-method fits (forwarded to
+        compute_direct_metallicities). Use this to bound runtime on
+        pathological objects, e.g.
+        ``{"frac_remain": 0.1, "max_iters": 40000, "max_ncalls": int(1e5)}``.
+        Default None (UltraNest defaults; no termination guards).
+    use_informative_priors : bool
+        Direct-method fit strategy. False (default) uses the single-stage
+        joint 5-parameter fit (Plan A). True uses the two-stage
+        informative-prior fit (Plan B): fit ne/Te/Av first, then the
+        abundances using the Stage-1 posteriors as priors. The two methods use
+        separate cache files (``TE_FIT_CACHE_FILENAME`` vs
+        ``TE_FIT_CACHE_FILENAME_INFPRIOR``) so their results never mix.
     te_line_names : iterable of str
         Emission lines fed to line_snr_mask for the te_mask. Default is the
         seven lines required for n_e, T_e, A_V, O+/H+ and O++/H+:
@@ -1485,10 +1505,14 @@ def build_spec_derived_hdu(
         tids_te = np.asarray(tid_fspec[idx_te], dtype=np.int64)
 
         # Cumulative per-TARGETID UltraNest fit cache. Disable entirely by
-        # passing te_cache_dir=None.
+        # passing te_cache_dir=None. Each fit method gets its own cache file.
         use_cache = (te_cache_dir is not None)
+        cache_fname = (
+            TE_FIT_CACHE_FILENAME_INFPRIOR
+            if use_informative_priors else TE_FIT_CACHE_FILENAME
+        )
         te_cache_path = (
-            os.path.join(te_cache_dir, TE_FIT_CACHE_FILENAME)
+            os.path.join(te_cache_dir, cache_fname)
             if use_cache else None
         )
 
@@ -1530,11 +1554,18 @@ def build_spec_derived_hdu(
         n_cached = int(cached_mask_in_te.sum())
         n_to_compute = int(tocomp_mask_in_te.sum())
 
-        if verbose and use_cache:
-            print(
-                f"  TE cache: reused {n_cached}/{n_te} rows; "
-                f"computing {n_to_compute} new rows"
+        if verbose:
+            method_name = (
+                "two-stage informative-prior (Plan B)"
+                if use_informative_priors
+                else "single-stage joint (Plan A)"
             )
+            print(f"  TE fit method: {method_name}")
+            if use_cache:
+                print(
+                    f"  TE cache ({cache_fname}): reused {n_cached}/{n_te} "
+                    f"rows; computing {n_to_compute} new rows"
+                )
 
         if n_to_compute > 0:
             fit_tab_new = compute_direct_metallicities(
@@ -1542,6 +1573,8 @@ def build_spec_derived_hdu(
                 n_jobs=n_jobs,
                 min_num_live_points=min_num_live_points,
                 verbose=verbose,
+                sampler_kwargs=sampler_kwargs,
+                use_informative_priors=use_informative_priors,
             )
         else:
             fit_tab_new = None

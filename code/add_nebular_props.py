@@ -40,18 +40,29 @@ The operation is idempotent: re-running replaces any existing
 ``SPEC_DERIVED`` HDU. Existing HDUs (including ``FASTSPEC``) are preserved
 bit-for-bit via a temp-file + ``os.replace`` swap.
 
+The direct-method fit uses one of two strategies (set via
+``TE_USE_INFORMATIVE_PRIORS`` or ``--use-informative-priors``):
+    Plan A (default): single-stage joint 5-parameter UltraNest fit.
+    Plan B: two-stage informative-prior fit -- fit ne/Te/Av first, then the
+        abundances using the Stage-1 posteriors as priors. Bounds the
+        pathological posteriors that make the single-stage fit slow.
+
 The per-row direct-method UltraNest fits are cached by TARGETID at
-``<NEBCORR_DEFAULT_FOLDER>/te_fit_cache_ultranest.fits``. Subsequent runs
-reuse cached rows and only fit TARGETIDs that are new (or whose cached row
-has ``fit_success=False`` / NaN ``twelve_log_OH``, which are always
-retried). The cache is cumulative across catalog versions; pass
-``--overwrite-te-cache`` to force a fresh UltraNest fit for every TARGETID
-in the current ``te_mask`` and upsert the results into the cache file.
+``<NEBCORR_DEFAULT_FOLDER>/te_fit_cache_ultranest.fits`` (Plan A) or
+``te_fit_cache_ultranest_infprior.fits`` (Plan B); the two methods never
+share a cache file. Subsequent runs reuse cached rows and only fit TARGETIDs
+that are new (or whose cached row has ``fit_success=False`` / NaN
+``twelve_log_OH``, which are always retried). The cache is cumulative across
+catalog versions; pass ``--overwrite-te-cache`` to force a fresh UltraNest
+fit for every TARGETID in the current ``te_mask`` and upsert the results into
+the cache file.
 
 Usage:
     python add_nebular_props.py /path/to/desi_dr1_dwarf_catalog.fits
     python add_nebular_props.py /path/to/desi_dr1_dwarf_catalog.fits \\
         --overwrite-te-cache
+    python add_nebular_props.py /path/to/desi_dr1_dwarf_catalog.fits \\
+        --use-informative-priors
 """
 
 import argparse
@@ -95,6 +106,20 @@ TE_LINE_NAMES = ["HALPHA", "HBETA", "HGAMMA",
 TE_SNR_VAL = 3
 TE_MIN_LINES = 7
 
+# UltraNest run() termination guards. Bound pathological fits so a few hard
+# objects can't stall the whole parallel batch (see nebular_stuff/
+# collaborator_code.py, which uses the same guards for its abundance stage).
+TE_SAMPLER_KWARGS = {"frac_remain": 0.1, "max_iters": 40000, "max_ncalls": int(1e5)}
+
+# Direct-method fit strategy:
+#   False -> single-stage joint 5-parameter fit (Plan A, default).
+#   True  -> two-stage informative-prior fit (Plan B): fit ne/Te/Av first,
+#            then the abundances using the Stage-1 posteriors as priors.
+# The CLI flag --use-informative-priors forces this on regardless of the
+# constant. The two methods use separate TE-fit cache files so their cached
+# results never mix.
+TE_USE_INFORMATIVE_PRIORS = False
+
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
@@ -125,10 +150,24 @@ def main(argv=None):
             "te_mask are left untouched."
         ),
     )
+    parser.add_argument(
+        "--use-informative-priors",
+        action="store_true",
+        help=(
+            "Use the two-stage informative-prior direct-method fit (Plan B): "
+            "fit ne/Te/Av first, then the abundances using the Stage-1 "
+            "posteriors as priors. Overrides the TE_USE_INFORMATIVE_PRIORS "
+            "module constant. Uses a separate TE-fit cache file."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if not os.path.isfile(args.catalog_path):
         parser.error(f"catalog_path does not exist: {args.catalog_path}")
+
+    use_informative_priors = (
+        args.use_informative_priors or TE_USE_INFORMATIVE_PRIORS
+    )
 
     build_spec_derived_hdu(
         args.catalog_path,
@@ -138,6 +177,8 @@ def main(argv=None):
         te_line_names=TE_LINE_NAMES,
         te_snr_val=TE_SNR_VAL,
         te_min_lines=TE_MIN_LINES,
+        sampler_kwargs=TE_SAMPLER_KWARGS,
+        use_informative_priors=use_informative_priors,
         overwrite_te_cache=args.overwrite_te_cache,
     )
 
