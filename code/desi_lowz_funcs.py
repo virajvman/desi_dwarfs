@@ -2251,6 +2251,7 @@ from scipy.signal import wiener
 def conf_interval(x, pdf, conf_level):
     return np.sum(pdf[pdf > x])-conf_level
 
+
 def plot_2d_dist(x,y, nxbins, nybins, 
                 cmin=1.e-4, cmax=1.0, smooth=None, clevs=None,ax=None, bounds=None,plot_pcol=False,
                 color = "k",cmap=None,filled=False,label="1",cmap_alpha=0.5,lw_scale=1,alternating_contours=False):
@@ -2313,11 +2314,18 @@ def plot_2d_dist(x,y, nxbins, nybins,
                                 rasterized=True,
                                linestyles="--")
 
-            for c in cs.collections:
-                c.set_linestyle('--')
+            # for c in cs.collections:
+            #     c.set_linestyle('--')
+
+            cs.set_linestyle('--')
 
         # Save contour paths
-        contour_paths = [c for c in cs.collections]
+        # contour_paths = [c for c in cs.collections]
+
+        if hasattr(cs, "collections"):          # matplotlib < 3.10
+            contour_paths = list(cs.collections)
+        else:                                    # matplotlib >= 3.10
+            contour_paths = cs.get_paths()
 
      # At end of function
     if not filled:
