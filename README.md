@@ -489,7 +489,7 @@ Each bit in `DWARF_MASKBIT` corresponds to a quality or cleaning flag. A value o
 | 12 | 4096 | Source within twice the D26 of a cataloged large galaxy at the same redshift, without the Tractor bright-galaxy-neighbor bit |
 | 13 | 8192 | Large reduced $\chi^2 > 10$ (at least one band) if using original Tractor photometry |
 | 14 | 16384 | Low signal-to-noise detection (SNR > 5 in only one band or fewer) |
-| 15 | 32768 | If `MAG_TYPE = TRACTOR_OG` and `TRACTOR_MASKBITS` has at least one of {2,3,4,8,9} [Tractor bits](https://www.legacysurvey.org/dr9/bitmasks/) flagged |
+| 15 | 32768 | If `MAG_TYPE = TRACTOR_OG` and `TRACTOR_MASKBITS` has at least one of {8,9} [Tractor bits](https://www.legacysurvey.org/dr9/bitmasks/) flagged |
 | 16 | 65536 | Likely incorrect Redrock redshift, identified via UMAP/NMF spectral template anomaly detection |
 | 17 | 131072 | M_g &lt; &minus;18.5 at the survey redshift (or fallback distance for low continuum-SNR mass rows) after nebular + filter + k-corrections. |
 

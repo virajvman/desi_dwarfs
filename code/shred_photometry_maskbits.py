@@ -362,10 +362,11 @@ def low_SNR(cat, sigma_cut=5, nbands=2, verbose=True):
 
 def other_tractor_maskbits(cat,verbose=True):
     '''
-    Note that we already remove sources with 1,5,6,7,13 from the original catalog. So, here, we will flag additional sources where tractor says 2,3,4,8,9
+    Note that we already remove sources with 1,5,6,7,13 from the original catalog.
+    Flag additional sources where Tractor MASKBITS has bit 8 and/or 9 set.
     '''
     
-    maskbits_to_flag = [2, 3, 4, 8, 9]  # bits to check
+    maskbits_to_flag = [8, 9]  # bits to check
     maskbits_values = [2**b for b in maskbits_to_flag]
 
     tractor_maskbits = cat["MASKBITS"].data
