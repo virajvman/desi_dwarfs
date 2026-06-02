@@ -2074,6 +2074,18 @@ def add_paths_to_catalog(org_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/d
     return
 
 
+def print_maskbit_summary(catalog,max_bitnum=18):
+
+    maskbits = np.asarray(catalog['DWARF_MASKBIT'])  # replace `t` with your table name
+    
+    print(f"{'Bit':>4} {'Count':>10}")
+    for bit in range(max_bitnum+1):  # bits 0 through 18
+        count = np.count_nonzero(maskbits & (1 << bit))
+        print(f"{bit:>4} {count:>10}")
+
+    return 
+
+
 def decompose_maskbits_pow2(num):
     """
     Decompose an integer into the exponents of powers of 2 that sum up to it.
