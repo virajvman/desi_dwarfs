@@ -1671,7 +1671,7 @@ spec_derived_hdu_datamodel = {
         "description": (
             "Gas-phase strong-line metallicity from R23+N2 (see Scholte et al. 2024) "
             "using FASTSPEC Gaussian line fluxes; internal dust correction when Halpha/Hbeta > 2.86. "
-            "Filled where all seven lines pass line_snr (SNR > 3, flux > 0); NaN otherwise."
+            "Filled where all seven lines pass line_snr (SNR > 3, flux > 1 in FastSpec units); NaN otherwise."
         ),
         "dtype": "float64",
     },
@@ -1741,8 +1741,8 @@ spec_derived_hdu_datamodel = {
     # Produced by pn_functions.compute_direct_metallicities (UltraNest
     # nested sampling, matching Scholte+2026, Table 3). Populated only for
     # rows passing line_snr_mask([HALPHA, HBETA, HGAMMA, OIII_4363,
-    # OIII_5007, OII_3726, OII_3729], snr_val=5, min_lines=7); all other
-    # rows are NaN / False / 0.
+    # OIII_5007, OII_3726, OII_3729], snr_val=5, min_lines=7, flux > 1);
+    # all other rows are NaN / False / 0.
     #
     # Each *_LO / *_HI / *_ERR sibling holds the 16th percentile, 84th
     # percentile and half the 84-16 spread of the posterior.

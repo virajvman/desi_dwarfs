@@ -30,8 +30,9 @@ fresh ``SPEC_DERIVED`` HDU containing:
 
 The direct-method nebular fits (``TE_*``) are run only on rows passing
 ``line_snr_mask([HALPHA, HBETA, HGAMMA, OIII_4363, OIII_5007, OII_3726,
-OII_3729], snr_val=5, min_lines=7)`` -- all other rows have NaN / False / 0
-fills so the row order matches MAIN exactly.
+OII_3729], snr_val=5, min_lines=7)`` with per-line flux > 1 in FastSpec
+units (1e-17 erg/cm2/s) -- all other rows have NaN / False / 0 fills so
+the row order matches MAIN exactly.
 
 The ``MAG_*_MODEL_*`` columns are matched by TARGETID to the pre-computed
 ``model_photometry_diffs_{gal_type}.fits`` tables; unmatched rows are NaN.
@@ -103,7 +104,7 @@ TE_MIN_NUM_LIVE_POINTS = 400
 TE_LINE_NAMES = ["HALPHA", "HBETA", "HGAMMA",
                  "OIII_4363", "OIII_5007",
                  "OII_3726", "OII_3729"]
-TE_SNR_VAL = 3
+TE_SNR_VAL = 5
 TE_MIN_LINES = 7
 
 # UltraNest run() termination guards. Bound pathological fits so a few hard

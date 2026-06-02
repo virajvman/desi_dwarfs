@@ -19,20 +19,37 @@ from mass_and_photo_corrections import (
 from desi_lowz_funcs import get_stellar_mass_mia, r_kcorr
 from data_model import spec_derived_hdu_datamodel
 
-def line_snr_mask(fastspec_cat, line_names=["HALPHA"], snr_val=3, min_lines=3):
+# FastSpec {LINE}_FLUX units: 1e-17 erg / (cm2 s). Reject tiny fluxes whose
+# IVAR can yield spuriously high SNR.
+DEFAULT_MIN_LINE_FLUX = 1.0
+
+
+def line_snr_mask(
+    fastspec_cat,
+    line_names=["HALPHA"],
+    snr_val=3,
+    min_lines=3,
+    min_flux=DEFAULT_MIN_LINE_FLUX,
+):
     """
-    Returns a boolean mask selecting objects with line flux SNR > snr_val
-    in at least `min_lines` of the specified emission lines.
+    Returns a boolean mask selecting objects with per-line SNR > snr_val and
+    flux > min_flux in at least ``min_lines`` of the specified emission lines.
     """
-    # Count how many lines pass the SNR cut for each object
     n_pass = np.zeros(len(fastspec_cat), dtype=int)
     for li in line_names:
-        flux = fastspec_cat[f"{li}_FLUX"]
-        ivar = fastspec_cat[f"{li}_FLUX_IVAR"]
-        
-        snr = flux * np.sqrt(ivar)
-        n_pass += ((snr > snr_val) & (flux > 0)).astype(int)
-    
+        flux = np.asarray(fastspec_cat[f"{li}_FLUX"], dtype=np.float64)
+        ivar = np.asarray(fastspec_cat[f"{li}_FLUX_IVAR"], dtype=np.float64)
+        with np.errstate(invalid="ignore"):
+            snr = flux * np.sqrt(ivar)
+        line_ok = (
+            np.isfinite(flux)
+            & np.isfinite(ivar)
+            & (ivar > 0)
+            & (flux > min_flux)
+            & (snr > snr_val)
+        )
+        n_pass += line_ok.astype(int)
+
     return n_pass >= min_lines
 
 
@@ -62,13 +79,19 @@ from scipy.optimize import minimize
 from tqdm import trange
 
 
-def line_snr(cat, line_flux):
-    '''
-    Function to apply SNR cuts on line
-    '''
-    snr_val = cat[line_flux+ "_FLUX"].data * np.sqrt(cat[line_flux+"_FLUX_IVAR"].data)
-
-    return (snr_val > 3) & (cat[line_flux+ "_FLUX"].data > 0)
+def line_snr(cat, line_flux, snr_val=3.0, min_flux=DEFAULT_MIN_LINE_FLUX):
+    """Per-row mask: finite flux/ivar, flux > min_flux, and SNR > snr_val."""
+    flux = np.asarray(cat[f"{line_flux}_FLUX"].data, dtype=np.float64)
+    ivar = np.asarray(cat[f"{line_flux}_FLUX_IVAR"].data, dtype=np.float64)
+    with np.errstate(invalid="ignore"):
+        snr = flux * np.sqrt(ivar)
+    return (
+        np.isfinite(flux)
+        & np.isfinite(ivar)
+        & (ivar > 0)
+        & (flux > min_flux)
+        & (snr > snr_val)
+    )
 
 
 # Line stems for Z_R23_N2 (OII3726/3729, Hβ, OIII, Hα, NII6584) in FastSpec column names.
@@ -85,7 +108,8 @@ _R23_N2_LINE_STEMS = (
 
 def r23_n2_line_snr_mask(fastspec_cat):
     """
-    True where all seven emission lines used by Z_R23_N2 pass line_snr (SNR > 3, flux > 0).
+    True where all seven emission lines used by Z_R23_N2 pass line_snr
+    (SNR > 3, flux > DEFAULT_MIN_LINE_FLUX in FastSpec units).
     """
     mask = np.ones(len(fastspec_cat), dtype=bool)
     for stem in _R23_N2_LINE_STEMS:
@@ -111,13 +135,14 @@ def print_line_snr_detection_stats(
     fastspec_cat,
     line_names=SPEC_DERIVED_SNR_LINES,
     snr_val=3.0,
+    min_flux=DEFAULT_MIN_LINE_FLUX,
     n_examples=3,
     rng_seed=0,
 ):
     """Print a per-line SNR detection report for the FASTSPEC table.
 
     For each line name in ``line_names``, compute the boolean detection
-    mask ``(_FLUX > 0) & (_FLUX * sqrt(_FLUX_IVAR) > snr_val)`` (with
+    mask ``(_FLUX > min_flux) & (_FLUX * sqrt(_FLUX_IVAR) > snr_val)`` (with
     finite-value guards on flux and ivar) and print:
 
         - the percentage of rows passing the cut
@@ -139,6 +164,8 @@ def print_line_snr_detection_stats(
         ``SPEC_DERIVED_SNR_LINES``.
     snr_val : float
         SNR threshold (strict inequality). Default 3.
+    min_flux : float
+        Minimum line flux in FastSpec units (1e-17 erg/cm2/s). Default 1.
     n_examples : int
         Number of example TARGETIDs to print per detected line.
     rng_seed : int
@@ -152,7 +179,10 @@ def print_line_snr_detection_stats(
     else:
         tids = np.arange(n_rows, dtype=np.int64)
 
-    print(f"SNR>{snr_val:g} detection report (N = {n_rows} rows)")
+    print(
+        f"SNR>{snr_val:g}, flux>{min_flux:g} detection report "
+        f"(N = {n_rows} rows)"
+    )
     header = f"  {'line':<14} {'count':>8} {'frac':>10}   example TARGETIDs"
     print(header)
 
@@ -172,7 +202,7 @@ def print_line_snr_detection_stats(
             np.isfinite(flux)
             & np.isfinite(ivar)
             & (ivar > 0)
-            & (flux > 0)
+            & (flux > min_flux)
             & (snr > snr_val)
         )
         count = int(mask.sum())
@@ -1080,8 +1110,8 @@ def build_spec_derived_hdu(
 
       Direct-method nebular block (Scholte+2026 inference via
       pn_functions.compute_direct_metallicities), populated only for rows
-      passing the te_mask (line_snr_mask on te_line_names, snr_val,
-      min_lines); NaN / False / 0 elsewhere:
+      passing the te_mask (line_snr_mask on te_line_names: per-line SNR,
+      flux > 1 in FastSpec units, min_lines); NaN / False / 0 elsewhere:
         TE_NE_OII, TE_T_OIII, TE_AV,
         TE_LOG_O2_ABUND, TE_LOG_O3_ABUND, TE_12_LOG_OH
             (each with _LO / _HI / _ERR siblings)
@@ -1126,8 +1156,10 @@ def build_spec_derived_hdu(
     te_snr_val : float
         Per-line SNR threshold for te_mask. Default 5.
     te_min_lines : int
-        Minimum number of lines passing the per-line SNR cut for te_mask.
-        Default 7 (i.e. all of te_line_names must pass).
+        Minimum number of lines passing the per-line SNR and flux cuts for
+        te_mask. Default 7 (i.e. all of te_line_names must pass).
+        Per-line flux must exceed DEFAULT_MIN_LINE_FLUX (1.0, i.e.
+        1e-17 erg/cm2/s) via line_snr_mask defaults.
     te_cache_dir : str or None
         Directory holding the cumulative per-TARGETID UltraNest fit cache
         (``te_fit_cache_ultranest.fits``). Default ``NEBCORR_DEFAULT_FOLDER``.
@@ -1159,11 +1191,12 @@ def build_spec_derived_hdu(
     before (DELTA_MAG on FIBERTOT vs get_stellar_mass_mia with Z_CMB).
 
     Z_GAS_R23_N2 is gas metallicity from Z_R23_N2 using FASTSPEC line fluxes;
-    per-line SNR > 3 (r23_n2_line_snr_mask) with no BPT cuts; NaN otherwise
-    or if the fit fails.
+    per-line SNR > 3 and flux > 1 in FastSpec units (r23_n2_line_snr_mask)
+    with no BPT cuts; NaN otherwise or if the fit fails.
 
     LOG_SFR_HALPHA, LOG_SFR_HALPHA_ERR, and LOG_HALPHA_SFR_FIBER are only set
-    for rows with finite HALPHA_FLUX > 0, HBETA_FLUX > 0, HALPHA_EW > 0,
+    for rows with finite HALPHA_FLUX > 1 (FastSpec units), HBETA_FLUX > 0,
+    HALPHA_EW > 0,
     HALPHA_EW SNR > 3 (EW × sqrt(EW_IVAR)), HALPHA_FLUX SNR > 3, and
     HBETA_FLUX SNR > 3; otherwise those entries are NaN. This is independent
     of the continuum-SNR split from MAG_*_FIBER_NOEMI_ERR above.
@@ -1227,7 +1260,7 @@ def build_spec_derived_hdu(
         hbeta_flux_snr = hbeta_flux * np.sqrt(hbeta_flux_ivar)
     ok_halpha_for_sfr = (
         np.isfinite(halpha_flux)
-        & (halpha_flux > 0)
+        & (halpha_flux > DEFAULT_MIN_LINE_FLUX)
         & np.isfinite(halpha_ew)
         & (halpha_ew > 0)
         & np.isfinite(halpha_ew_ivar)
@@ -1452,9 +1485,8 @@ def build_spec_derived_hdu(
     # ------------------------------------------------------------------
     # Block B: direct-method nebular fits via
     # pn_functions.compute_direct_metallicities.
-    # Only rows passing the te_mask (line_snr_mask on te_line_names,
-    # snr_val=te_snr_val, min_lines=te_min_lines) get fits; all other rows
-    # have NaN / False / 0 fills.
+    # Only rows passing the te_mask (line_snr_mask: SNR, flux > 1, min_lines)
+    # get fits; all other rows have NaN / False / 0 fills.
     # ------------------------------------------------------------------
     if verbose:
         print("Computing direct-method nebular properties (TE_*)")
@@ -1487,7 +1519,8 @@ def build_spec_derived_hdu(
     if verbose:
         print(
             f"  te_mask (>= {te_min_lines} of {len(list(te_line_names))} "
-            f"lines @ SNR >= {te_snr_val}): {n_te}/{n_fspec} rows"
+            f"lines @ SNR >= {te_snr_val}, flux > {DEFAULT_MIN_LINE_FLUX:g}): "
+            f"{n_te}/{n_fspec} rows"
         )
 
     # Pre-fill all TE_* columns with default blank values so row order is
@@ -1666,21 +1699,22 @@ def build_spec_derived_hdu(
     )
     os.close(fd)
     try:
+        # Edit the opened HDUList in place rather than copying every HDU into
+        # a fresh list. Copying a BinTableHDU whose data has a variable-length
+        # array column (e.g. MAIN's ASSOCIATED_TARGETIDS) breaks the link to
+        # the on-disk heap and raises "Could not find heap data ...". writeto
+        # runs while the source file is still open, so the untouched HDUs
+        # (including MAIN's VLA heap) are written straight from disk.
         with fits.open(cat_abs, memmap=False) as hdul:
             hdu_names = [hdu.name for hdu in hdul]
-            new_hdus = []
-            replaced = False
-            for i, hdu in enumerate(hdul):
-                if hdu_names[i] == DWARF_CATALOG_DERIVED_HDU:
-                    new_hdus.append(derived_hdu)
-                    replaced = True
-                else:
-                    new_hdus.append(hdu.copy())
-            if not replaced:
-                new_hdus.append(derived_hdu)
-            new_hdul = fits.HDUList(new_hdus)
-            new_hdul[0].add_checksum()
-            new_hdul.writeto(tmp_path, overwrite=True)
+            if DWARF_CATALOG_DERIVED_HDU in hdu_names:
+                hdul[hdu_names.index(DWARF_CATALOG_DERIVED_HDU)] = derived_hdu
+                replaced = True
+            else:
+                hdul.append(derived_hdu)
+                replaced = False
+            hdul[0].add_checksum()
+            hdul.writeto(tmp_path, overwrite=True)
         os.replace(tmp_path, cat_abs)
     except BaseException:
         if os.path.isfile(tmp_path):
@@ -1813,17 +1847,20 @@ def add_model_photometry_to_spec_derived(
     )
     os.close(fd)
     try:
+        # Edit the opened HDUList in place rather than copying every HDU into
+        # a fresh list. Copying a BinTableHDU whose data has a variable-length
+        # array column (e.g. MAIN's ASSOCIATED_TARGETIDS) breaks the link to
+        # the on-disk heap and raises "Could not find heap data ...". writeto
+        # runs while the source file is still open, so the untouched HDUs
+        # (including MAIN's VLA heap) are written straight from disk.
         with fits.open(cat_abs, memmap=False) as hdul:
             hdu_names = [hdu.name for hdu in hdul]
-            new_hdus = []
-            for i, hdu in enumerate(hdul):
-                if hdu_names[i] == DWARF_CATALOG_DERIVED_HDU:
-                    new_hdus.append(derived_hdu_new)
-                else:
-                    new_hdus.append(hdu.copy())
-            new_hdul = fits.HDUList(new_hdus)
-            new_hdul[0].add_checksum()
-            new_hdul.writeto(tmp_path, overwrite=True)
+            if DWARF_CATALOG_DERIVED_HDU in hdu_names:
+                hdul[hdu_names.index(DWARF_CATALOG_DERIVED_HDU)] = derived_hdu_new
+            else:
+                hdul.append(derived_hdu_new)
+            hdul[0].add_checksum()
+            hdul.writeto(tmp_path, overwrite=True)
         os.replace(tmp_path, cat_abs)
     except BaseException:
         if os.path.isfile(tmp_path):
