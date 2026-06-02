@@ -1,7 +1,7 @@
 #!/bin/bash -l
 
 #SBATCH --account=desi
-#SBATCH --qos=debug
+#SBATCH --qos=regular
 #SBATCH --constraint=cpu
 #SBATCH --mail-user=virajvm@stanford.edu
 #SBATCH --mail-type=ALL
@@ -9,7 +9,8 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=128
 #SBATCH --mem=256GB
-#SBATCH --time=00:15:00
+#SBATCH --time=02:00:00
+#SBATCH --mail-type=ALL
 #SBATCH --job-name=nebular_props
 #SBATCH --output=add_nebular_props.log
 
