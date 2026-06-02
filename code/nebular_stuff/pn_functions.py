@@ -191,6 +191,11 @@ RATIO_SPECS = [
 
 PARAM_NAMES = ['ne_oii', 'te_oiii', 'Av', 'log_O2_abund', 'log_O3_abund']
 
+# Indices into RATIO_SPECS / r_model output for the Balmer-decrement ratios
+# (Hbeta/Halpha, Hgamma/Hbeta) that constrain A_V. Used for the extinction
+# goodness-of-fit diagnostic (TE_CHI2_AV / TE_CHI2_AV_ML).
+_BALMER_RATIO_IDX = (1, 2)
+
 # Uniform prior bounds, matching Scholte+2026 Table 3 priors closely.
 # (slight insets from grid edges so finite-diff gradients don't escape)
 PRIOR_LOWS = np.array([den_min * 1.001, tem_min * 1.001, 0.0, -6.0, -6.0])
@@ -260,7 +265,28 @@ def _nan_fit_result(n_par, n_used, success=False):
         'twelve_log_OH_err': np.nan,
         'success': success,
         'n_ratios': n_used,
+        'chi2_av': np.nan,
+        'chi2_av_ml': np.nan,
+        'av_ml': np.nan,
+        'ess': np.nan,
+        'logz': np.nan,
+        'logzerr': np.nan,
     }
+
+
+def _balmer_chi2(theta_best, r, r_err, mask):
+    """Chi-square of the observed Balmer ratios vs the model at *theta_best*.
+
+    Computed in linear flux-ratio space (matching ``_build_ratios`` and the fit
+    likelihood) over whichever Balmer ratios (Hbeta/Halpha, Hgamma/Hbeta) are
+    usable per *mask*. *theta_best* is a full 5-parameter vector. Returns NaN
+    when no Balmer ratio is available."""
+    balmer_avail = [i for i in _BALMER_RATIO_IDX if mask[i]]
+    if not balmer_avail:
+        return np.nan
+    model = r_model(np.asarray(theta_best, dtype=float))   # 1D -> (n_ratios,)
+    resid = (r[balmer_avail] - model[balmer_avail]) / r_err[balmer_avail]
+    return float(np.sum(resid ** 2))
 
 
 # ---------------------------------------------------------------------------
@@ -298,8 +324,12 @@ def _run_sampler(param_names, loglike, transform,
                  min_num_live_points=400,
                  verbose_sampler=False,
                  sampler_kwargs=None):
-    """Run one UltraNest fit and return equal-weight resampled posterior
-    points, or ``None`` on failure.
+    """Run one UltraNest fit and return ``(points, info)``, or ``(None, None)``
+    on failure.
+
+    ``points`` are the equal-weight resampled posterior points; ``info`` is a
+    dict of sampler diagnostics (``ess``, ``logz``, ``logzerr``) plus the
+    maximum-likelihood point (``ml_point``) from the ``result`` dict.
 
     Shared by both stages of the two-stage fit. Applies the same run_kwargs +
     sampler_kwargs termination-guard logic and the same seed-42 weighted
@@ -330,7 +360,7 @@ def _run_sampler(param_names, loglike, transform,
     try:
         result = sampler.run(**run_kwargs)
     except Exception:
-        return None
+        return None, None
 
     ws = result['weighted_samples']
     pts = np.asarray(ws['points'])      # (N_samples, n_par)
@@ -339,7 +369,15 @@ def _run_sampler(param_names, loglike, transform,
     n_resample = min(10_000, max(2_000, len(pts)))
     rng = np.random.default_rng(42)
     idx = rng.choice(len(pts), size=n_resample, replace=True, p=wts_norm)
-    return pts[idx]
+    info = {
+        'ess': float(result.get('ess', np.nan)),
+        'logz': float(result.get('logz', np.nan)),
+        'logzerr': float(result.get('logzerr', np.nan)),
+        'ml_point': np.asarray(
+            result['maximum_likelihood']['point'], dtype=float,
+        ),
+    }
+    return pts[idx], info
 
 
 def _fit_row_ultranest(r, r_err, mask,
@@ -437,6 +475,14 @@ def _fit_row_ultranest(r, r_err, mask,
     twelve_logOH_hi = np.percentile(twelve_logOH_samples, 84)
     twelve_logOH_err = 0.5 * (twelve_logOH_hi - twelve_logOH_lo)
 
+    # Diagnostics: Balmer goodness-of-fit at the reported median theta and at
+    # the maximum-likelihood point, plus the ML Av and sampler statistics.
+    i_av = PARAM_NAMES.index('Av')
+    ml_point = np.asarray(result['maximum_likelihood']['point'], dtype=float)
+    chi2_av = _balmer_chi2(theta_med, r, r_err, mask)
+    chi2_av_ml = _balmer_chi2(ml_point, r, r_err, mask)
+    av_ml = float(ml_point[i_av])
+
     return {
         'theta': theta_med,
         'theta_lo': theta_lo,
@@ -448,6 +494,12 @@ def _fit_row_ultranest(r, r_err, mask,
         'twelve_log_OH_err': twelve_logOH_err,
         'success': True,
         'n_ratios': n_used,
+        'chi2_av': chi2_av,
+        'chi2_av_ml': chi2_av_ml,
+        'av_ml': av_ml,
+        'ess': float(result.get('ess', np.nan)),
+        'logz': float(result.get('logz', np.nan)),
+        'logzerr': float(result.get('logzerr', np.nan)),
     }
 
 
@@ -526,7 +578,7 @@ def _fit_row_ultranest_twostage(r, r_err, mask,
         resid = (r1_col - models[idx1]) / e1_col
         return -0.5 * np.sum(resid ** 2, axis=0)
 
-    samples1 = _run_sampler(
+    samples1, info1 = _run_sampler(
         PARAM_NAMES[:3], loglike1, transform1,
         min_num_live_points=min_num_live_points,
         verbose_sampler=verbose_sampler,
@@ -571,7 +623,7 @@ def _fit_row_ultranest_twostage(r, r_err, mask,
         resid = (r2_col - models[idx2]) / e2_col
         return -0.5 * np.sum(resid ** 2, axis=0)
 
-    samples2 = _run_sampler(
+    samples2, info2 = _run_sampler(
         PARAM_NAMES, loglike2, transform2,
         min_num_live_points=min_num_live_points,
         verbose_sampler=verbose_sampler,
@@ -587,6 +639,17 @@ def _fit_row_ultranest_twostage(r, r_err, mask,
 
     oh_med, oh_lo, oh_hi, oh_err = _twelve_logOH_from_samples(samples2)
 
+    # Diagnostics. ess/logz/logzerr from Stage 2 (the reported posterior).
+    # The Balmer goodness-of-fit at the reported median uses the Stage-2
+    # median theta; the ML versions use the Stage-1 ML point, since Stage 1 is
+    # the only stage whose likelihood contains the Balmer ratios.
+    i_av = PARAM_NAMES.index('Av')
+    chi2_av = _balmer_chi2(theta_med, r, r_err, mask)
+    ml_point1 = info1['ml_point']                      # (3,) ne/Te/Av
+    theta5_ml = np.concatenate([ml_point1, [-4.0, -4.0]])
+    chi2_av_ml = _balmer_chi2(theta5_ml, r, r_err, mask)
+    av_ml = float(ml_point1[i_av])
+
     return {
         'theta': theta_med,
         'theta_lo': theta_lo,
@@ -598,6 +661,12 @@ def _fit_row_ultranest_twostage(r, r_err, mask,
         'twelve_log_OH_err': oh_err,
         'success': True,
         'n_ratios': n_used,
+        'chi2_av': chi2_av,
+        'chi2_av_ml': chi2_av_ml,
+        'av_ml': av_ml,
+        'ess': float(info2['ess']),
+        'logz': float(info2['logz']),
+        'logzerr': float(info2['logzerr']),
     }
 
 
@@ -754,6 +823,8 @@ def compute_direct_metallicities(catalog,
     out_cols['twelve_log_OH_err'] = np.full(n_rows, np.nan)
     out_cols['n_ratios'] = np.zeros(n_rows, dtype=int)
     out_cols['fit_success'] = np.zeros(n_rows, dtype=bool)
+    for diag in ('chi2_av', 'chi2_av_ml', 'av_ml', 'ess', 'logz', 'logzerr'):
+        out_cols[diag] = np.full(n_rows, np.nan)
 
     for idx, fit in enumerate(fits):
         for i, name in enumerate(PARAM_NAMES):
@@ -767,6 +838,8 @@ def compute_direct_metallicities(catalog,
         out_cols['twelve_log_OH_err'][idx] = fit['twelve_log_OH_err']
         out_cols['n_ratios'][idx] = fit['n_ratios']
         out_cols['fit_success'][idx] = fit['success']
+        for diag in ('chi2_av', 'chi2_av_ml', 'av_ml', 'ess', 'logz', 'logzerr'):
+            out_cols[diag][idx] = fit[diag]
 
     return Table(out_cols)
 

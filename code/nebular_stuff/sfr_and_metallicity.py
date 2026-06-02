@@ -974,6 +974,13 @@ _TE_CACHE_FLOAT_COLS = tuple(
 )
 _TE_CACHE_COLS = ("TARGETID",) + _TE_CACHE_FLOAT_COLS + ("n_ratios", "fit_success")
 
+# Per-row fit diagnostics (Balmer goodness-of-fit, ML Av, sampler stats).
+# These are appended to what gets WRITTEN to the cache but are NOT part of the
+# required-for-valid-cache set above, so older caches that predate them still
+# load (their rows simply carry NaN diagnostics until refreshed).
+_TE_CACHE_DIAG_COLS = ("chi2_av", "chi2_av_ml", "av_ml", "ess", "logz", "logzerr")
+_TE_CACHE_WRITE_COLS = _TE_CACHE_COLS + _TE_CACHE_DIAG_COLS
+
 
 def _load_te_cache(cache_path, verbose=True):
     """
@@ -1027,7 +1034,7 @@ def _write_te_cache(cache_path, cache_tab_old, fit_tab_new, tids_to_compute,
     if fit_tab_new is None or len(fit_tab_new) == 0:
         return
 
-    keep_cols = [c for c in _TE_CACHE_COLS if c in fit_tab_new.colnames]
+    keep_cols = [c for c in _TE_CACHE_WRITE_COLS if c in fit_tab_new.colnames]
     new_sub = fit_tab_new[keep_cols]
 
     if cache_tab_old is None or len(cache_tab_old) == 0:
@@ -1116,6 +1123,8 @@ def build_spec_derived_hdu(
         TE_LOG_O2_ABUND, TE_LOG_O3_ABUND, TE_12_LOG_OH
             (each with _LO / _HI / _ERR siblings)
         TE_N_RATIOS, TE_FIT_SUCCESS
+        TE_CHI2_AV, TE_CHI2_AV_ML, TE_AV_ML,
+        TE_ESS, TE_LOGZ, TE_LOGZERR (fit diagnostics)
 
     Reads MAIN, FASTSPEC (DWARF_CATALOG_SPEC_HDU), and TRACTOR. The function
     does NOT modify any existing HDU; it builds a fresh BinTableHDU and either
@@ -1140,7 +1149,7 @@ def build_spec_derived_hdu(
         for the per-row direct-method fits (forwarded to
         compute_direct_metallicities). Use this to bound runtime on
         pathological objects, e.g.
-        ``{"frac_remain": 0.1, "max_iters": 40000, "max_ncalls": int(1e5)}``.
+        ``{"frac_remain": 0.01, "max_iters": 40000, "max_ncalls": int(1e5)}``.
         Default None (UltraNest defaults; no termination guards).
     use_informative_priors : bool
         Direct-method fit strategy. False (default) uses the single-stage
@@ -1523,6 +1532,17 @@ def build_spec_derived_hdu(
             f"{n_te}/{n_fspec} rows"
         )
 
+    # Maps the fitter-native diagnostic column names to their SPEC_DERIVED
+    # TE_* names (scattered back below, mirroring _TE_RENAME for the params).
+    _TE_DIAG_RENAME = {
+        "chi2_av":    "TE_CHI2_AV",
+        "chi2_av_ml": "TE_CHI2_AV_ML",
+        "av_ml":      "TE_AV_ML",
+        "ess":        "TE_ESS",
+        "logz":       "TE_LOGZ",
+        "logzerr":    "TE_LOGZERR",
+    }
+
     # Pre-fill all TE_* columns with default blank values so row order is
     # preserved with no gaps.
     for new_name in _TE_RENAME.values():
@@ -1532,6 +1552,8 @@ def build_spec_derived_hdu(
             )
     derived_tab["TE_N_RATIOS"] = np.zeros(n_fspec, dtype=np.int32)
     derived_tab["TE_FIT_SUCCESS"] = np.zeros(n_fspec, dtype=bool)
+    for diag_name in _TE_DIAG_RENAME.values():
+        derived_tab[diag_name] = np.full(n_fspec, np.nan, dtype=np.float64)
 
     if n_te > 0:
         idx_te = np.flatnonzero(te_mask)
@@ -1651,6 +1673,19 @@ def build_spec_derived_hdu(
                 fit_tab_new["fit_success"], dtype=bool,
             )
         fit_tab["fit_success"] = fit_success_arr
+        # Diagnostic float columns (optional in the cache; legacy rows fill NaN).
+        for col in _TE_CACHE_DIAG_COLS:
+            arr = np.full(n_te, np.nan, dtype=np.float64)
+            if n_cached > 0 and cache_tab is not None and col in cache_tab.colnames:
+                arr[cached_mask_in_te] = np.asarray(
+                    cache_tab[col], dtype=np.float64,
+                )[cache_rows_for_cached]
+            if (n_to_compute > 0 and fit_tab_new is not None
+                    and col in fit_tab_new.colnames):
+                arr[tocomp_mask_in_te] = np.asarray(
+                    fit_tab_new[col], dtype=np.float64,
+                )
+            fit_tab[col] = arr
 
         # Scatter fit_tab rows back to full-length arrays. fit_tab has one
         # row per row in fspec_cat[idx_te], in the same order, so positional
@@ -1675,6 +1710,13 @@ def build_spec_derived_hdu(
             arr = np.asarray(derived_tab["TE_FIT_SUCCESS"], dtype=bool).copy()
             arr[idx_te] = np.asarray(fit_tab["fit_success"], dtype=bool)
             derived_tab["TE_FIT_SUCCESS"] = arr
+
+        for src_col, dst_col in _TE_DIAG_RENAME.items():
+            if src_col not in fit_tab.colnames:
+                continue
+            arr = np.asarray(derived_tab[dst_col], dtype=np.float64).copy()
+            arr[idx_te] = np.asarray(fit_tab[src_col], dtype=np.float64)
+            derived_tab[dst_col] = arr
 
         if verbose:
             n_ok = int(np.sum(derived_tab["TE_FIT_SUCCESS"]))
@@ -1734,7 +1776,8 @@ def build_spec_derived_hdu(
             "DELTA_MAG_{G,R}_{BASS2DECAM,NEB,DECAM2SDSS,KCORR}, "
             "TE_NE_OII, TE_T_OIII, TE_AV, TE_LOG_O2_ABUND, "
             "TE_LOG_O3_ABUND, TE_12_LOG_OH (+_LO/_HI/_ERR), "
-            "TE_N_RATIOS, TE_FIT_SUCCESS"
+            "TE_N_RATIOS, TE_FIT_SUCCESS, TE_CHI2_AV, "
+            "TE_CHI2_AV_ML, TE_AV_ML, TE_ESS, TE_LOGZ, TE_LOGZERR"
         )
         print("=" * 60)
 

@@ -1901,6 +1901,42 @@ spec_derived_hdu_datamodel = {
         "description": "True if the direct-method fit converged for this row (te_mask passed AND pn_functions.compute_direct_metallicities returned success). False otherwise.",
         "dtype": "bool",
     },
+    "TE_CHI2_AV": {
+        "unit": None,
+        "description": "Chi-square of the observed Balmer ratios (Hbeta/Halpha, Hgamma/Hbeta) vs the model at the reported posterior-median ne/Te/Av; the extinction goodness-of-fit for the reported values. NaN if no Balmer ratio was usable.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_CHI2_AV_ML": {
+        "unit": None,
+        "description": "Same Balmer-ratio chi-square as TE_CHI2_AV but evaluated at the maximum-likelihood ne/Te/Av (Stage-1 ML point for the two-stage informative-prior fit); the best achievable Balmer fit. NaN if no Balmer ratio was usable.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_AV_ML": {
+        "unit": "mag",
+        "description": "Maximum-likelihood V-band attenuation A_V (Stage-1 ML point for the two-stage informative-prior fit), for reference next to the posterior-median TE_AV. NaN where no fit was attempted.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_ESS": {
+        "unit": None,
+        "description": "UltraNest effective sample size of the posterior (Stage 2 for the two-stage informative-prior fit). NaN where no fit was attempted.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_LOGZ": {
+        "unit": None,
+        "description": "UltraNest log-evidence (ln Z) of the direct-method fit (Stage 2 for the two-stage informative-prior fit). NaN where no fit was attempted.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "TE_LOGZERR": {
+        "unit": None,
+        "description": "1-sigma uncertainty on TE_LOGZ. NaN where no fit was attempted.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
 
     # ---------------------------------------------------------------
     # MAG_*_MODEL_* fastspec model photometry columns

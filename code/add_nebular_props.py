@@ -110,7 +110,7 @@ TE_MIN_LINES = 7
 # UltraNest run() termination guards. Bound pathological fits so a few hard
 # objects can't stall the whole parallel batch (see nebular_stuff/
 # collaborator_code.py, which uses the same guards for its abundance stage).
-TE_SAMPLER_KWARGS = {"frac_remain": 0.1, "max_iters": 40000, "max_ncalls": int(1e5)}
+TE_SAMPLER_KWARGS = {"frac_remain": 0.01, "max_iters": 40000, "max_ncalls": int(1e5)}
 
 # Direct-method fit strategy:
 #   False -> single-stage joint 5-parameter fit (Plan A, default).
