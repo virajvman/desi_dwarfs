@@ -9,7 +9,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=128
 #SBATCH --mem=256GB
-#SBATCH --time=00:25:00
+#SBATCH --time=00:15:00
 #SBATCH --job-name=nebular_props
 #SBATCH --output=add_nebular_props.log
 
@@ -22,5 +22,5 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 
-python3 desi_dwarfs/code/add_nebular_props.py \
+python3 desi_dwarfs/code/add_nebular_props.py --use-informative-priors \
     /pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits
