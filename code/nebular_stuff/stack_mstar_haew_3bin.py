@@ -328,7 +328,8 @@ def main():
     print(f"    After H-alpha EW SNR >= {EW_SNR_MIN:.0f} cut: {len(tot_cat)}")
 
     print("\n[2] Loading de-redshifted spectra ...")
-    spectra_data = load_spectra()
+    # spectra_data = load_spectra()
+    spectra_data = load_spectra("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_y1_dwarf_combine_deredshift_hires_noinvvar.h5")
     print(f"    Total spectra loaded: {len(spectra_data['targetid'])}")
 
     # Trim to lambda < WAVE_MAX (consistent with the M*-only pipeline).
