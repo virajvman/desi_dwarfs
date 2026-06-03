@@ -165,7 +165,7 @@ def select_sample_ew_bin(
     hi-inclusive) so adjacent bins don't double-count shared edges; the
     top EW bin uses ew_max = +inf so it captures everything above 300 A.
     """
-    sample_col = np.asarray(catalog["SAMPLE"])
+    sample_col = catalog["SAMPLE"]
     samp_mask = np.zeros(len(catalog), dtype=bool)
     for name in sample_names:
         samp_mask |= (sample_col == name)
