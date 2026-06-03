@@ -47,23 +47,30 @@ def get_wave(wavemin=3600, wavemax=10000, dloglam=1e-4):
 
 def _deredshift_one_spectrum(args):
     # print("Transforming both wave and flux arrays when de-redshifting!")
-    wave, flux, ivar, zred, wave_out = args
+    wave, flux, ivar, zred, wave_out, use_invvar = args
     rest_wave = wave / (1 + zred)
     
     flux_rest = flux * (1 + zred)
     ivar_rest = ivar / (1 + zred)**2
-    
-    # flux_out = resample_flux(wave_out, rest_wave, flux_rest, ivar=None)
-    flux_out, ivar_out = resample_flux(wave_out, rest_wave, flux_rest, ivar=ivar_rest)
 
-    #this is the original way!
-    # flux_out, ivar_out = resample_flux(wave_out, rest_wave, flux, ivar=ivar)
-        
+    if use_invvar:
+        # Inverse-variance weighted resampling (original behavior). This is NOT
+        # strictly flux conserving: line cores carry large Poisson variance (low
+        # ivar) and get downweighted, suppressing integrated line flux.
+        flux_out, ivar_out = resample_flux(wave_out, rest_wave, flux_rest, ivar=ivar_rest)
+    else:
+        # Pure flux-conserving (area-preserving) rebin for the flux. The output
+        # ivar from resample_flux is computed independently of the flux weighting,
+        # so we still grab a valid ivar_out from the weighted call.
+        flux_out = resample_flux(wave_out, rest_wave, flux_rest, ivar=None)
+        _, ivar_out = resample_flux(wave_out, rest_wave, flux_rest, ivar=ivar_rest)
+
     return flux_out, ivar_out
 
 
 def deredshift_resample_desi_spectra(all_waves, all_fluxs, all_ivar, all_zreds,
-                                     wave_out=None, ncores=4,verbose=True):
+                                     wave_out=None, ncores=4,verbose=True,
+                                     use_invvar=True):
     """
     De-redshift and resample DESI spectra onto a common wavelength grid in parallel.
 
@@ -81,6 +88,12 @@ def deredshift_resample_desi_spectra(all_waves, all_fluxs, all_ivar, all_zreds,
         Output rest-frame wavelength grid. If None, uses default grid.
     ncores : int
         Number of processes to use for parallelization.
+    use_invvar : bool
+        If True (default), use inverse-variance weighted resampling for the
+        flux (original behavior). If False, use a pure flux-conserving
+        (area-preserving) rebin for the flux, which preserves integrated
+        emission-line flux. The output ivar array is produced the same way in
+        both cases.
 
     Returns
     -------
@@ -93,7 +106,7 @@ def deredshift_resample_desi_spectra(all_waves, all_fluxs, all_ivar, all_zreds,
         wave_out = get_wave(wavemin=3600, wavemax=9000, dloglam=1e-4)
 
     n = len(all_fluxs)
-    inputs = [(all_waves, all_fluxs[i], all_ivar[i], all_zreds[i], wave_out) for i in range(n)]
+    inputs = [(all_waves, all_fluxs[i], all_ivar[i], all_zreds[i], wave_out, use_invvar) for i in range(n)]
 
     with Pool(processes=ncores) as pool:
         results = list(tqdm(pool.imap(_deredshift_one_spectrum, inputs), total=n,

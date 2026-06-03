@@ -20,11 +20,18 @@ from mass_and_photo_corrections import DWARF_CATALOG_SPEC_HDU, DWARF_CATALOG_DER
 
 ##deredshifting functions
 
-def deredshift_for_stacking():
+def deredshift_for_stacking(use_invvar=True):
 
     save_dered = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_y1_dwarf_combine_deredshift_hires.h5"
 
-    print("Making deredshited spectra file!")
+    # When using the flux-conserving rebin (use_invvar=False), write to a
+    # distinct file so the existing inverse-variance-weighted output is not
+    # overwritten.
+    if not use_invvar:
+        base, ext = os.path.splitext(save_dered)
+        save_dered = f"{base}_noinvvar{ext}"
+
+    print(f"Making deredshited spectra file! (use_invvar={use_invvar})")
 
     #read the entire consolidated file!
     with h5py.File("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/data/desi_dr1_dwarf_catalog_spectra.h5", "r") as f:
@@ -51,7 +58,8 @@ def deredshift_for_stacking():
     print(wave_out[-10:])
     
     wave_rest, all_fluxs_out, all_flux_ivars_out = deredshift_resample_desi_spectra(wave, all_flux, all_flux_ivar, all_zreds,
-                                     wave_out=wave_out, ncores=128,verbose=True)
+                                     wave_out=wave_out, ncores=128,verbose=True,
+                                     use_invvar=use_invvar)
 
     with h5py.File(save_dered, "w") as f:
         f.create_dataset("TARGETID", data=all_tgids, dtype='i8')
