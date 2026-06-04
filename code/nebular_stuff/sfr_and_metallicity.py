@@ -29,8 +29,8 @@ DEFAULT_MIN_LINE_FLUX = 1.0
 # f"{LINE}_{line_flux_type}_IVAR".
 #   "FLUX"    -> Gaussian-fit line fluxes  ({LINE}_FLUX)
 #   "BOXFLUX" -> boxcar line fluxes        ({LINE}_BOXFLUX)
-# Flip to "FLUX" to revert every downstream calculation to the Gaussian fits.
-line_flux_type = "BOXFLUX"
+# Set by build_spec_derived_hdu or entry scripts before other nebular use.
+line_flux_type = None
 
 
 def _total_oii_flux(cat):
@@ -62,15 +62,22 @@ def line_snr_mask(
     snr_val=3,
     min_lines=3,
     min_flux=DEFAULT_MIN_LINE_FLUX,
+    line_flux_type=None,
 ):
     """
     Returns a boolean mask selecting objects with per-line SNR > snr_val and
     flux > min_flux in at least ``min_lines`` of the specified emission lines.
     """
+    lft = line_flux_type if line_flux_type is not None else globals()["line_flux_type"]
+    if lft not in ("FLUX", "BOXFLUX"):
+        raise ValueError(
+            "line_flux_type must be 'FLUX' or 'BOXFLUX' "
+            f"(got {lft!r}); pass explicitly or set sfr_and_metallicity.line_flux_type"
+        )
     n_pass = np.zeros(len(fastspec_cat), dtype=int)
     for li in line_names:
-        flux = np.asarray(fastspec_cat[f"{li}_{line_flux_type}"], dtype=np.float64)
-        ivar = np.asarray(fastspec_cat[f"{li}_{line_flux_type}_IVAR"], dtype=np.float64)
+        flux = np.asarray(fastspec_cat[f"{li}_{lft}"], dtype=np.float64)
+        ivar = np.asarray(fastspec_cat[f"{li}_{lft}_IVAR"], dtype=np.float64)
         with np.errstate(invalid="ignore"):
             snr = flux * np.sqrt(ivar)
         line_ok = (
@@ -1014,29 +1021,27 @@ def _apply_spec_derived_metadata(tab):
 # UltraNest TE-fit cache (used by build_spec_derived_hdu)
 # ---------------------------------------------------------------------------
 
-# Filename for the cumulative per-TARGETID UltraNest fit cache. Kept separate
-# from the catalog file so it persists across catalog rebuilds.
-TE_FIT_CACHE_FILENAME = "te_fit_cache_ultranest.fits"
-# Separate cache for the two-stage informative-prior method (Plan B) so its
-# results never mix with the single-stage (Plan A) cache keyed by the same
-# TARGETIDs.
-TE_FIT_CACHE_FILENAME_INFPRIOR = "te_fit_cache_ultranest_infprior.fits"
-# SII density diagnostic uses separate cache files so OII and SII fits never mix.
-TE_FIT_CACHE_FILENAME_SII = "te_fit_cache_ultranest_sii.fits"
-TE_FIT_CACHE_FILENAME_INFPRIOR_SII = "te_fit_cache_ultranest_infprior_sii.fits"
+# TE-fit cache basenames are built by _te_cache_filename from fit method,
+# density diagnostic, and line_flux_type so those runs never mix.
 
 
-def _te_cache_filename(use_informative_priors, density_diagnostic='OII'):
-    """Return the TE-fit cache basename for the given fit method and density diagnostic."""
-    if density_diagnostic == 'SII':
-        return (
-            TE_FIT_CACHE_FILENAME_INFPRIOR_SII
-            if use_informative_priors else TE_FIT_CACHE_FILENAME_SII
+def _te_cache_filename(use_informative_priors, density_diagnostic, line_flux_type):
+    """Return the TE-fit cache basename for fit method, density diagnostic, and flux family."""
+    if line_flux_type not in ("FLUX", "BOXFLUX"):
+        raise ValueError(
+            f"line_flux_type must be 'FLUX' or 'BOXFLUX', got {line_flux_type!r}"
         )
-    return (
-        TE_FIT_CACHE_FILENAME_INFPRIOR
-        if use_informative_priors else TE_FIT_CACHE_FILENAME
-    )
+    if density_diagnostic not in ("OII", "SII"):
+        raise ValueError(
+            f"density_diagnostic must be 'OII' or 'SII', got {density_diagnostic!r}"
+        )
+    parts = ["te_fit_cache_ultranest"]
+    if use_informative_priors:
+        parts.append("infprior")
+    if density_diagnostic == "SII":
+        parts.append("sii")
+    parts.append(line_flux_type.lower())
+    return "_".join(parts) + ".fits"
 
 # Schema = exact output of pn_functions.compute_direct_metallicities (lowercase
 # fitter-native names plus TARGETID). The scatter-back loop in
@@ -1163,6 +1168,7 @@ def _write_te_cache(cache_path, cache_tab_old, fit_tab_new, tids_to_compute,
 
 def build_spec_derived_hdu(
     cat_path,
+    line_flux_type,
     verbose=True,
     n_jobs=1,
     min_num_live_points=400,
@@ -1216,6 +1222,12 @@ def build_spec_derived_hdu(
     ----------
     cat_path : str
         Path to the multi-extension dwarf catalog FITS file.
+    line_flux_type : {'FLUX', 'BOXFLUX'}
+        FastSpec line-flux family for SNR gates, strong-line metallicity, SFR,
+        and the direct-method fit. Required; no default. O II 3726/3729 for
+        the direct method still use deblended Gaussian _FLUX inside
+        ``pn_functions``. TE-fit cache files include a ``_flux`` or
+        ``_boxflux`` suffix via ``_te_cache_filename``.
     verbose : bool
         Print progress.
     n_jobs : int
@@ -1236,8 +1248,8 @@ def build_spec_derived_hdu(
         joint 5-parameter fit (Plan A). True uses the two-stage
         informative-prior fit (Plan B): fit ne/Te/Av first, then the
         abundances using the Stage-1 posteriors as priors. The two methods use
-        separate cache files (``TE_FIT_CACHE_FILENAME`` vs
-        ``TE_FIT_CACHE_FILENAME_INFPRIOR``) so their results never mix.
+        separate cache files per method, density diagnostic, and
+        ``line_flux_type`` (see ``_te_cache_filename``).
     density_diagnostic : {'OII', 'SII'}
         Low-ionization doublet used to constrain electron density in the
         direct-method fit (forwarded to ``compute_direct_metallicities``).
@@ -1255,7 +1267,7 @@ def build_spec_derived_hdu(
         1e-17 erg/cm2/s) via line_snr_mask defaults.
     te_cache_dir : str or None
         Directory holding the cumulative per-TARGETID UltraNest fit cache
-        (``te_fit_cache_ultranest.fits``). Default ``NEBCORR_DEFAULT_FOLDER``.
+        (basename from ``_te_cache_filename``). Default ``NEBCORR_DEFAULT_FOLDER``.
         Set to None to disable caching entirely. Cache rows are upserted by
         TARGETID and rows whose ``fit_success`` is False or ``twelve_log_OH``
         is NaN are always retried. The cache is cumulative: TARGETIDs absent
@@ -1302,6 +1314,12 @@ def build_spec_derived_hdu(
 
     r_kcorr in desi_lowz_funcs is nominally valid for z < 0.5.
     """
+    if line_flux_type not in ("FLUX", "BOXFLUX"):
+        raise ValueError(
+            f"line_flux_type must be 'FLUX' or 'BOXFLUX', got {line_flux_type!r}"
+        )
+    globals()["line_flux_type"] = line_flux_type
+
     if verbose:
         print("=" * 60)
         print(
@@ -1648,7 +1666,7 @@ def build_spec_derived_hdu(
         # passing te_cache_dir=None. Each fit method gets its own cache file.
         use_cache = (te_cache_dir is not None)
         cache_fname = _te_cache_filename(
-            use_informative_priors, density_diagnostic,
+            use_informative_priors, density_diagnostic, line_flux_type,
         )
         te_cache_path = (
             os.path.join(te_cache_dir, cache_fname)
@@ -1701,6 +1719,7 @@ def build_spec_derived_hdu(
             )
             print(f"  TE fit method: {method_name}")
             print(f"  TE density diagnostic: {density_diagnostic}")
+            print(f"  TE line flux type: {line_flux_type}")
             if use_cache:
                 print(
                     f"  TE cache ({cache_fname}): reused {n_cached}/{n_te} "
@@ -1710,6 +1729,7 @@ def build_spec_derived_hdu(
         if n_to_compute > 0:
             fit_tab_new = compute_direct_metallicities(
                 fspec_cat[idx_to_compute],
+                line_flux_type,
                 n_jobs=n_jobs,
                 min_num_live_points=min_num_live_points,
                 verbose=verbose,

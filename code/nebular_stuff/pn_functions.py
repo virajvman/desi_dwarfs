@@ -21,11 +21,8 @@ import pyneb as pn
 
 from cardelli_attenuation import *
 
-# Single switch (defined in sfr_and_metallicity) selecting which FastSpec
-# line-flux family the direct-method fit reads: "FLUX" (Gaussian) or
-# "BOXFLUX" (boxcar). sfr_and_metallicity imports pn_functions only lazily
-# (inside build_spec_derived_hdu), so importing it here is not circular.
-from sfr_and_metallicity import line_flux_type
+# Valid FastSpec line-flux families for the direct-method catalog driver.
+_VALID_LINE_FLUX_TYPES = ("FLUX", "BOXFLUX")
 
 # ---------------------------------------------------------------------------
 # Atomic data
@@ -227,7 +224,7 @@ PRIOR_LOWS = np.array([den_min * 1.001, tem_min * 1.001, 0.0, -6.0, -6.0])
 PRIOR_HIGHS = np.array([den_max * 0.999, tem_max * 0.999, 5.0, -2.0, -2.0])
 
 
-def _flux_and_err(row, line):
+def _flux_and_err(row, line, line_flux_type):
     """Return (flux, sigma) for a line key like 'OIII_4363'.
     Treats missing columns, non-finite values, or ivar <= 0 as missing."""
     # OII doublet must stay RESOLVED for the density (3726/3729) and O+/H+
@@ -249,7 +246,7 @@ def _flux_and_err(row, line):
     return float(f), float(1.0 / np.sqrt(ivar))
 
 
-def _build_ratios(row, density_diagnostic='OII'):
+def _build_ratios(row, density_diagnostic, line_flux_type):
     """Build the ratio vector, its error vector, and a mask of usable ratios.
 
     The density-diagnostic ratio (index 0) uses [O II] 3726/3729 by default,
@@ -264,7 +261,7 @@ def _build_ratios(row, density_diagnostic='OII'):
 
     for i, (num, den) in enumerate(specs):
         if isinstance(num, tuple):
-            pairs = [_flux_and_err(row, ln) for ln in num]
+            pairs = [_flux_and_err(row, ln, line_flux_type) for ln in num]
             fs = [p[0] for p in pairs]
             es = [p[1] for p in pairs]
             if any(not np.isfinite(x) for x in fs + es):
@@ -272,11 +269,11 @@ def _build_ratios(row, density_diagnostic='OII'):
             f_num = sum(fs)
             e_num = np.sqrt(sum(e ** 2 for e in es))
         else:
-            f_num, e_num = _flux_and_err(row, num)
+            f_num, e_num = _flux_and_err(row, num, line_flux_type)
             if not np.isfinite(f_num):
                 continue
 
-        f_den, e_den = _flux_and_err(row, den)
+        f_den, e_den = _flux_and_err(row, den, line_flux_type)
         if not np.isfinite(f_den) or f_den <= 0:
             continue
 
@@ -713,10 +710,10 @@ def _fit_row_ultranest_twostage(r, r_err, mask,
 # Public driver
 # ---------------------------------------------------------------------------
 def _fit_one_row(row, min_num_live_points, verbose_sampler, sampler_kwargs,
-                 density_diagnostic='OII'):
+                 density_diagnostic, line_flux_type):
     """Top-level per-row worker. Defined at module level (not nested) so it
     can be pickled for joblib's loky workers."""
-    r, r_err, mask = _build_ratios(row, density_diagnostic)
+    r, r_err, mask = _build_ratios(row, density_diagnostic, line_flux_type)
     return _fit_row_ultranest(
         r, r_err, mask,
         min_num_live_points=min_num_live_points,
@@ -727,10 +724,10 @@ def _fit_one_row(row, min_num_live_points, verbose_sampler, sampler_kwargs,
 
 
 def _fit_one_row_twostage(row, min_num_live_points, verbose_sampler,
-                          sampler_kwargs, density_diagnostic='OII'):
+                          sampler_kwargs, density_diagnostic, line_flux_type):
     """Top-level per-row worker for the two-stage fit (Plan B). Module-level
     so it can be pickled for joblib's loky workers."""
-    r, r_err, mask = _build_ratios(row, density_diagnostic)
+    r, r_err, mask = _build_ratios(row, density_diagnostic, line_flux_type)
     return _fit_row_ultranest_twostage(
         r, r_err, mask,
         min_num_live_points=min_num_live_points,
@@ -741,6 +738,7 @@ def _fit_one_row_twostage(row, min_num_live_points, verbose_sampler,
 
 
 def compute_direct_metallicities(catalog,
+                                 line_flux_type,
                                  n_jobs=1,
                                  min_num_live_points=400,
                                  verbose=False,
@@ -756,9 +754,11 @@ def compute_direct_metallicities(catalog,
     ----------
     catalog : astropy.table.Table
         Must contain {LINE}_<line_flux_type> and {LINE}_<line_flux_type>_IVAR
-        columns, where <line_flux_type> is the switch imported from
-        sfr_and_metallicity ("FLUX" Gaussian or "BOXFLUX" boxcar). Required
-        lines: OIII_4363, OIII_5007, OII_3726, OII_3729, HBETA.
+        columns. Required lines: OIII_4363, OIII_5007, OII_3726, OII_3729,
+        HBETA.
+    line_flux_type : {'FLUX', 'BOXFLUX'}
+        FastSpec line-flux family for all lines except the resolved O II
+        doublet (which always uses _FLUX). Required; no default.
         At least one of HALPHA or HGAMMA must be present to constrain A_V.
         Exception: the resolved O II doublet (OII_3726 / OII_3729) ALWAYS use
         the deblended Gaussian _FLUX columns (regardless of line_flux_type)
@@ -812,6 +812,11 @@ def compute_direct_metallicities(catalog,
     if not isinstance(catalog, Table):
         raise TypeError('catalog must be an astropy.table.Table')
 
+    if line_flux_type not in _VALID_LINE_FLUX_TYPES:
+        raise ValueError(
+            f"line_flux_type must be one of {_VALID_LINE_FLUX_TYPES}, "
+            f"got {line_flux_type!r}"
+        )
     if density_diagnostic not in DENSITY_RATIO_SPECS:
         raise ValueError(
             f"density_diagnostic must be one of {tuple(DENSITY_RATIO_SPECS)}, "
@@ -833,7 +838,7 @@ def compute_direct_metallicities(catalog,
         for idx, row in enumerate(catalog):
             fit = worker(
                 row, min_num_live_points, verbose_sampler, sampler_kwargs,
-                density_diagnostic,
+                density_diagnostic, line_flux_type,
             )
             fits.append(fit)
             if verbose:
@@ -862,7 +867,7 @@ def compute_direct_metallicities(catalog,
                         verbose=10 if verbose else 0)(
             delayed(worker)(
                 row, min_num_live_points, verbose_sampler, sampler_kwargs,
-                density_diagnostic,
+                density_diagnostic, line_flux_type,
             )
             for row in catalog
         )

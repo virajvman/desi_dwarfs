@@ -37,9 +37,11 @@ Outputs (written to STACK_PATH):
   - plots/oh_av_vs_mstar.png   (quick sanity check)
 
 Usage:
-    python stack_direct_metallicity.py
+    python stack_direct_metallicity.py --line-flux-type BOXFLUX
+    python stack_direct_metallicity.py --line-flux-type FLUX
 """
 
+import argparse
 import os
 import sys
 import glob
@@ -179,7 +181,27 @@ def boot_spread(values):
 # MAIN
 # =============================================================================
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description=(
+            "Direct-method nebular abundances for M* x H-alpha-EW stacked "
+            "spectra from FastSpecFit stack outputs."
+        ),
+    )
+    parser.add_argument(
+        "--line-flux-type",
+        required=True,
+        choices=("FLUX", "BOXFLUX"),
+        help=(
+            "FastSpec line-flux family for line detection and direct-method "
+            "fits (FLUX Gaussian or BOXFLUX boxcar). Required."
+        ),
+    )
+    args = parser.parse_args(argv)
+
+    import sfr_and_metallicity as sam
+    sam.line_flux_type = args.line_flux_type
+
     plot_dir = os.path.join(STACK_PATH, "plots")
 
     # Lazy import: pn_functions builds PyNeb interpolation grids at import
@@ -222,6 +244,7 @@ def main():
         detected = bool(line_snr_mask(
             t[[0]], line_names=TE_LINE_NAMES,
             snr_val=SNR_VAL, min_lines=MIN_LINES, min_flux=MIN_FLUX,
+            line_flux_type=args.line_flux_type,
         )[0])
 
         # Base record (filled with NaNs; populated below if detected+fit).
@@ -257,6 +280,7 @@ def main():
               f"(1 mean + {len(t) - 1} bootstraps) with UltraNest ...")
         res = compute_direct_metallicities(
             t,
+            args.line_flux_type,
             n_jobs=N_JOBS,
             min_num_live_points=MIN_NUM_LIVE_POINTS,
             sampler_kwargs=SAMPLER_KWARGS,

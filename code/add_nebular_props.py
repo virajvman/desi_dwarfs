@@ -59,13 +59,14 @@ fit for every TARGETID in the current ``te_mask`` and upsert the results into
 the cache file.
 
 Usage:
-    python add_nebular_props.py /path/to/desi_dr1_dwarf_catalog.fits
     python add_nebular_props.py /path/to/desi_dr1_dwarf_catalog.fits \\
-        --overwrite-te-cache
+        --line-flux-type BOXFLUX
     python add_nebular_props.py /path/to/desi_dr1_dwarf_catalog.fits \\
-        --use-informative-priors
+        --line-flux-type BOXFLUX --overwrite-te-cache
     python add_nebular_props.py /path/to/desi_dr1_dwarf_catalog.fits \\
-        --density-diagnostic SII
+        --line-flux-type FLUX --use-informative-priors
+    python add_nebular_props.py /path/to/desi_dr1_dwarf_catalog.fits \\
+        --line-flux-type BOXFLUX --density-diagnostic SII
 """
 
 import argparse
@@ -149,6 +150,15 @@ def main(argv=None):
         help="Path to the multi-extension dwarf catalog FITS file.",
     )
     parser.add_argument(
+        "--line-flux-type",
+        required=True,
+        choices=("FLUX", "BOXFLUX"),
+        help=(
+            "FastSpec line-flux family for nebular calculations "
+            "(FLUX Gaussian or BOXFLUX boxcar). Required."
+        ),
+    )
+    parser.add_argument(
         "-q",
         "--quiet",
         action="store_true",
@@ -198,6 +208,7 @@ def main(argv=None):
 
     build_spec_derived_hdu(
         args.catalog_path,
+        args.line_flux_type,
         verbose=not args.quiet,
         n_jobs=N_JOBS,
         min_num_live_points=TE_MIN_NUM_LIVE_POINTS,

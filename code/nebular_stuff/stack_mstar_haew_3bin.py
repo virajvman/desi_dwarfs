@@ -564,5 +564,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-    TODO: check if SII and OII can be used interchangeably. and update the pyneb code
