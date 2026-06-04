@@ -288,7 +288,8 @@ def bootstrap_stack(fluxes, ivars, wave, n_bootstrap=200, n_draw=5000,
                     norm_method="boxcar_line",
                     line_window=None, cont_width=5.0,
                     flux_window=None,
-                    catalog_line_fluxes=None):
+                    catalog_line_fluxes=None,
+                    min_n_valid=25):
     """
     Bootstrap stack with flexible normalization methods.
 
@@ -312,6 +313,9 @@ def bootstrap_stack(fluxes, ivars, wave, n_bootstrap=200, n_draw=5000,
         Required for norm_method="flux_window".
     catalog_line_fluxes : 1D array
         Required for norm_method="catalog".
+    min_n_valid : int
+        Minimum number of normalized spectra required to stack. Default 25
+        preserves legacy behavior; pass 1 to allow single-spectrum bins.
 
     Returns
     -------
@@ -346,11 +350,24 @@ def bootstrap_stack(fluxes, ivars, wave, n_bootstrap=200, n_draw=5000,
         raise ValueError(f"Unknown norm_method: {norm_method}")
 
     use_fluxes = norm_fluxes[valid].astype(np.float32, copy=False)
+    use_ivars = norm_ivars[valid].astype(np.float32, copy=False)
     n_valid, n_wave = use_fluxes.shape
 
-    if n_valid < 25:
-        print(f"    Warning: only {n_valid} valid spectra, returning NaN")
+    if n_valid < min_n_valid:
+        print(f"    Warning: only {n_valid} valid spectra "
+              f"(< min_n_valid={min_n_valid}), returning NaN")
         return np.full(n_wave, np.nan), np.full(n_wave, np.nan), None
+
+    if n_valid == 1:
+        stacked_flux = use_fluxes[0].copy()
+        with np.errstate(divide="ignore"):
+            stacked_error = np.where(
+                np.isfinite(use_ivars[0]) & (use_ivars[0] > 0),
+                1.0 / np.sqrt(use_ivars[0]),
+                np.nan,
+            ).astype(np.float32)
+        all_stacks = np.tile(stacked_flux, (n_bootstrap, 1))
+        return stacked_flux, stacked_error, all_stacks
 
     n_draw = min(n_draw, n_valid)
 

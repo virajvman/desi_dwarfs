@@ -3,11 +3,11 @@ stack_direct_metallicity.py
 ===========================
 
 Direct-method (T_e) nebular abundances for the M* x H-alpha-EW stacked
-spectra produced by `stack_mstar_haew_3bin.py` and fit with custom
-FastSpecFit (`job_scripts/run_stack_fastspec_haew_3bin.sh`).
+spectra produced by `stack_mstar_haew_5pct.py` and fit with custom
+FastSpecFit (`job_scripts/fastspec/run_stack_fastspec_haew_5pct.sh`).
 
-For each (log M*, H-alpha EW) bin there is one FastSpecFit stack output
-`fastspec_stack_ALL_mstar_{mlo}_{mhi}_{ewtoken}.fits` whose emission-line
+For each (log M*, H-alpha EW percentile) bin there is one FastSpecFit stack
+output `fastspec_stack_ALL_mstar_{mlo}_{mhi}_{ewtoken}.fits` whose emission-line
 table (hdu=3) has:
     row 0     -> the mean stack
     rows 1..N -> the bootstrap realizations of that stack
@@ -34,7 +34,9 @@ This script:
 Outputs (written to STACK_PATH):
   - direct_metallicity_results.fits
   - direct_metallicity_results.ecsv
-  - plots/oh_av_vs_mstar.png   (quick sanity check)
+  - plots/oh_av_vs_mstar.png
+  - plots/te_ne_hahb_vs_mstar.png
+  - plots/obs_hahb_vs_mstar.png
 
 Usage:
     python stack_direct_metallicity.py --line-flux-type BOXFLUX
@@ -47,10 +49,6 @@ import sys
 import glob
 import re
 
-# ``code/nebular_stuff/`` is a flat folder of scripts (no __init__.py) and
-# the project uses cwd-style imports (e.g. ``from sfr_and_metallicity import
-# ...``). This file already lives in nebular_stuff/, but make the folder (and
-# code/) importable so it runs regardless of the caller's cwd / PYTHONPATH.
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _CODE_DIR = os.path.dirname(_THIS_DIR)
 for _p in (_THIS_DIR, _CODE_DIR):
@@ -67,44 +65,40 @@ from sfr_and_metallicity import line_snr_mask
 # CONFIG
 # =============================================================================
 
-# Directory holding the FastSpecFit stack outputs (same dir the stacking
-# runner writes to).
-STACK_PATH = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/stack_files/mstar_haew_3bin/"
+STACK_PATH = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/stack_files/mstar_haew_5pct/"
 
-# FastSpecFit stack outputs (one per bin). The runner prepends "fastspec_"
-# to each "stack_ALL_mstar_..._ew....fits" input.
 INPUT_GLOB = "fastspec_stack_ALL_mstar_*.fits"
-
-# HDU index of the FastSpec emission-line table (HALPHA_FLUX, etc.). The
-# existing pipeline reads the stack fastspec output as Table.read(f, hdu=3).
 FASTSPEC_HDU = 3
 
-# EW binning, kept identical to stack_mstar_haew_3bin.py so the ew_token in
-# the filename maps back to numeric edges.
-EW_EDGES = [0.0, 30.0, 300.0, np.inf]
-EW_TOKENS = ["ew_lt30", "ew_30_300", "ew_gt300"]
+EW_TOKENS = ["ew_p00_20", "ew_p20_40", "ew_p40_60", "ew_p60_80", "ew_p80_100"]
+EW_PCT_LABELS = {
+    "ew_p00_20": "EW 0-20%",
+    "ew_p20_40": "EW 20-40%",
+    "ew_p40_60": "EW 40-60%",
+    "ew_p60_80": "EW 60-80%",
+    "ew_p80_100": "EW 80-100%",
+}
+EW_COLORS = {
+    "ew_p00_20": "#1f77b4",
+    "ew_p20_40": "#ff7f0e",
+    "ew_p40_60": "#2ca02c",
+    "ew_p60_80": "#d62728",
+    "ew_p80_100": "#9467bd",
+}
 
-# Line-SNR gating for the direct-method fits. Matches add_nebular_props.py.
 _TE_LINE_NAMES_BASE = ["HALPHA", "HBETA", "HGAMMA",
                        "OIII_4363", "OIII_5007",
                        "OII_3726", "OII_3729"]
 SNR_VAL = 3
-MIN_FLUX = 0.0  
-## NOTE: the fluxes have been normalized and so applying a min flux cut does not make sense anymore
+MIN_FLUX = 0.0
 
-# Density diagnostic for the direct-method fit: 'OII' ([O II] 3726/3729) or
-# 'SII' ([S II] 6716/6731). CLI --density-diagnostic overrides this constant.
 TE_DENSITY_DIAGNOSTIC = "SII"
 
-# UltraNest fit settings (same as the catalog driver).
 N_JOBS = 128
 MIN_NUM_LIVE_POINTS = 400
 SAMPLER_KWARGS = {"frac_remain": 0.01, "max_iters": 40000, "max_ncalls": int(1e5)}
 USE_INFORMATIVE_PRIORS = False
 
-# Parameters returned by compute_direct_metallicities (PARAM_NAMES +
-# twelve_log_OH). Left-hand name is the lower-case column in the result
-# Table; right-hand name is the UPPER_CASE column we write out.
 PARAM_MAP = [
     ("ne_oii",        "NE_OII"),
     ("te_oiii",       "TE_OIII"),
@@ -121,12 +115,39 @@ OUT_BASENAME = "direct_metallicity_results"
 # HELPERS
 # =============================================================================
 
-# fastspec_stack_ALL_mstar_{mlo}_{mhi}_{ewtoken}.fits
 _FNAME_RE = re.compile(
     r"fastspec_stack_ALL_mstar_"
     r"(?P<mlo>[-\d.]+)_(?P<mhi>[-\d.]+)_"
     r"(?P<ewtoken>ew_\w+)\.fits$"
 )
+
+
+def _input_stack_path(mlo, mhi, token):
+    return os.path.join(
+        STACK_PATH, f"stack_ALL_mstar_{mlo:.2f}_{mhi:.2f}_{token}.fits"
+    )
+
+
+def read_stackinfo_from_input_stack(mlo, mhi, token):
+    """Read NOBJ, EW_MIN, EW_MAX from the input stack FITS STACKINFO table."""
+    in_path = _input_stack_path(mlo, mhi, token)
+    if not os.path.exists(in_path):
+        return None
+    try:
+        info = Table.read(in_path, hdu="STACKINFO")
+    except Exception:
+        return None
+    if len(info) == 0:
+        return None
+    out = {}
+    if "NOBJ" in info.colnames:
+        out["nobj"] = int(info["NOBJ"][0])
+    if "EW_MIN" in info.colnames:
+        out["ew_min"] = float(info["EW_MIN"][0])
+    if "EW_MAX" in info.colnames:
+        ew_max = float(info["EW_MAX"][0])
+        out["ew_max"] = np.inf if ew_max < 0 else ew_max
+    return out
 
 
 def parse_bin_from_filename(path):
@@ -139,30 +160,55 @@ def parse_bin_from_filename(path):
     token = m.group("ewtoken")
     if token not in EW_TOKENS:
         return None
-    j = EW_TOKENS.index(token)
-    ew_min, ew_max = EW_EDGES[j], EW_EDGES[j + 1]
-    return mlo, mhi, token, ew_min, ew_max
+    info = read_stackinfo_from_input_stack(mlo, mhi, token)
+    if info is None or "ew_min" not in info or "ew_max" not in info:
+        return None
+    return mlo, mhi, token, info["ew_min"], info["ew_max"]
 
 
 def read_nobj_from_input_stack(mlo, mhi, token):
-    """Best-effort NOBJ for a bin from the matching input stack FITS.
-
-    The stacking script writes NOBJ into the STACKINFO table of
-    stack_ALL_mstar_{mlo}_{mhi}_{token}.fits. FastSpecFit may not carry it
-    into its output, so we read it from the input file if present.
-    """
-    in_path = os.path.join(
-        STACK_PATH, f"stack_ALL_mstar_{mlo:.2f}_{mhi:.2f}_{token}.fits"
-    )
-    if not os.path.exists(in_path):
+    """Best-effort NOBJ for a bin from the matching input stack FITS."""
+    info = read_stackinfo_from_input_stack(mlo, mhi, token)
+    if info is None or "nobj" not in info:
         return -1
-    try:
-        info = Table.read(in_path, hdu="STACKINFO")
-        if "NOBJ" in info.colnames and len(info) > 0:
-            return int(info["NOBJ"][0])
-    except Exception:
-        pass
-    return -1
+    return info["nobj"]
+
+
+def ew_plot_label(token, ew_min, ew_max):
+    """Legend label with percentile name and numeric EW range."""
+    base = EW_PCT_LABELS.get(token, token)
+    if np.isfinite(ew_max):
+        return f"{base} ({ew_min:.1f}–{ew_max:.1f} $\\AA$)"
+    return f"{base} ({ew_min:.1f}–$\\infty$ $\\AA$)"
+
+
+def measure_obs_ha_hb(row):
+    """Observed Halpha/Hbeta from boxcar fluxes on the mean stack (row 0)."""
+    if "HALPHA_BOXFLUX" not in row.colnames or "HBETA_BOXFLUX" not in row.colnames:
+        return np.nan, np.nan, np.nan
+    ha = float(row["HALPHA_BOXFLUX"][0])
+    hb = float(row["HBETA_BOXFLUX"][0])
+    ha_ivar = float(row["HALPHA_BOXFLUX_IVAR"][0]) if "HALPHA_BOXFLUX_IVAR" in row.colnames else np.nan
+    hb_ivar = float(row["HBETA_BOXFLUX_IVAR"][0]) if "HBETA_BOXFLUX_IVAR" in row.colnames else np.nan
+    if not (np.isfinite(ha) and np.isfinite(hb) and hb > 0):
+        return np.nan, np.nan, np.nan
+    ratio = ha / hb
+    if np.isfinite(ha_ivar) and ha_ivar > 0 and np.isfinite(hb_ivar) and hb_ivar > 0:
+        ha_err = 1.0 / np.sqrt(ha_ivar)
+        hb_err = 1.0 / np.sqrt(hb_ivar)
+        err = np.abs(ratio) * np.sqrt((ha_err / ha) ** 2 + (hb_err / hb) ** 2)
+    else:
+        err = np.nan
+    return ratio, err, err
+
+
+def intrinsic_ha_hb(ne, te):
+    """Case-B Halpha/Hbeta from PyNeb emissivities (no extinction)."""
+    from pn_functions import H_alpha, H_beta
+    ne = np.asarray(ne, dtype=float)
+    te = np.asarray(te, dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return H_alpha(te, ne) / H_beta(te, ne)
 
 
 def _te_line_gating(density_diagnostic):
@@ -174,18 +220,43 @@ def _te_line_gating(density_diagnostic):
 
 
 def boot_spread(values):
-    """16/50/84 spread of finite values -> (err, err_lo, err_hi, n_used).
-
-    err     = 0.5 * (p84 - p16)
-    err_lo  = p50 - p16
-    err_hi  = p84 - p50
-    """
+    """16/50/84 spread of finite values -> (err, err_lo, err_hi, n_used)."""
     arr = np.asarray(values, dtype=float)
     arr = arr[np.isfinite(arr)]
     if arr.size == 0:
         return np.nan, np.nan, np.nan, 0
     p16, p50, p84 = np.nanpercentile(arr, [16, 50, 84])
     return 0.5 * (p84 - p16), p50 - p16, p84 - p50, int(arr.size)
+
+
+def _mstar_mid(tab):
+    return 0.5 * (np.asarray(tab["MSTAR_MIN"]) + np.asarray(tab["MSTAR_MAX"]))
+
+
+def _plot_vs_mstar_by_ew(tab, ycol, yerr_lo, yerr_hi, ylab, ax, title=None):
+    """Errorbar plot vs log M* midpoint, one series per EW_TOKEN."""
+    mid = _mstar_mid(tab)
+    for token in EW_TOKENS:
+        sel = np.asarray(tab["EW_TOKEN"]) == token
+        if not np.any(sel):
+            continue
+        sub = tab[sel]
+        label = ew_plot_label(
+            token,
+            float(sub["EW_MIN"][0]),
+            float(sub["EW_MAX"][0]) if sub["EW_MAX"][0] >= 0 else np.inf,
+        )
+        ax.errorbar(
+            mid[sel], np.asarray(sub[ycol]),
+            yerr=[np.asarray(sub[yerr_lo]), np.asarray(sub[yerr_hi])],
+            fmt="o-", color=EW_COLORS[token], label=label,
+            capsize=3, lw=1.2,
+        )
+    ax.set_xlabel(r"log $M_\star$ [$M_\odot$]")
+    ax.set_ylabel(ylab)
+    ax.legend(frameon=False, fontsize=7)
+    if title:
+        ax.set_title(title, fontsize=10)
 
 
 # =============================================================================
@@ -228,13 +299,10 @@ def main(argv=None):
 
     plot_dir = os.path.join(STACK_PATH, "plots")
 
-    # Lazy import: pn_functions builds PyNeb interpolation grids at import
-    # time (~seconds), so only pay that cost when we actually fit.
     from pn_functions import compute_direct_metallicities
 
     pattern = os.path.join(STACK_PATH, INPUT_GLOB)
     files = sorted(glob.glob(pattern))
-    # Skip any accidental double-processed outputs.
     files = [f for f in files if "fastspec_fastspec_" not in os.path.basename(f)]
     print(f"[1] Found {len(files)} FastSpecFit stack outputs in {STACK_PATH}")
     print(f"    TE density diagnostic: {density_diagnostic} "
@@ -253,8 +321,9 @@ def main(argv=None):
         mlo, mhi, token, ew_min, ew_max = parsed
         nobj = read_nobj_from_input_stack(mlo, mhi, token)
 
+        ew_hi_str = f"{ew_max:.1f}" if np.isfinite(ew_max) else "inf"
         print(f"\n--- log M*=[{mlo:.2f},{mhi:.2f}] | {token} "
-              f"(EW in ({ew_min:.0f},{ew_max:.0f}]) | NOBJ={nobj} ---")
+              f"(EW in ({ew_min:.1f},{ew_hi_str}]) | NOBJ={nobj} ---")
 
         try:
             t = Table.read(fpath, hdu=FASTSPEC_HDU)
@@ -266,18 +335,17 @@ def main(argv=None):
             print("    Empty fastspec table; skipping.")
             continue
 
-        # Gate the bin on the MEAN stack (row 0).
+        obs_ha_hb, obs_err, _ = measure_obs_ha_hb(t[[0]])
+
         detected = bool(line_snr_mask(
             t[[0]], line_names=te_line_names,
             snr_val=SNR_VAL, min_lines=te_min_lines, min_flux=MIN_FLUX,
             line_flux_type=args.line_flux_type,
         )[0])
 
-        # Base record (filled with NaNs; populated below if detected+fit).
         rec = {
             "MSTAR_MIN": mlo, "MSTAR_MAX": mhi,
             "EW_MIN": ew_min,
-            # +inf is not FITS/ECSV-friendly; store -1 as the "open top" sentinel.
             "EW_MAX": ew_max if np.isfinite(ew_max) else -1.0,
             "EW_TOKEN": token,
             "NOBJ": nobj,
@@ -287,6 +355,12 @@ def main(argv=None):
             "N_BOOT_FIT": 0,
             "N_RATIOS": 0,
             "LOGZ": np.nan,
+            "OBS_HA_HB": obs_ha_hb,
+            "OBS_HA_HB_ERR": obs_err,
+            "HA_HB_INTRINSIC": np.nan,
+            "HA_HB_INTRINSIC_ERR": np.nan,
+            "HA_HB_INTRINSIC_ERR_LO": np.nan,
+            "HA_HB_INTRINSIC_ERR_HI": np.nan,
         }
         for _, up in PARAM_MAP:
             rec[up] = np.nan
@@ -302,7 +376,6 @@ def main(argv=None):
             rows.append(rec)
             continue
 
-        # Fit the mean stack (row 0) + all bootstrap rows (1..N).
         print(f"    Detected. Fitting {len(t)} rows "
               f"(1 mean + {len(t) - 1} bootstraps) with UltraNest ...")
         res = compute_direct_metallicities(
@@ -322,8 +395,6 @@ def main(argv=None):
         rec["N_RATIOS"] = int(mean_fit["n_ratios"])
         rec["LOGZ"] = float(mean_fit["logz"])
 
-        # Bootstrap rows used for the spread: successful fits with finite
-        # 12+log(OH).
         if len(res) > 1:
             boot = res[1:]
             ok = np.asarray(boot["fit_success"], dtype=bool) & np.isfinite(
@@ -344,7 +415,21 @@ def main(argv=None):
                 rec[f"{up}_ERR_LO"] = err_lo
                 rec[f"{up}_ERR_HI"] = err_hi
 
-        print(f"    -> 12+log(OH) = {rec['TWELVE_LOG_OH']:.3f} "
+        ne_med = rec["NE_OII"]
+        te_med = rec["TE_OIII"]
+        if np.isfinite(ne_med) and np.isfinite(te_med):
+            rec["HA_HB_INTRINSIC"] = float(intrinsic_ha_hb(ne_med, te_med))
+        if len(boot_ok) > 0:
+            boot_ratios = intrinsic_ha_hb(
+                np.asarray(boot_ok["ne_oii"], dtype=float),
+                np.asarray(boot_ok["te_oiii"], dtype=float),
+            )
+            err, err_lo, err_hi, _ = boot_spread(boot_ratios)
+            rec["HA_HB_INTRINSIC_ERR"] = err
+            rec["HA_HB_INTRINSIC_ERR_LO"] = err_lo
+            rec["HA_HB_INTRINSIC_ERR_HI"] = err_hi
+
+        print(f"    -> 12+log(O/H) = {rec['TWELVE_LOG_OH']:.3f} "
               f"(+{rec['TWELVE_LOG_OH_ERR_HI']:.3f}/-{rec['TWELVE_LOG_OH_ERR_LO']:.3f}), "
               f"A_V = {rec['AV']:.3f} "
               f"(+{rec['AV_ERR_HI']:.3f}/-{rec['AV_ERR_LO']:.3f}); "
@@ -355,15 +440,14 @@ def main(argv=None):
         print("\n[2] No bins processed; nothing to write.")
         return 1
 
-    # -------------------------------------------------------------------------
-    # Assemble + write the results table
-    # -------------------------------------------------------------------------
     out_tab = Table(rows)
-    # Stable, readable column ordering.
     col_order = [
         "MSTAR_MIN", "MSTAR_MAX", "EW_MIN", "EW_MAX", "EW_TOKEN", "NOBJ",
         "DENSITY_DIAGNOSTIC", "DETECTED_7LINE", "MEAN_FIT_SUCCESS",
         "N_BOOT_FIT", "N_RATIOS", "LOGZ",
+        "OBS_HA_HB", "OBS_HA_HB_ERR",
+        "HA_HB_INTRINSIC", "HA_HB_INTRINSIC_ERR",
+        "HA_HB_INTRINSIC_ERR_LO", "HA_HB_INTRINSIC_ERR_HI",
     ]
     for _, up in PARAM_MAP:
         col_order += [up, f"{up}_ERR", f"{up}_ERR_LO", f"{up}_ERR_HI",
@@ -382,20 +466,24 @@ def main(argv=None):
     print(f"    {out_fits}")
     print(f"    {out_ecsv}")
 
-    # -------------------------------------------------------------------------
-    # Quick sanity figure
-    # -------------------------------------------------------------------------
     try:
-        make_sanity_plot(out_tab, plot_dir)
+        make_all_plots(out_tab, plot_dir)
     except Exception as e:
-        print(f"    (sanity plot skipped: {e})")
+        print(f"    (plots skipped: {e})")
 
     print("\n[3] Done.")
     return 0
 
 
-def make_sanity_plot(out_tab, plot_dir):
-    """12+log(OH) and A_V vs M* (bin midpoint), one series per EW bin."""
+def make_all_plots(out_tab, plot_dir):
+    """Write oh_av, te_ne_hahb, and obs_hahb vs M* figures."""
+    make_oh_av_plot(out_tab, plot_dir)
+    make_te_ne_hahb_plot(out_tab, plot_dir)
+    make_obs_hahb_plot(out_tab, plot_dir)
+
+
+def make_oh_av_plot(out_tab, plot_dir):
+    """12+log(O/H) and A_V vs M* (bin midpoint), one series per EW bin."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -404,38 +492,118 @@ def make_sanity_plot(out_tab, plot_dir):
 
     good = out_tab[(out_tab["DETECTED_7LINE"]) & (out_tab["MEAN_FIT_SUCCESS"])]
     if len(good) == 0:
-        print("    (no successful fits; skipping sanity plot)")
+        print("    (no successful fits; skipping oh_av_vs_mstar)")
         return
 
-    mid = 0.5 * (np.asarray(good["MSTAR_MIN"]) + np.asarray(good["MSTAR_MAX"]))
-    colors = {"ew_lt30": "#1f77b4", "ew_30_300": "#ff7f0e", "ew_gt300": "#d62728"}
-    labels = {"ew_lt30": r"EW $\leq$ 30",
-              "ew_30_300": r"30 < EW $\leq$ 300",
-              "ew_gt300": "EW > 300"}
-
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    for (col, ax, ylab) in [
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    for col, ax, ylab in [
         ("TWELVE_LOG_OH", axes[0], "12 + log(O/H)"),
         ("AV", axes[1], r"$A_V$ [mag]"),
     ]:
-        for token in EW_TOKENS:
-            sel = np.asarray(good["EW_TOKEN"]) == token
-            if not np.any(sel):
-                continue
-            ax.errorbar(
-                mid[sel], np.asarray(good[col])[sel],
-                yerr=[np.asarray(good[f"{col}_ERR_LO"])[sel],
-                      np.asarray(good[f"{col}_ERR_HI"])[sel]],
-                fmt="o-", color=colors[token], label=labels[token],
-                capsize=3, lw=1.2,
-            )
-        ax.set_xlabel(r"log $M_\star$ [$M_\odot$]")
-        ax.set_ylabel(ylab)
-        ax.legend(frameon=False, fontsize=9)
+        _plot_vs_mstar_by_ew(
+            good, col, f"{col}_ERR_LO", f"{col}_ERR_HI", ylab, ax,
+        )
 
     fig.suptitle("Direct-method stacks: trends vs stellar mass")
     fig.tight_layout(rect=[0, 0, 1, 0.96])
     out_png = os.path.join(plot_dir, "oh_av_vs_mstar.png")
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+    print(f"    Saved {os.path.basename(out_png)}")
+
+
+def make_te_ne_hahb_plot(out_tab, plot_dir):
+    """n_e, T_e, and intrinsic Halpha/Hbeta vs M* for successful fits."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    os.makedirs(plot_dir, exist_ok=True)
+
+    good = out_tab[(out_tab["DETECTED_7LINE"]) & (out_tab["MEAN_FIT_SUCCESS"])]
+    if len(good) == 0:
+        print("    (no successful fits; skipping te_ne_hahb_vs_mstar)")
+        return
+
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+    panels = [
+        ("NE_OII", r"$n_e$ [cm$^{-3}$]"),
+        ("TE_OIII", r"$T_e$ [K]"),
+        ("HA_HB_INTRINSIC", r"H$\alpha$/H$\beta$ (intrinsic)"),
+    ]
+    for col, ax, ylab in panels:
+        _plot_vs_mstar_by_ew(
+            good, col, f"{col}_ERR_LO", f"{col}_ERR_HI", ylab, ax,
+        )
+
+    fig.suptitle("Direct-method stacks: $n_e$, $T_e$, intrinsic Balmer ratio")
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    out_png = os.path.join(plot_dir, "te_ne_hahb_vs_mstar.png")
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+    print(f"    Saved {os.path.basename(out_png)}")
+
+
+def make_obs_hahb_plot(out_tab, plot_dir):
+    """Observed HALPHA_BOXFLUX / HBETA_BOXFLUX vs M* (all finite ratios)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    os.makedirs(plot_dir, exist_ok=True)
+
+    finite = np.isfinite(out_tab["OBS_HA_HB"])
+    if not np.any(finite):
+        print("    (no finite OBS_HA_HB; skipping obs_hahb_vs_mstar)")
+        return
+
+    plot_tab = out_tab[finite]
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    for token in EW_TOKENS:
+        sel = np.asarray(plot_tab["EW_TOKEN"]) == token
+        if not np.any(sel):
+            continue
+        sub = plot_tab[sel]
+        mid_sub = _mstar_mid(sub)
+        label = ew_plot_label(
+            token,
+            float(sub["EW_MIN"][0]),
+            float(sub["EW_MAX"][0]) if sub["EW_MAX"][0] >= 0 else np.inf,
+        )
+        y = np.asarray(sub["OBS_HA_HB"])
+        yerr = np.asarray(sub["OBS_HA_HB_ERR"])
+        det = np.asarray(sub["DETECTED_7LINE"], dtype=bool)
+        has_err = np.isfinite(yerr) & (yerr > 0)
+
+        if np.any(det & has_err):
+            m = det & has_err
+            ax.errorbar(
+                mid_sub[m], y[m], yerr=yerr[m],
+                fmt="o-", color=EW_COLORS[token], label=label,
+                capsize=3, lw=1.2,
+            )
+        elif np.any(det):
+            ax.plot(
+                mid_sub[det], y[det], "o-",
+                color=EW_COLORS[token], label=label, lw=1.2,
+            )
+        else:
+            ax.plot([], [], "o-", color=EW_COLORS[token], label=label)
+
+        if np.any(~det):
+            ax.plot(
+                mid_sub[~det], y[~det],
+                marker="o", fillstyle="none", ls="--", lw=1.0,
+                color=EW_COLORS[token], alpha=0.7,
+            )
+
+    ax.set_xlabel(r"log $M_\star$ [$M_\odot$]")
+    ax.set_ylabel(r"H$\alpha$/H$\beta$ (observed boxcar)")
+    ax.legend(frameon=False, fontsize=7)
+    ax.set_title("Observed Balmer decrement (mean stack)")
+    fig.tight_layout()
+    out_png = os.path.join(plot_dir, "obs_hahb_vs_mstar.png")
     fig.savefig(out_png, dpi=150)
     plt.close(fig)
     print(f"    Saved {os.path.basename(out_png)}")
