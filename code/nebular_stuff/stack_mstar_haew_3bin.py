@@ -113,6 +113,44 @@ N_BOOT_SAVE = 50
 # Output location.
 STACK_PATH = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/stack_files/mstar_haew_3bin/"
 
+# ---------------------------------------------------------------------------
+# Example: read a saved stack and plot it
+# ---------------------------------------------------------------------------
+# Two file formats are written per (mass, EW) bin:
+#   stacks_spec_ALL_mstar_{mlo}_{mhi}_{ewtoken}.pkl   -- mean, err, bootstraps
+#   stack_ALL_mstar_{mlo}_{mhi}_{ewtoken}.fits        -- self-contained (wave+flux)
+#
+# Option A (recommended): read the FITS file -- wavelength is included.
+#
+#   import matplotlib.pyplot as plt
+#   from astropy.io import fits
+#
+#   stack_path = STACK_PATH
+#   label = "mstar_7.00_7.50_ew_30_300"   # pick a bin
+#   fits_file = f"{stack_path}stack_ALL_{label}.fits"
+#
+#   with fits.open(fits_file) as hdul:
+#       wave = hdul["WAVE"].data          # rest-frame vacuum Angstroms, 1D
+#       flux = hdul["FLUX"].data          # (n_rows, n_wave); row 0 = mean stack
+#       ivar = hdul["IVAR"].data
+#       info = hdul["STACKINFO"].data     # NOBJ, MSTAR_MIN/MAX, EW_MIN/MAX, ...
+#
+#   flux_mean = flux[0]
+#   err_mean = 1.0 / np.sqrt(ivar[0])     # ivar -> 1-sigma uncertainty
+#   err_mean[~np.isfinite(err_mean)] = np.nan
+#
+#   fig, ax = plt.subplots(figsize=(10, 5))
+#   ax.plot(wave, flux_mean, color="k", lw=1.0,
+#           label=f"N={info['NOBJ'][0]}")
+#   ax.fill_between(wave, flux_mean - err_mean, flux_mean + err_mean,
+#                   color="k", alpha=0.2, lw=0)
+#   ax.set_xlim(wave.min(), wave.max())
+#   ax.set_xlabel(r"Rest wavelength [$\AA$]")
+#   ax.set_ylabel("Halpha-normalized stacked flux")
+#   ax.legend(frameon=False)
+
+
+
 # Re-do stacks even if a cached pickle already exists on disk?
 OVERWRITE_STACKS = True
 
