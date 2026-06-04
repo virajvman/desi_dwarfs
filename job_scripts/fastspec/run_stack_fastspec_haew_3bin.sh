@@ -41,37 +41,30 @@ templates=/global/cfs/cdirs/desi/users/dscholte/data/ohno/templates/9.9.9/ftempl
 #    Effect: He II 4686 tied to narrow Halpha kinematics, sigma max 750 km/s
 #            (instead of broad QSO defaults: sigma max 10000 km/s).
 #
-# 3. Validate before a long run:
-#    python -c "
-#    from fastspecfit.linetable import LineTable
-#    from fastspecfit.emlines import EmlineConstraints
-#    path = '${PSCRATCH}/fastspecfit/config/emline-constraints-dwarfs.yaml'
-#    ec = EmlineConstraints(path, LineTable().table)
-#    _, smax, _, _, _ = ec.line_bounds('heii_4686')
-#    print(f'heii_4686 sigma_max = {smax} km/s')   # expect 750.0
-#    "
-#
-# 4. After one stackfit output, spot-check science:
-#    python -c "
-#    import fitsio
-#    d = fitsio.read('OUTFILE', ext='FASTSPEC')
-#    print('HEII_4686_SIGMA =', d['HEII_4686_SIGMA'][0])  # should be <~750 km/s if detected
-#    "
-#    Also check primary header records your YAML:
-#    python -c "
-#    import fitsio
-#    hdr = fitsio.read_header('OUTFILE')
-#    print([k for k in hdr.keys() if 'CONSTRAINT' in k.upper()])
-#    "
-#
-constraintsfile=${PSCRATCH}/fastspecfit/config/emline-constraints-dwarfs.yaml
+
+constraintsfile=/global/u1/v/virajvm/DESI2_LOWZ/desi_dwarfs/data/data_metal/emline-constraints-dwarfs.yaml
+emlinesfile=/global/u1/v/virajvm/DESI2_LOWZ/desi_dwarfs/data/data_metal/emlines-dwarfs.ecsv
+
 if [[ ! -f "${constraintsfile}" ]]; then
     echo "ERROR: constraints file not found: ${constraintsfile}"
     echo "       Follow the CONSTRAINTS setup comments at the top of this script."
     exit 1
 fi
 
-NCORES=32
+if [[ ! -f "${emlinesfile}" ]]; then
+    echo "ERROR: emlines file not found: ${emlinesfile}"
+    exit 1
+fi
+
+python3 -c "
+from astropy.table import Table
+from fastspecfit.emlines import EmlineConstraints
+lt = Table.read('${emlinesfile}', format='ascii.ecsv')
+ec = EmlineConstraints('${constraintsfile}', lt)
+print('OK —', len(lt), 'lines; heii_4686 sigma_max =', ec.line_bounds('heii_4686')[1], 'km/s')
+"
+
+NCORES=16
 
 # Same external data dirs as the production fastspec job.
 export DESI_SPECTRO_REDUX=/dvs_ro/cfs/cdirs/desi/spectro/redux
@@ -83,7 +76,7 @@ echo "Running custom FastSpecFit (stackfit) on M* x H-alpha-EW 3-bin stacks"
 echo "Stack path    : ${STACK_PATH}"
 echo "Templates     : ${templates}"
 echo "Constraints   : ${constraintsfile}"
-echo "Emlines       : bundled fiducial (default)"
+echo "Emlines   : ${emlinesfile}"
 echo ""
 
 shopt -s nullglob
@@ -104,6 +97,7 @@ for f in "${stack_files[@]}"; do
     stackfit "$f" -o "$outfile" \
         --mp ${NCORES} \
         --templates="${templates}" \
+        --emlinesfile="${emlinesfile}" \
         --constraintsfile="${constraintsfile}" \
         --nmonte=100 \
         --vdisp-nominal 100 --vdisp-bounds 50 200
@@ -112,3 +106,4 @@ for f in "${stack_files[@]}"; do
 done
 
 echo "Done!"
+

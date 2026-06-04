@@ -1,0 +1,275 @@
+# FastSpecFit emission-line kinematic constraints — dwarf / low-z custom list
+# =============================================================================
+# Companion to emlines-dwarfs.ecsv (or the matching file on NERSC at
+# .../data/data_metal/emlines.ecsv).
+#
+# Changes relative to bundled data/emline-constraints.yaml:
+#   - Removed all UV/AGN global free_lines (Lyα, CIV, He II 1640, etc.)
+#   - Removed global ciii_aliii pair (no CIII]/SiIII] in dwarf line list)
+#   - Added neiii_3968 and oi_6364 to narrow forbidden groups
+#   - Includes hei_4471 (narrow Balmer group) and nii_5755 (forbidden group)
+#   - heii_4686 in narrow_balmer / narrow_all (narrow He II, not broad QSO)
+#
+# Usage (stackfit / fastspec):
+#   --emlinesfile=path/to/emlines-dwarfs.ecsv
+#   --constraintsfile=path/to/emline-constraints-dwarfs.yaml
+#
+# Validate pairing:
+#   python -c "
+#   from astropy.table import Table
+#   from fastspecfit.emlines import EmlineConstraints
+#   lt = Table.read('emlines-dwarfs.ecsv', format='ascii.ecsv')
+#   ec = EmlineConstraints('emline-constraints-dwarfs.yaml', lt)
+#   print('OK'); print('heii_4686 sigma_max =', ec.line_bounds('heii_4686')[1])
+#   "
+#
+# line_components (Section 1): leave empty unless you need an extra Gaussian
+# at the SAME rest wavelength as an existing line (e.g. a narrow sub-component
+# of a broad line). See my_code/emline-constraints-dwarfs.md for details.
+
+
+# =============================================================================
+# SECTION 1: Line component extensions
+# =============================================================================
+
+line_components: []
+
+
+# =============================================================================
+# SECTION 2: Amplitude constraints  (profile-independent)
+# =============================================================================
+
+amplitude_constraints:
+
+  fixed:
+    - line: nii_6548
+      ref:  nii_6584
+      factor: 0.32975
+      param_name: NII_DOUBLET_RATIO
+    - line: oiii_4959
+      ref:  oiii_5007
+      factor: 0.33735
+      param_name: OIII_DOUBLET_RATIO
+    - line: oii_7330
+      ref:  oii_7320
+      factor: 0.81633
+      param_name: OIIRED_DOUBLET_RATIO
+
+  doublet_ratios:
+    - line:       oii_3726
+      ref:        oii_3729
+      param_name: oii_doublet_ratio
+      bounds:     {min: 0.0, max: 2.0}
+      initial:    1.0
+    - line:       sii_6731
+      ref:        sii_6716
+      param_name: sii_doublet_ratio
+      bounds:     {min: 0.0, max: 2.0}
+      initial:    1.0
+    - line:       mgii_2796
+      ref:        mgii_2803
+      param_name: mgii_doublet_ratio
+      bounds:     {min: 0.0, max: 10.0}
+      initial:    1.0
+
+
+# =============================================================================
+# SECTION 3: Global placements
+# =============================================================================
+
+global:
+
+  default_bounds:
+    sigma:  {min: 1.0, max: 10000.0}
+    vshift: {min: -2500.0, max: 2500.0}
+  default_initial:
+    sigma:  3000.0
+    vshift: 0.0
+
+  # No UV/QSO free lines in the dwarf optical list.
+  free_lines: []
+
+  kinematic_groups:
+
+    - name: mgii_pair
+      anchor: mgii_2803
+      bounds:
+        sigma:  {min: 1.0,     max: 10000.0}
+        vshift: {min: -2500.0, max: 2500.0}
+      initial:
+        sigma:  3000.0
+        vshift: 0.0
+      members:
+        - mgii_2796
+      final_pass: {free_vshift: false, free_sigma: false, delta_vshift_max: 500.0, delta_sigma_max: 1000.0}
+
+
+# =============================================================================
+# SECTION 4: Named kinematic profiles
+# =============================================================================
+
+profiles:
+
+  narrow_only:
+
+    kinematic_groups:
+
+      - name: forbidden
+        anchor: oiii_5007
+        bounds:
+          sigma:  {min: 1.0,    max: 750.0}
+          vshift: {min: -500.0, max: 500.0}
+        initial:
+          sigma:  150.0
+          vshift: 0.0
+        members:
+          - nev_3346
+          - nev_3426
+          - oii_3726
+          - oii_3729
+          - neiii_3869
+          - neiii_3968
+          - oiii_4363
+          - oiii_4959
+          - nii_5755
+          - oi_6300
+          - oi_6364
+          - siii_6312
+          - nii_6548
+          - nii_6584
+          - sii_6716
+          - sii_6731
+          - ariii_7135
+          - oii_7320
+          - oii_7330
+          - siii_9069
+          - siii_9532
+        final_pass: {free_vshift: true, free_sigma: true, delta_vshift_max: 100.0, delta_sigma_max: 100.0}
+
+      - name: narrow_balmer
+        anchor: halpha
+        bounds:
+          sigma:  {min: 1.0,    max: 750.0}
+          vshift: {min: -500.0, max: 500.0}
+        initial:
+          sigma:  150.0
+          vshift: 0.0
+        members:
+          - h6
+          - hepsilon
+          - hdelta
+          - hgamma
+          - hbeta
+          - hei_4471
+          - heii_4686
+          - hei_5876
+        final_pass: {free_vshift: true, free_sigma: true, delta_vshift_max: 100.0, delta_sigma_max: 100.0}
+
+    free_lines: []
+
+    fixed_lines:
+      - halpha_broad
+      - hbeta_broad
+      - hgamma_broad
+      - hdelta_broad
+      - hepsilon_broad
+      - h6_broad
+
+    final_pass:
+      enabled:       true
+      warm_start:    true
+      adopt_if:      chi2_improves
+      inherit_in_mc: true
+
+  narrow_broad:
+
+    kinematic_groups:
+
+      - name: narrow_all
+        anchor: halpha
+        bounds:
+          sigma:  {min: 1.0,    max: 750.0}
+          vshift: {min: -500.0, max: 500.0}
+        initial:
+          sigma:  150.0
+          vshift: 0.0
+        members:
+          - nev_3346
+          - nev_3426
+          - oii_3726
+          - oii_3729
+          - neiii_3869
+          - neiii_3968
+          - oiii_4363
+          - nii_5755
+          - oi_6300
+          - oi_6364
+          - siii_6312
+          - nii_6548
+          - nii_6584
+          - sii_6716
+          - sii_6731
+          - ariii_7135
+          - oii_7320
+          - oii_7330
+          - siii_9069
+          - siii_9532
+          - h6
+          - hepsilon
+          - hdelta
+          - hgamma
+          - hbeta
+          - hei_4471
+          - heii_4686
+          - hei_5876
+        final_pass: {free_vshift: false, free_sigma: false, delta_vshift_max: 100.0, delta_sigma_max: 100.0}
+
+      - name: oiii_doublet
+        anchor: oiii_5007
+        bounds:
+          sigma:  {min: 1.0,    max: 750.0}
+          vshift: {min: -500.0, max: 500.0}
+        initial:
+          sigma:  150.0
+          vshift: 0.0
+        members:
+          - oiii_4959
+        final_pass: {free_vshift: false, free_sigma: false, delta_vshift_max: 100.0, delta_sigma_max: 100.0}
+
+      - name: broad_balmer
+        anchor: halpha_broad
+        bounds:
+          sigma:  {min: 1.0,     max: 10000.0}
+          vshift: {min: -2500.0, max: 2500.0}
+        initial:
+          sigma:  1000.0
+          vshift: 0.0
+        members:
+          - hbeta_broad
+          - hgamma_broad
+          - hdelta_broad
+          - hepsilon_broad
+          - h6_broad
+        final_pass: {free_vshift: false, free_sigma: false, delta_vshift_max: 500.0, delta_sigma_max: 1000.0}
+
+    free_lines:  []
+    fixed_lines: []
+
+    final_pass:
+      enabled:       true
+      warm_start:    true
+      adopt_if:      chi2_improves
+      inherit_in_mc: true
+
+
+# =============================================================================
+# SECTION 5: Non-parametric spectral moments
+# =============================================================================
+
+moments:
+  - label: MGII_2800
+    lines: [mgii_2796, mgii_2803]
+  - label: HBETA
+    lines: [hbeta]
+  - label: OIII_5007
+    lines: [oiii_5007]

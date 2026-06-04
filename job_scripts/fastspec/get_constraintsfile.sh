@@ -1,7 +1,6 @@
 #!/bin/bash
-set -euo pipefail
 
-source /dvs_ro/common/software/desi/desi_environment.sh main
+source /global/cfs/cdirs/desi/software/desi_environment.sh main
 module load fastspecfit/3.4.2
 
 CONSTRAINTS_SRC=$(python -c "from importlib.resources import files; print(files('fastspecfit') / 'data/emline-constraints.yaml')")
