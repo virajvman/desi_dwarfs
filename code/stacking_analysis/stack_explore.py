@@ -148,20 +148,33 @@ def select_sample(catalog, sample_name, z_min=0.05, z_max=0.1,
     return catalog[mask]
 
 
-def get_sample_spectra_with_linenorm(catalog_subset, spectra_data,line_norm="HALPHA"):
+def get_sample_spectra_with_linenorm(catalog_subset, spectra_data, line_norm="HALPHA", norm_col=None):
     """
     Extract spectra for galaxies in the catalog subset, along with their Halpha fluxes.
-    
+
+    Parameters
+    ----------
+    catalog_subset : Table
+    spectra_data : dict
+    line_norm : str
+        Line stem used to build the default normalization column
+        (``f"{line_norm}_FLUX"``).
+    norm_col : str or None
+        If given, use this catalog column directly for the normalization flux
+        (overrides ``f"{line_norm}_FLUX"``). e.g. ``"HALPHA_BOXFLUX"`` to
+        normalize by the boxcar Halpha flux instead of the Gaussian fit.
+
     Returns
     -------
     fluxes : 2D array (n_spectra, n_wavelengths)
     ivars : 2D array (n_spectra, n_wavelengths)
-    halpha_fluxes : 1D array (n_spectra,) - Halpha flux from catalog
+    halpha_fluxes : 1D array (n_spectra,) - line flux from catalog
     n_matched : int
     """
     cat_targetids = catalog_subset["TARGETID"]
-    
-    cat_line = catalog_subset[f"{line_norm}_FLUX"]
+
+    col = norm_col if norm_col is not None else f"{line_norm}_FLUX"
+    cat_line = catalog_subset[col]
     
     spec_targetids = spectra_data["targetid"]
     

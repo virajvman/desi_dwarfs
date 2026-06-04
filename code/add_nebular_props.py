@@ -48,10 +48,10 @@ The direct-method fit uses one of two strategies (set via
         abundances using the Stage-1 posteriors as priors. Bounds the
         pathological posteriors that make the single-stage fit slow.
 
-The per-row direct-method UltraNest fits are cached by TARGETID at
-``<NEBCORR_DEFAULT_FOLDER>/te_fit_cache_ultranest.fits`` (Plan A) or
-``te_fit_cache_ultranest_infprior.fits`` (Plan B); the two methods never
-share a cache file. Subsequent runs reuse cached rows and only fit TARGETIDs
+The per-row direct-method UltraNest fits are cached by TARGETID. Plan A/B and
+OII/SII density diagnostic each use a separate cache file (e.g.
+``te_fit_cache_ultranest.fits`` for OII Plan A,
+``te_fit_cache_ultranest_sii.fits`` for SII Plan A). Subsequent runs reuse cached rows and only fit TARGETIDs
 that are new (or whose cached row has ``fit_success=False`` / NaN
 ``twelve_log_OH``, which are always retried). The cache is cumulative across
 catalog versions; pass ``--overwrite-te-cache`` to force a fresh UltraNest
@@ -64,6 +64,8 @@ Usage:
         --overwrite-te-cache
     python add_nebular_props.py /path/to/desi_dr1_dwarf_catalog.fits \\
         --use-informative-priors
+    python add_nebular_props.py /path/to/desi_dr1_dwarf_catalog.fits \\
+        --density-diagnostic SII
 """
 
 import argparse
@@ -101,11 +103,14 @@ TE_MIN_NUM_LIVE_POINTS = 400
 
 # Line-SNR gating for the direct-method fits. Only rows with at least
 # TE_MIN_LINES of these lines at SNR >= TE_SNR_VAL get a TE_* fit.
-TE_LINE_NAMES = ["HALPHA", "HBETA", "HGAMMA",
-                 "OIII_4363", "OIII_5007",
-                 "OII_3726", "OII_3729"]
+_TE_LINE_NAMES_BASE = ["HALPHA", "HBETA", "HGAMMA",
+                       "OIII_4363", "OIII_5007",
+                       "OII_3726", "OII_3729"]
 TE_SNR_VAL = 3
-TE_MIN_LINES = 7
+
+# Density diagnostic for the direct-method fit: 'OII' ([O II] 3726/3729) or
+# 'SII' ([S II] 6716/6731). CLI --density-diagnostic overrides this constant.
+TE_DENSITY_DIAGNOSTIC = "OII"
 
 # UltraNest run() termination guards. Bound pathological fits so a few hard
 # objects can't stall the whole parallel batch (see nebular_stuff/
@@ -120,6 +125,14 @@ TE_SAMPLER_KWARGS = {"frac_remain": 0.01, "max_iters": 40000, "max_ncalls": int(
 # constant. The two methods use separate TE-fit cache files so their cached
 # results never mix.
 TE_USE_INFORMATIVE_PRIORS = False
+
+
+def _te_line_gating(density_diagnostic):
+    """Line-SNR mask lines and min_lines for the direct-method TE fit."""
+    names = list(_TE_LINE_NAMES_BASE)
+    if density_diagnostic == "SII":
+        names.extend(["SII_6716", "SII_6731"])
+    return names, len(names)
 
 
 def main(argv=None):
@@ -161,6 +174,17 @@ def main(argv=None):
             "module constant. Uses a separate TE-fit cache file."
         ),
     )
+    parser.add_argument(
+        "--density-diagnostic",
+        choices=("OII", "SII"),
+        default=None,
+        help=(
+            "Low-ionization doublet constraining electron density in the "
+            "direct-method fit: OII ([O II] 3726/3729, default) or SII "
+            "([S II] 6716/6731). Overrides TE_DENSITY_DIAGNOSTIC. Uses a "
+            "separate TE-fit cache file from the other diagnostic."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if not os.path.isfile(args.catalog_path):
@@ -169,17 +193,20 @@ def main(argv=None):
     use_informative_priors = (
         args.use_informative_priors or TE_USE_INFORMATIVE_PRIORS
     )
+    density_diagnostic = args.density_diagnostic or TE_DENSITY_DIAGNOSTIC
+    te_line_names, te_min_lines = _te_line_gating(density_diagnostic)
 
     build_spec_derived_hdu(
         args.catalog_path,
         verbose=not args.quiet,
         n_jobs=N_JOBS,
         min_num_live_points=TE_MIN_NUM_LIVE_POINTS,
-        te_line_names=TE_LINE_NAMES,
+        te_line_names=te_line_names,
         te_snr_val=TE_SNR_VAL,
-        te_min_lines=TE_MIN_LINES,
+        te_min_lines=te_min_lines,
         sampler_kwargs=TE_SAMPLER_KWARGS,
         use_informative_priors=use_informative_priors,
+        density_diagnostic=density_diagnostic,
         overwrite_te_cache=args.overwrite_te_cache,
     )
 

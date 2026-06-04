@@ -23,6 +23,38 @@ from data_model import spec_derived_hdu_datamodel
 # IVAR can yield spuriously high SNR.
 DEFAULT_MIN_LINE_FLUX = 1.0
 
+# Which FastSpec line-flux family to use for ALL nebular calculations (SNR
+# gates, strong-line and direct metallicities, SFR / Balmer decrement).
+# Column names are built as f"{LINE}_{line_flux_type}" and
+# f"{LINE}_{line_flux_type}_IVAR".
+#   "FLUX"    -> Gaussian-fit line fluxes  ({LINE}_FLUX)
+#   "BOXFLUX" -> boxcar line fluxes        ({LINE}_BOXFLUX)
+# Flip to "FLUX" to revert every downstream calculation to the Gaussian fits.
+line_flux_type = "BOXFLUX"
+
+
+def _total_oii_flux(cat):
+    """Total [OII] 3726+3729 doublet flux.
+    FLUX: deblended components are added. BOXFLUX: OII_3726_BOXFLUX is already
+    the full doublet (OII_3729_BOXFLUX is the same blended total), so use it
+    alone -- adding 3729 would double-count. Strong-line metallicities only
+    need the total. (The direct/PyNeb method instead always uses the resolved
+    _FLUX doublet, see pn_functions._flux_and_err.)"""
+    oii = np.asarray(cat[f"OII_3726_{line_flux_type}"])
+    if line_flux_type == "BOXFLUX":
+        return oii
+    return oii + np.asarray(cat[f"OII_3729_{line_flux_type}"])
+
+
+def _oii_pair_for_z_r23_n2(cat, i):
+    """(OII3726, OII3729) row-i pair for Z_R23_N2.
+    FLUX: resolved (3726, 3729). BOXFLUX: (total, 0.0) since OII_3726_BOXFLUX
+    is already the full doublet (avoids double-counting in Z_R23_N2's sum)."""
+    a = float(cat[f"OII_3726_{line_flux_type}"].data[i])
+    if line_flux_type == "BOXFLUX":
+        return a, 0.0
+    return a, float(cat[f"OII_3729_{line_flux_type}"].data[i])
+
 
 def line_snr_mask(
     fastspec_cat,
@@ -37,8 +69,8 @@ def line_snr_mask(
     """
     n_pass = np.zeros(len(fastspec_cat), dtype=int)
     for li in line_names:
-        flux = np.asarray(fastspec_cat[f"{li}_FLUX"], dtype=np.float64)
-        ivar = np.asarray(fastspec_cat[f"{li}_FLUX_IVAR"], dtype=np.float64)
+        flux = np.asarray(fastspec_cat[f"{li}_{line_flux_type}"], dtype=np.float64)
+        ivar = np.asarray(fastspec_cat[f"{li}_{line_flux_type}_IVAR"], dtype=np.float64)
         with np.errstate(invalid="ignore"):
             snr = flux * np.sqrt(ivar)
         line_ok = (
@@ -57,21 +89,53 @@ def compute_o32(fastspec):
     '''
     Function that computes the O32 = OIII 5007 / OII 3726 index
     '''
-    o32 = np.array(fastspec["OIII_5007_FLUX"]) / ( np.array(fastspec["OII_3726_FLUX"]) + np.array(fastspec["OII_3729_FLUX"]) )
+    o32 = np.array(fastspec[f"OIII_5007_{line_flux_type}"]) / _total_oii_flux(fastspec)
     return o32 
 
 def compute_r32(fastspec):
     '''
     Function that computes the R32 = (OIII 4959,5007 + OI 3726) / Hbeta index
     '''
-    r32 =  ( fastspec["OIII_5007_FLUX"] + fastspec["OIII_4959_FLUX"] + fastspec["OII_3726_FLUX"] + fastspec["OII_3729_FLUX"] ) / fastspec["HBETA_FLUX"]
+    r32 =  ( np.array(fastspec[f"OIII_5007_{line_flux_type}"]) + np.array(fastspec[f"OIII_4959_{line_flux_type}"]) + _total_oii_flux(fastspec) ) / np.array(fastspec[f"HBETA_{line_flux_type}"])
     return np.array(r32)
 
 ##########################################################
 ##########################################################
-# METALLICITY (strong line but we will add direct method later?)
+# STRONG LINE METALLICITY
 ##########################################################
 ##########################################################
+
+
+## NOTES: the below code is just for reference, but I am showing that OII box flux is same as sum of the two oii fluxes
+## So in code where I care about total oii flux, I can just use boxflux
+
+# mask = line_snr_mask(fastspec, line_names=["OII_3726", "OII_3729"], snr_val=5,min_lines=2)
+
+# oii_box_1 = np.array(fastspec["OII_3726_BOXFLUX"].data)[mask]
+# oii_box_2 = np.array(fastspec["OII_3729_BOXFLUX"].data)[mask]
+
+# total_oii = np.array(fastspec["OII_3726_FLUX"].data)[mask] + np.array(fastspec["OII_3729_FLUX"].data)[mask]
+
+
+# ### so this is pretty good!!
+# #the oii boxflux for the two doublets agrees with the total addition of the two oii fluxes. 
+# #so for the strong line metallicities we can just use boxflux as we do not care about dobulet ratio
+
+# plt.scatter(total_oii, oii_box_2,s=1,alpha=0.25)
+# plt.yscale("log")
+# plt.xscale("log")
+# plt.xlim([1,1000])
+# plt.ylim([1,1000])
+# plt.plot([1,1000], [1,1000],color="k")
+# plt.show()
+
+# plt.scatter(oii_box_1, oii_box_2,s=1,alpha=0.25)
+# plt.yscale("log")
+# plt.xscale("log")
+# plt.xlim([1,1000])
+# plt.ylim([1,1000])
+# plt.plot([1,1000], [1,1000],color="k")
+# plt.show()
 
 import numpy as np
 from matplotlib import pyplot as plt
@@ -81,8 +145,8 @@ from tqdm import trange
 
 def line_snr(cat, line_flux, snr_val=3.0, min_flux=DEFAULT_MIN_LINE_FLUX):
     """Per-row mask: finite flux/ivar, flux > min_flux, and SNR > snr_val."""
-    flux = np.asarray(cat[f"{line_flux}_FLUX"].data, dtype=np.float64)
-    ivar = np.asarray(cat[f"{line_flux}_FLUX_IVAR"].data, dtype=np.float64)
+    flux = np.asarray(cat[f"{line_flux}_{line_flux_type}"].data, dtype=np.float64)
+    ivar = np.asarray(cat[f"{line_flux}_{line_flux_type}_IVAR"].data, dtype=np.float64)
     with np.errstate(invalid="ignore"):
         snr = flux * np.sqrt(ivar)
     return (
@@ -188,8 +252,8 @@ def print_line_snr_detection_stats(
 
     missing = []
     for line in line_names:
-        flux_col = f"{line}_FLUX"
-        ivar_col = f"{line}_FLUX_IVAR"
+        flux_col = f"{line}_{line_flux_type}"
+        ivar_col = f"{line}_{line_flux_type}_IVAR"
         if flux_col not in colnames or ivar_col not in colnames:
             missing.append(line)
             continue
@@ -252,20 +316,19 @@ def get_metallicity_P16(fastspec_cat):
     tot_mask = oii_mask_1 & oii_mask_2 & oiii_mask_1 & oiii_mask_2 & hbeta_mask & halpha_mask & nii_mask_1 & nii_mask_2
 
     fastspec_cat = fastspec_cat[tot_mask]
-    
-    oii_3726_flux = fastspec_cat["OII_3726_FLUX"].data
-    oii_3729_flux = fastspec_cat["OII_3729_FLUX"].data
 
-    oiii_4959_flux = fastspec_cat["OIII_4959_FLUX"].data
-    oiii_5007_flux = fastspec_cat["OIII_5007_FLUX"].data
+    total_oii_flux = _total_oii_flux(fastspec_cat)
 
-    nii_flux = fastspec_cat["NII_6584_FLUX"].data
+    oiii_4959_flux = fastspec_cat[f"OIII_4959_{line_flux_type}"].data
+    oiii_5007_flux = fastspec_cat[f"OIII_5007_{line_flux_type}"].data
+
+    nii_flux = fastspec_cat[f"NII_6584_{line_flux_type}"].data
     
-    hbeta_flux = fastspec_cat["HBETA_FLUX"].data
-    halpha_flux = fastspec_cat["HALPHA_FLUX"].data
+    hbeta_flux = fastspec_cat[f"HBETA_{line_flux_type}"].data
+    halpha_flux = fastspec_cat[f"HALPHA_{line_flux_type}"].data
 
     R3 = (oiii_5007_flux * 1.33)/hbeta_flux
-    R2 = (oii_3726_flux + oii_3729_flux) / hbeta_flux
+    R2 = total_oii_flux / hbeta_flux
     N2 = nii_flux * 1.33 / hbeta_flux
     
     oh_vals = return_metallicity_estimates_PG16(R2, R3, N2)
@@ -299,19 +362,18 @@ def get_metallicity_P16_tgid(tgid, fastspec_cat):
 
     else:
     
-        oii_3726_flux = fastspec_cat["OII_3726_FLUX"].data
-        oii_3729_flux = fastspec_cat["OII_3729_FLUX"].data
+        total_oii_flux = _total_oii_flux(fastspec_cat)
     
-        oiii_4959_flux = fastspec_cat["OIII_4959_FLUX"].data
-        oiii_5007_flux = fastspec_cat["OIII_5007_FLUX"].data
+        oiii_4959_flux = fastspec_cat[f"OIII_4959_{line_flux_type}"].data
+        oiii_5007_flux = fastspec_cat[f"OIII_5007_{line_flux_type}"].data
     
-        nii_flux = fastspec_cat["NII_6584_FLUX"].data
+        nii_flux = fastspec_cat[f"NII_6584_{line_flux_type}"].data
         
-        hbeta_flux = fastspec_cat["HBETA_FLUX"].data
-        halpha_flux = fastspec_cat["HALPHA_FLUX"].data
+        hbeta_flux = fastspec_cat[f"HBETA_{line_flux_type}"].data
+        halpha_flux = fastspec_cat[f"HALPHA_{line_flux_type}"].data
     
         R3 = (oiii_5007_flux * 1.33)/hbeta_flux
-        R2 = (oii_3726_flux + oii_3729_flux) / hbeta_flux
+        R2 = total_oii_flux / hbeta_flux
         N2 = nii_flux * 1.33 / hbeta_flux
         
         oh_vals = return_metallicity_estimates_PG16(R2, R3, N2)
@@ -454,9 +516,10 @@ def get_metallicity_S22(fastspec_cat):
     zmetals = []
     for i in trange(len(fastspec_cat_f)):
     
-        zmet_i = Z_R23_N2(fastspec_cat_f["OII_3726_FLUX"].data[i], fastspec_cat_f["OII_3729_FLUX"].data[i],
-                 fastspec_cat_f["HBETA_FLUX"].data[i], fastspec_cat_f["OIII_4959_FLUX"].data[i], fastspec_cat_f["OIII_5007_FLUX"].data[i],
-                 fastspec_cat_f["HALPHA_FLUX"].data[i], fastspec_cat_f["NII_6584_FLUX"].data[i] )
+        oii_a, oii_b = _oii_pair_for_z_r23_n2(fastspec_cat_f, i)
+        zmet_i = Z_R23_N2(oii_a, oii_b,
+                 fastspec_cat_f[f"HBETA_{line_flux_type}"].data[i], fastspec_cat_f[f"OIII_4959_{line_flux_type}"].data[i], fastspec_cat_f[f"OIII_5007_{line_flux_type}"].data[i],
+                 fastspec_cat_f[f"HALPHA_{line_flux_type}"].data[i], fastspec_cat_f[f"NII_6584_{line_flux_type}"].data[i] )
 
         zmetals.append(zmet_i[0])
 
@@ -958,6 +1021,22 @@ TE_FIT_CACHE_FILENAME = "te_fit_cache_ultranest.fits"
 # results never mix with the single-stage (Plan A) cache keyed by the same
 # TARGETIDs.
 TE_FIT_CACHE_FILENAME_INFPRIOR = "te_fit_cache_ultranest_infprior.fits"
+# SII density diagnostic uses separate cache files so OII and SII fits never mix.
+TE_FIT_CACHE_FILENAME_SII = "te_fit_cache_ultranest_sii.fits"
+TE_FIT_CACHE_FILENAME_INFPRIOR_SII = "te_fit_cache_ultranest_infprior_sii.fits"
+
+
+def _te_cache_filename(use_informative_priors, density_diagnostic='OII'):
+    """Return the TE-fit cache basename for the given fit method and density diagnostic."""
+    if density_diagnostic == 'SII':
+        return (
+            TE_FIT_CACHE_FILENAME_INFPRIOR_SII
+            if use_informative_priors else TE_FIT_CACHE_FILENAME_SII
+        )
+    return (
+        TE_FIT_CACHE_FILENAME_INFPRIOR
+        if use_informative_priors else TE_FIT_CACHE_FILENAME
+    )
 
 # Schema = exact output of pn_functions.compute_direct_metallicities (lowercase
 # fitter-native names plus TARGETID). The scatter-back loop in
@@ -1093,6 +1172,7 @@ def build_spec_derived_hdu(
     te_min_lines=7,
     sampler_kwargs=None,
     use_informative_priors=False,
+    density_diagnostic='OII',
     te_cache_dir=NEBCORR_DEFAULT_FOLDER,
     overwrite_te_cache=False,
 ):
@@ -1158,6 +1238,10 @@ def build_spec_derived_hdu(
         abundances using the Stage-1 posteriors as priors. The two methods use
         separate cache files (``TE_FIT_CACHE_FILENAME`` vs
         ``TE_FIT_CACHE_FILENAME_INFPRIOR``) so their results never mix.
+    density_diagnostic : {'OII', 'SII'}
+        Low-ionization doublet used to constrain electron density in the
+        direct-method fit (forwarded to ``compute_direct_metallicities``).
+        OII and SII use separate TE-fit cache files (``_te_cache_filename``).
     te_line_names : iterable of str
         Emission lines fed to line_snr_mask for the te_mask. Default is the
         seven lines required for n_e, T_e, A_V, O+/H+ and O++/H+:
@@ -1259,10 +1343,10 @@ def build_spec_derived_hdu(
 
     halpha_ew = np.asarray(fspec_cat["HALPHA_EW"].data, dtype=float)
     halpha_ew_ivar = np.asarray(fspec_cat["HALPHA_EW_IVAR"].data, dtype=float)
-    halpha_flux = np.asarray(fspec_cat["HALPHA_FLUX"].data, dtype=float)
-    halpha_flux_ivar = np.asarray(fspec_cat["HALPHA_FLUX_IVAR"].data, dtype=float)
-    hbeta_flux = np.asarray(fspec_cat["HBETA_FLUX"].data, dtype=float)
-    hbeta_flux_ivar = np.asarray(fspec_cat["HBETA_FLUX_IVAR"].data, dtype=float)
+    halpha_flux = np.asarray(fspec_cat[f"HALPHA_{line_flux_type}"].data, dtype=float)
+    halpha_flux_ivar = np.asarray(fspec_cat[f"HALPHA_{line_flux_type}_IVAR"].data, dtype=float)
+    hbeta_flux = np.asarray(fspec_cat[f"HBETA_{line_flux_type}"].data, dtype=float)
+    hbeta_flux_ivar = np.asarray(fspec_cat[f"HBETA_{line_flux_type}_IVAR"].data, dtype=float)
     with np.errstate(invalid="ignore"):
         halpha_ew_snr = halpha_ew * np.sqrt(halpha_ew_ivar)
         halpha_flux_snr = halpha_flux * np.sqrt(halpha_flux_ivar)
@@ -1437,7 +1521,7 @@ def build_spec_derived_hdu(
     required_z = [
         f"{stem}_{suffix}"
         for stem in _R23_N2_LINE_STEMS
-        for suffix in ("FLUX", "FLUX_IVAR")
+        for suffix in (line_flux_type, f"{line_flux_type}_IVAR")
     ]
     missing_z = [c for c in required_z if c not in fspec_cat.colnames]
     if missing_z:
@@ -1450,14 +1534,15 @@ def build_spec_derived_hdu(
     mask_z = r23_n2_line_snr_mask(fspec_cat)
     for i in np.flatnonzero(mask_z):
         try:
+            oii_a, oii_b = _oii_pair_for_z_r23_n2(fspec_cat, i)
             z_i = Z_R23_N2(
-                fspec_cat["OII_3726_FLUX"].data[i],
-                fspec_cat["OII_3729_FLUX"].data[i],
-                fspec_cat["HBETA_FLUX"].data[i],
-                fspec_cat["OIII_4959_FLUX"].data[i],
-                fspec_cat["OIII_5007_FLUX"].data[i],
-                fspec_cat["HALPHA_FLUX"].data[i],
-                fspec_cat["NII_6584_FLUX"].data[i],
+                oii_a,
+                oii_b,
+                fspec_cat[f"HBETA_{line_flux_type}"].data[i],
+                fspec_cat[f"OIII_4959_{line_flux_type}"].data[i],
+                fspec_cat[f"OIII_5007_{line_flux_type}"].data[i],
+                fspec_cat[f"HALPHA_{line_flux_type}"].data[i],
+                fspec_cat[f"NII_6584_{line_flux_type}"].data[i],
             )
             z_gas[i] = z_i[0]
         except Exception:
@@ -1562,9 +1647,8 @@ def build_spec_derived_hdu(
         # Cumulative per-TARGETID UltraNest fit cache. Disable entirely by
         # passing te_cache_dir=None. Each fit method gets its own cache file.
         use_cache = (te_cache_dir is not None)
-        cache_fname = (
-            TE_FIT_CACHE_FILENAME_INFPRIOR
-            if use_informative_priors else TE_FIT_CACHE_FILENAME
+        cache_fname = _te_cache_filename(
+            use_informative_priors, density_diagnostic,
         )
         te_cache_path = (
             os.path.join(te_cache_dir, cache_fname)
@@ -1616,6 +1700,7 @@ def build_spec_derived_hdu(
                 else "single-stage joint (Plan A)"
             )
             print(f"  TE fit method: {method_name}")
+            print(f"  TE density diagnostic: {density_diagnostic}")
             if use_cache:
                 print(
                     f"  TE cache ({cache_fname}): reused {n_cached}/{n_te} "
@@ -1630,6 +1715,7 @@ def build_spec_derived_hdu(
                 verbose=verbose,
                 sampler_kwargs=sampler_kwargs,
                 use_informative_priors=use_informative_priors,
+                density_diagnostic=density_diagnostic,
             )
         else:
             fit_tab_new = None

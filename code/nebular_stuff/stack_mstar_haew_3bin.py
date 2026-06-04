@@ -22,9 +22,10 @@ All of the heavy lifting (catalog/spectra loading, TARGETID matching,
 Halpha-flux normalization, bootstrap stacking, and the FastSpecFit FITS
 writer) is reused from `code/stacking_analysis/stack_explore.py`.
 
-Normalization: each spectrum is divided by its catalog HALPHA_FLUX before
-stacking (norm_method="catalog", line_norm="HALPHA"), so the stack is a
-Halpha-normalized mean and bright/close galaxies do not dominate.
+Normalization: each spectrum is divided by its catalog HALPHA_BOXFLUX
+(boxcar Halpha flux) before stacking (norm_method="catalog",
+norm_col="HALPHA_BOXFLUX"), so the stack is a Halpha-normalized mean and
+bright/close galaxies do not dominate.
 
 Outputs (one per mstar-bin x EW-bin, combined across samples), written to
 STACK_PATH:
@@ -120,8 +121,13 @@ OVERWRITE_STACKS = True
 WAVE_MAX = 6800
 
 # Spectrum-normalization method used inside bootstrap_stack. "catalog"
-# normalizes each spectrum by its catalog HALPHA_FLUX before stacking.
+# normalizes each spectrum by its catalog normalization flux before stacking.
 NORM_METHOD = "catalog"
+
+# Catalog column used as the per-spectrum normalization flux. Using the
+# boxcar Halpha flux (HALPHA_BOXFLUX) instead of the Gaussian-fit HALPHA_FLUX
+# keeps the stack normalization self-consistent with boxcar line measurements.
+NORM_COL = "HALPHA_BOXFLUX"
 
 # Reference emission lines (rest-frame vacuum, A) used only as visual guides
 # in the comparison plots.
@@ -395,9 +401,9 @@ def main():
                     saved = pickle.load(f)
             else:
                 # Match catalog rows to spectra by TARGETID and pull the
-                # per-spectrum Halpha flux for normalization.
+                # per-spectrum Halpha boxcar flux (NORM_COL) for normalization.
                 out = get_sample_spectra_with_linenorm(
-                    sub_cat, spectra_data, line_norm="HALPHA",
+                    sub_cat, spectra_data, line_norm="HALPHA", norm_col=NORM_COL,
                 )
                 fluxes, ivars, halpha_fluxes, tgids_matched = out
 
@@ -409,7 +415,7 @@ def main():
                     continue
 
                 # Bootstrap-stack:
-                #   - normalize each spectrum by catalog Halpha flux
+                #   - normalize each spectrum by catalog Halpha boxcar flux
                 #   - draw N_DRAW indices WITH replacement, N_BOOTSTRAP times
                 #   - stack_spec = mean of realizations, stack_err = std
                 #   - all_stacks = (N_BOOTSTRAP, n_wave) realizations
@@ -558,3 +564,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+    TODO: check if SII and OII can be used interchangeably. and update the pyneb code

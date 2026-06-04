@@ -21,6 +21,12 @@ import pyneb as pn
 
 from cardelli_attenuation import *
 
+# Single switch (defined in sfr_and_metallicity) selecting which FastSpec
+# line-flux family the direct-method fit reads: "FLUX" (Gaussian) or
+# "BOXFLUX" (boxcar). sfr_and_metallicity imports pn_functions only lazily
+# (inside build_spec_derived_hdu), so importing it here is not circular.
+from sfr_and_metallicity import line_flux_type
+
 # ---------------------------------------------------------------------------
 # Atomic data
 # ---------------------------------------------------------------------------
@@ -79,6 +85,8 @@ O3_4959 = getInterpEmisGrid('O', 3, 4959)
 O3_5007 = getInterpEmisGrid('O', 3, 5007)
 N2_5755 = getInterpEmisGrid('N', 2, 5755)
 N2_6584 = getInterpEmisGrid('N', 2, 6584)
+S2_6716 = getInterpEmisGrid('S', 2, 6716)
+S2_6731 = getInterpEmisGrid('S', 2, 6731)
 
 H_gamma = getInterpRecEmisGrid('H', 1, 4340)
 H_beta  = getInterpRecEmisGrid('H', 1, 4861)
@@ -110,13 +118,13 @@ def calc_Av_Ha_Hb(Ha_Hb, Ha_Hb_intrinsic):
 # ---------------------------------------------------------------------------
 # Parameters: (ne_oii, thi_oiii, Av, log_O2_abund, log_O3_abund)
 # Ratios returned, in order:
-#   0. [O II] 3726 / [O II] 3729           (n_e)
+#   0. density doublet (n_e): [O II] 3726/3729 or [S II] 6716/6731
 #   1. Hbeta / Halpha                      (A_V)
 #   2. Hgamma / Hbeta                      (A_V)
 #   3. [O III] 4363 / [O III] 5007         (T_high)
 #   4. ([O II] 3726 + 3729) / Hbeta        (O+/H+)
 #   5. [O III] 5007 / Hbeta                (O++/H+)
-def r_model(theta):
+def r_model(theta, density_diagnostic='OII'):
     if theta.ndim == 2:
         theta = theta.T
 
@@ -127,10 +135,17 @@ def r_model(theta):
     tlow = np.max([tlow, np.ones_like(tlow) * tem_min], axis=0)
     thi = thi_oiii
 
-    r_O2_ratio = (
-        (O2_3726(tlow, ne) * transmission_Av(3726., Av))
-        / (O2_3729(tlow, ne) * transmission_Av(3729., Av))
-    )
+    # Density-diagnostic ratio (index 0): low-ionization doublet at tlow.
+    if density_diagnostic == 'SII':
+        r_dens_ratio = (
+            (S2_6716(tlow, ne) * transmission_Av(6716., Av))
+            / (S2_6731(tlow, ne) * transmission_Av(6731., Av))
+        )
+    else:
+        r_dens_ratio = (
+            (O2_3726(tlow, ne) * transmission_Av(3726., Av))
+            / (O2_3729(tlow, ne) * transmission_Av(3729., Av))
+        )
     r_Hb_Ha = (
         (H_beta(thi, ne) * transmission_Av(4861., Av))
         / (H_alpha(thi, ne) * transmission_Av(6563., Av))
@@ -152,15 +167,15 @@ def r_model(theta):
         / (H_beta(thi, ne) * transmission_Av(4861., Av))
     )
 
-    rs = np.array([r_O2_ratio, r_Hb_Ha, r_Hg_Hb,
+    rs = np.array([r_dens_ratio, r_Hb_Ha, r_Hg_Hb,
                    r_O3_4363_5007, r_O2_Hb, r_O3_Hb])
     if theta.ndim == 1:
         return rs[:, 0]
     return rs
 
 
-def log_likelihood(theta, r, r_err):
-    model = r_model(theta)
+def log_likelihood(theta, r, r_err, density_diagnostic='OII'):
+    model = r_model(theta, density_diagnostic)
     if model.ndim == 1:
         return -0.5 * np.sum((r - model) ** 2 / r_err ** 2)
     r = np.expand_dims(r, axis=-1)
@@ -191,6 +206,16 @@ RATIO_SPECS = [
 
 PARAM_NAMES = ['ne_oii', 'te_oiii', 'Av', 'log_O2_abund', 'log_O3_abund']
 
+# Density-diagnostic doublet, selectable per fit. Overrides RATIO_SPECS[0].
+# 'OII' -> [O II] 3726/3729; 'SII' -> [S II] 6716/6731 (PyNeb fiducial data).
+DENSITY_RATIO_SPECS = {
+    'OII': ('OII_3726', 'OII_3729'),
+    'SII': ('SII_6716', 'SII_6731'),
+}
+
+# O II 3726/3729 always use deblended Gaussian _FLUX (see _flux_and_err).
+# [S II] 6716/6731 follow line_flux_type when used as the density diagnostic.
+
 # Indices into RATIO_SPECS / r_model output for the Balmer-decrement ratios
 # (Hbeta/Halpha, Hgamma/Hbeta) that constrain A_V. Used for the extinction
 # goodness-of-fit diagnostic (TE_CHI2_AV / TE_CHI2_AV_ML).
@@ -205,8 +230,13 @@ PRIOR_HIGHS = np.array([den_max * 0.999, tem_max * 0.999, 5.0, -2.0, -2.0])
 def _flux_and_err(row, line):
     """Return (flux, sigma) for a line key like 'OIII_4363'.
     Treats missing columns, non-finite values, or ivar <= 0 as missing."""
-    flux_col = f'{line}_FLUX'
-    ivar_col = f'{line}_FLUX_IVAR'
+    # OII doublet must stay RESOLVED for the density (3726/3729) and O+/H+
+    # ratios, so OII_3726 / OII_3729 ALWAYS read the deblended Gaussian _FLUX,
+    # regardless of line_flux_type. All other lines follow line_flux_type
+    # (e.g. BOXFLUX -> {LINE}_BOXFLUX).
+    _ftype = "FLUX" if line in ("OII_3726", "OII_3729") else line_flux_type
+    flux_col = f'{line}_{_ftype}'
+    ivar_col = f'{line}_{_ftype}_IVAR'
     colnames = getattr(row, 'colnames', None)
     if colnames is None:
         colnames = row.columns if hasattr(row, 'columns') else []
@@ -219,13 +249,20 @@ def _flux_and_err(row, line):
     return float(f), float(1.0 / np.sqrt(ivar))
 
 
-def _build_ratios(row):
-    """Build the ratio vector, its error vector, and a mask of usable ratios."""
+def _build_ratios(row, density_diagnostic='OII'):
+    """Build the ratio vector, its error vector, and a mask of usable ratios.
+
+    The density-diagnostic ratio (index 0) uses [O II] 3726/3729 by default,
+    or [S II] 6716/6731 when density_diagnostic='SII'. All other ratios
+    (including O+/H+, which always uses the O II doublet) are unchanged."""
     n = len(RATIO_SPECS)
     r = np.full(n, np.nan)
     r_err = np.full(n, np.nan)
 
-    for i, (num, den) in enumerate(RATIO_SPECS):
+    specs = list(RATIO_SPECS)
+    specs[0] = DENSITY_RATIO_SPECS[density_diagnostic]
+
+    for i, (num, den) in enumerate(specs):
         if isinstance(num, tuple):
             pairs = [_flux_and_err(row, ln) for ln in num]
             fs = [p[0] for p in pairs]
@@ -383,7 +420,8 @@ def _run_sampler(param_names, loglike, transform,
 def _fit_row_ultranest(r, r_err, mask,
                        min_num_live_points=400,
                        verbose_sampler=False,
-                       sampler_kwargs=None):
+                       sampler_kwargs=None,
+                       density_diagnostic='OII'):
     """Nested sampling with UltraNest. Returns posterior 16/50/84 percentiles.
     Matches the inference approach of Scholte+2026."""
     try:
@@ -413,9 +451,9 @@ def _fit_row_ultranest(r, r_err, mask,
         thetas = np.asarray(thetas)
         if thetas.ndim == 1:
             # UltraNest sometimes passes a single point even in vectorized mode.
-            model = r_model(thetas)
+            model = r_model(thetas, density_diagnostic)
             return -0.5 * np.sum(((r_m - model[mask_idx]) / e_m) ** 2)
-        models = r_model(thetas)                  # (n_ratios, N)
+        models = r_model(thetas, density_diagnostic)   # (n_ratios, N)
         resid = (r_m_col - models[mask_idx]) / e_m_col
         return -0.5 * np.sum(resid ** 2, axis=0)  # (N,)
 
@@ -533,7 +571,8 @@ def _twelve_logOH_from_samples(samples):
 def _fit_row_ultranest_twostage(r, r_err, mask,
                                 min_num_live_points=400,
                                 verbose_sampler=False,
-                                sampler_kwargs=None):
+                                sampler_kwargs=None,
+                                density_diagnostic='OII'):
     """Two-stage informative-prior nested-sampling fit (Plan B).
 
     Returns the same result-dict contract as ``_fit_row_ultranest`` so the
@@ -570,11 +609,11 @@ def _fit_row_ultranest_twostage(r, r_err, mask,
         if thetas.ndim == 1:
             # Pad with dummy abundances; ratios 0-3 don't depend on them.
             theta5 = np.concatenate([thetas, [-4.0, -4.0]])
-            model = r_model(theta5)
+            model = r_model(theta5, density_diagnostic)
             return -0.5 * np.sum(((r1 - model[idx1]) / e1) ** 2)
         pad = np.full((thetas.shape[0], 2), -4.0)
         theta5 = np.hstack([thetas, pad])
-        models = r_model(theta5)                   # (n_ratios, N)
+        models = r_model(theta5, density_diagnostic)   # (n_ratios, N)
         resid = (r1_col - models[idx1]) / e1_col
         return -0.5 * np.sum(resid ** 2, axis=0)
 
@@ -673,28 +712,31 @@ def _fit_row_ultranest_twostage(r, r_err, mask,
 # ---------------------------------------------------------------------------
 # Public driver
 # ---------------------------------------------------------------------------
-def _fit_one_row(row, min_num_live_points, verbose_sampler, sampler_kwargs):
+def _fit_one_row(row, min_num_live_points, verbose_sampler, sampler_kwargs,
+                 density_diagnostic='OII'):
     """Top-level per-row worker. Defined at module level (not nested) so it
     can be pickled for joblib's loky workers."""
-    r, r_err, mask = _build_ratios(row)
+    r, r_err, mask = _build_ratios(row, density_diagnostic)
     return _fit_row_ultranest(
         r, r_err, mask,
         min_num_live_points=min_num_live_points,
         verbose_sampler=verbose_sampler,
         sampler_kwargs=sampler_kwargs,
+        density_diagnostic=density_diagnostic,
     )
 
 
 def _fit_one_row_twostage(row, min_num_live_points, verbose_sampler,
-                          sampler_kwargs):
+                          sampler_kwargs, density_diagnostic='OII'):
     """Top-level per-row worker for the two-stage fit (Plan B). Module-level
     so it can be pickled for joblib's loky workers."""
-    r, r_err, mask = _build_ratios(row)
+    r, r_err, mask = _build_ratios(row, density_diagnostic)
     return _fit_row_ultranest_twostage(
         r, r_err, mask,
         min_num_live_points=min_num_live_points,
         verbose_sampler=verbose_sampler,
         sampler_kwargs=sampler_kwargs,
+        density_diagnostic=density_diagnostic,
     )
 
 
@@ -704,7 +746,8 @@ def compute_direct_metallicities(catalog,
                                  verbose=False,
                                  verbose_sampler=False,
                                  sampler_kwargs=None,
-                                 use_informative_priors=False):
+                                 use_informative_priors=False,
+                                 density_diagnostic='OII'):
     """
     Compute direct-Te oxygen abundances row-by-row from a line-flux catalog
     using UltraNest nested sampling (matches Scholte+2026).
@@ -712,9 +755,17 @@ def compute_direct_metallicities(catalog,
     Parameters
     ----------
     catalog : astropy.table.Table
-        Must contain {LINE}_FLUX and {LINE}_FLUX_IVAR columns. Required lines:
-        OIII_4363, OIII_5007, OII_3726, OII_3729, HBETA.
+        Must contain {LINE}_<line_flux_type> and {LINE}_<line_flux_type>_IVAR
+        columns, where <line_flux_type> is the switch imported from
+        sfr_and_metallicity ("FLUX" Gaussian or "BOXFLUX" boxcar). Required
+        lines: OIII_4363, OIII_5007, OII_3726, OII_3729, HBETA.
         At least one of HALPHA or HGAMMA must be present to constrain A_V.
+        Exception: the resolved O II doublet (OII_3726 / OII_3729) ALWAYS use
+        the deblended Gaussian _FLUX columns (regardless of line_flux_type)
+        because the O+/H+ ratio needs the individual lines. When
+        density_diagnostic='SII', SII_6716 and SII_6731 (with matching
+        _FLUX or _BOXFLUX per line_flux_type) must also be present for the
+        density constraint; O II is still required for O+/H+.
     n_jobs : int
         Number of parallel worker processes for the per-row fits.
         1 (default) runs serially in the main process.
@@ -737,6 +788,14 @@ def compute_direct_metallicities(catalog,
         informative-prior fit (``_fit_row_ultranest_twostage``, Plan B):
         fit ne/Te/Av first, then the abundances using the Stage-1 posteriors
         as priors. Both methods return the identical result-table schema.
+    density_diagnostic : {'OII', 'SII'}
+        Which low-ionization doublet constrains the electron density (ratio
+        index 0). 'OII' (default) uses [O II] 3726/3729; 'SII' uses
+        [S II] 6716/6731. The fitted density parameter is still reported in
+        the 'ne_oii' columns either way, and the O+/H+ abundance ratio always
+        uses the O II doublet. If the chosen doublet's lines are missing for a
+        row, that density ratio is masked out and the density becomes
+        prior-dominated for that row.
 
     Returns
     -------
@@ -753,6 +812,12 @@ def compute_direct_metallicities(catalog,
     if not isinstance(catalog, Table):
         raise TypeError('catalog must be an astropy.table.Table')
 
+    if density_diagnostic not in DENSITY_RATIO_SPECS:
+        raise ValueError(
+            f"density_diagnostic must be one of {tuple(DENSITY_RATIO_SPECS)}, "
+            f"got {density_diagnostic!r}"
+        )
+
     n_rows = len(catalog)
 
     # Cache TARGETIDs if available so the verbose printer can show them.
@@ -768,6 +833,7 @@ def compute_direct_metallicities(catalog,
         for idx, row in enumerate(catalog):
             fit = worker(
                 row, min_num_live_points, verbose_sampler, sampler_kwargs,
+                density_diagnostic,
             )
             fits.append(fit)
             if verbose:
@@ -796,6 +862,7 @@ def compute_direct_metallicities(catalog,
                         verbose=10 if verbose else 0)(
             delayed(worker)(
                 row, min_num_live_points, verbose_sampler, sampler_kwargs,
+                density_diagnostic,
             )
             for row in catalog
         )
