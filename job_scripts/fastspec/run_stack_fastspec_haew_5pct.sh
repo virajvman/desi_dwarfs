@@ -64,7 +64,7 @@ ec = EmlineConstraints('${constraintsfile}', lt)
 print('OK —', len(lt), 'lines; heii_4686 sigma_max =', ec.line_bounds('heii_4686')[1], 'km/s')
 "
 
-NCORES=16
+NCORES=32
 
 # Same external data dirs as the production fastspec job.
 export DESI_SPECTRO_REDUX=/dvs_ro/cfs/cdirs/desi/spectro/redux
