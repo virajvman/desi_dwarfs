@@ -466,10 +466,7 @@ def main(argv=None):
     print(f"    {out_fits}")
     print(f"    {out_ecsv}")
 
-    try:
-        make_all_plots(out_tab, plot_dir)
-    except Exception as e:
-        print(f"    (plots skipped: {e})")
+    make_all_plots(out_tab, plot_dir)
 
     print("\n[3] Done.")
     return 0
@@ -477,9 +474,11 @@ def main(argv=None):
 
 def make_all_plots(out_tab, plot_dir):
     """Write oh_av, te_ne_hahb, and obs_hahb vs M* figures."""
-    make_oh_av_plot(out_tab, plot_dir)
-    make_te_ne_hahb_plot(out_tab, plot_dir)
-    make_obs_hahb_plot(out_tab, plot_dir)
+    for plot_fn in (make_oh_av_plot, make_te_ne_hahb_plot, make_obs_hahb_plot):
+        try:
+            plot_fn(out_tab, plot_dir)
+        except Exception as e:
+            print(f"    ({plot_fn.__name__} skipped: {e})")
 
 
 def make_oh_av_plot(out_tab, plot_dir):
@@ -526,12 +525,11 @@ def make_te_ne_hahb_plot(out_tab, plot_dir):
         return
 
     fig, axes = plt.subplots(1, 3, figsize=(16, 5))
-    panels = [
-        ("NE_OII", r"$n_e$ [cm$^{-3}$]"),
-        ("TE_OIII", r"$T_e$ [K]"),
-        ("HA_HB_INTRINSIC", r"H$\alpha$/H$\beta$ (intrinsic)"),
-    ]
-    for col, ax, ylab in panels:
+    for col, ax, ylab in [
+        ("NE_OII", axes[0], r"$n_e$ [cm$^{-3}$]"),
+        ("TE_OIII", axes[1], r"$T_e$ [K]"),
+        ("HA_HB_INTRINSIC", axes[2], r"H$\alpha$/H$\beta$ (intrinsic)"),
+    ]:
         _plot_vs_mstar_by_ew(
             good, col, f"{col}_ERR_LO", f"{col}_ERR_HI", ylab, ax,
         )
