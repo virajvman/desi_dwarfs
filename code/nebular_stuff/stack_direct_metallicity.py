@@ -14,22 +14,22 @@ table (hdu=3) has:
 
 This script:
   1. Globs the per-bin FastSpecFit stack outputs.
-  2. Keeps only bins where the MEAN stack detects all seven lines required
-     by the direct method
-     (HALPHA, HBETA, HGAMMA, OIII_4363, OIII_5007, OII_3726, OII_3729)
-     at SNR > 3 with flux > 1 (FastSpec units), reusing
-     `sfr_and_metallicity.line_snr_mask` with the same gating as
-     `add_nebular_props.py`.
+  2. Keeps only bins where the MEAN stack passes the TE line-SNR gate
+     (7 lines for OII density diagnostic, 9 for SII) at SNR > 3 with flux
+     > 1 (FastSpec units), reusing `sfr_and_metallicity.line_snr_mask`
+     with the same gating as `add_nebular_props.py`. Base lines: HALPHA,
+     HBETA, HGAMMA, OIII_4363, OIII_5007, OII_3726, OII_3729; SII mode
+     also requires SII_6716, SII_6731.
   3. Runs the UltraNest direct-method fit
      (`pn_functions.compute_direct_metallicities`) on the mean stack AND
-     its bootstrap rows.
+     its bootstrap rows (default density diagnostic: SII).
   4. Reports per bin:
        - central value  = the mean-stack posterior median, and
        - uncertainty    = the 16/84 spread of the per-bootstrap posterior
                           medians (sample variance; option B).
   5. Writes ONE results row per candidate bin (kept and dropped alike, with
-     a DETECTED_7LINE flag) to a FITS + ECSV table so the M*/EW trends can
-     be plotted later.
+     a DETECTED_7LINE flag for bins that passed the TE line gate) to a
+     FITS + ECSV table so the M*/EW trends can be plotted later.
 
 Outputs (written to STACK_PATH):
   - direct_metallicity_results.fits
@@ -38,7 +38,7 @@ Outputs (written to STACK_PATH):
 
 Usage:
     python stack_direct_metallicity.py --line-flux-type BOXFLUX
-    python stack_direct_metallicity.py --line-flux-type FLUX
+    python stack_direct_metallicity.py --line-flux-type FLUX --density-diagnostic OII
 """
 
 import argparse
@@ -84,14 +84,17 @@ FASTSPEC_HDU = 3
 EW_EDGES = [0.0, 30.0, 300.0, np.inf]
 EW_TOKENS = ["ew_lt30", "ew_30_300", "ew_gt300"]
 
-# Seven lines required by the direct method, and the detection gate. These
-# match the TE_* knobs in add_nebular_props.py.
-TE_LINE_NAMES = ["HALPHA", "HBETA", "HGAMMA",
-                 "OIII_4363", "OIII_5007",
-                 "OII_3726", "OII_3729"]
+# Line-SNR gating for the direct-method fits. Matches add_nebular_props.py.
+_TE_LINE_NAMES_BASE = ["HALPHA", "HBETA", "HGAMMA",
+                       "OIII_4363", "OIII_5007",
+                       "OII_3726", "OII_3729"]
 SNR_VAL = 3
-MIN_LINES = 7
-MIN_FLUX = 1.0   # FastSpec units (1e-17 erg/cm2/s)
+MIN_FLUX = 0.0  
+## NOTE: the fluxes have been normalized and so applying a min flux cut does not make sense anymore
+
+# Density diagnostic for the direct-method fit: 'OII' ([O II] 3726/3729) or
+# 'SII' ([S II] 6716/6731). CLI --density-diagnostic overrides this constant.
+TE_DENSITY_DIAGNOSTIC = "SII"
 
 # UltraNest fit settings (same as the catalog driver).
 N_JOBS = 128
@@ -162,6 +165,14 @@ def read_nobj_from_input_stack(mlo, mhi, token):
     return -1
 
 
+def _te_line_gating(density_diagnostic):
+    """Line-SNR mask lines and min_lines for the direct-method TE fit."""
+    names = list(_TE_LINE_NAMES_BASE)
+    if density_diagnostic == "SII":
+        names.extend(["SII_6716", "SII_6731"])
+    return names, len(names)
+
+
 def boot_spread(values):
     """16/50/84 spread of finite values -> (err, err_lo, err_hi, n_used).
 
@@ -197,7 +208,20 @@ def main(argv=None):
             "fits (FLUX Gaussian or BOXFLUX boxcar). Required."
         ),
     )
+    parser.add_argument(
+        "--density-diagnostic",
+        choices=("OII", "SII"),
+        default=None,
+        help=(
+            "Low-ionization doublet for electron density in the direct-method "
+            "fit: OII ([O II] 3726/3729) or SII ([S II] 6716/6731). "
+            "Default: SII (TE_DENSITY_DIAGNOSTIC)."
+        ),
+    )
     args = parser.parse_args(argv)
+
+    density_diagnostic = args.density_diagnostic or TE_DENSITY_DIAGNOSTIC
+    te_line_names, te_min_lines = _te_line_gating(density_diagnostic)
 
     import sfr_and_metallicity as sam
     sam.line_flux_type = args.line_flux_type
@@ -213,6 +237,8 @@ def main(argv=None):
     # Skip any accidental double-processed outputs.
     files = [f for f in files if "fastspec_fastspec_" not in os.path.basename(f)]
     print(f"[1] Found {len(files)} FastSpecFit stack outputs in {STACK_PATH}")
+    print(f"    TE density diagnostic: {density_diagnostic} "
+          f"({te_min_lines} lines required for detection gate)")
     if len(files) == 0:
         print(f"    Nothing matches {pattern}; exiting.")
         return 1
@@ -242,8 +268,8 @@ def main(argv=None):
 
         # Gate the bin on the MEAN stack (row 0).
         detected = bool(line_snr_mask(
-            t[[0]], line_names=TE_LINE_NAMES,
-            snr_val=SNR_VAL, min_lines=MIN_LINES, min_flux=MIN_FLUX,
+            t[[0]], line_names=te_line_names,
+            snr_val=SNR_VAL, min_lines=te_min_lines, min_flux=MIN_FLUX,
             line_flux_type=args.line_flux_type,
         )[0])
 
@@ -255,6 +281,7 @@ def main(argv=None):
             "EW_MAX": ew_max if np.isfinite(ew_max) else -1.0,
             "EW_TOKEN": token,
             "NOBJ": nobj,
+            "DENSITY_DIAGNOSTIC": density_diagnostic,
             "DETECTED_7LINE": detected,
             "MEAN_FIT_SUCCESS": False,
             "N_BOOT_FIT": 0,
@@ -270,7 +297,7 @@ def main(argv=None):
             rec[f"{up}_MEANFIT_HI"] = np.nan
 
         if not detected:
-            print(f"    Mean stack does NOT detect all {MIN_LINES} lines "
+            print(f"    Mean stack does NOT detect all {te_min_lines} lines "
                   f"(SNR>{SNR_VAL}, flux>{MIN_FLUX:g}); recording as undetected.")
             rows.append(rec)
             continue
@@ -285,6 +312,7 @@ def main(argv=None):
             min_num_live_points=MIN_NUM_LIVE_POINTS,
             sampler_kwargs=SAMPLER_KWARGS,
             use_informative_priors=USE_INFORMATIVE_PRIORS,
+            density_diagnostic=density_diagnostic,
             verbose=False,
             verbose_sampler=False,
         )
@@ -334,7 +362,8 @@ def main(argv=None):
     # Stable, readable column ordering.
     col_order = [
         "MSTAR_MIN", "MSTAR_MAX", "EW_MIN", "EW_MAX", "EW_TOKEN", "NOBJ",
-        "DETECTED_7LINE", "MEAN_FIT_SUCCESS", "N_BOOT_FIT", "N_RATIOS", "LOGZ",
+        "DENSITY_DIAGNOSTIC", "DETECTED_7LINE", "MEAN_FIT_SUCCESS",
+        "N_BOOT_FIT", "N_RATIOS", "LOGZ",
     ]
     for _, up in PARAM_MAP:
         col_order += [up, f"{up}_ERR", f"{up}_ERR_LO", f"{up}_ERR_HI",
