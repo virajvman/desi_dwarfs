@@ -52,7 +52,9 @@ def deredshift_for_stacking(use_invvar=True):
 
     print_stage("De-redshifting the spectra and clipping to relevant wavelength range")
 
-    wave_out = wave
+    #
+    # wave_out = wave
+    wave_out = np.arange(3600,9800,0.2)
 
     print(wave_out[:10])
     print(wave_out[-10:])
