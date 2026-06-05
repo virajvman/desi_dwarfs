@@ -3,8 +3,6 @@
 # Mass: 0.5 dex (6-8), 0.25 dex (8-9.25). EW: <30, 30-100, >100 A.
 # Run on a Perlmutter login or compute node with DESI env + pscratch access.
 
-set -euo pipefail
-
 source /global/cfs/cdirs/desi/software/desi_environment.sh main
 
 cd /global/u1/v/virajvm/DESI2_LOWZ/desi_dwarfs
