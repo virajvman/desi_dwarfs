@@ -8,10 +8,9 @@ FastSpecFit (`job_scripts/fastspec/run_stack_fastspec_haew_5pct.sh`).
 
 For each stack bin there is one FastSpecFit stack output
 `fastspec_stack_ALL_mstar_{mlo}_{mhi}_{ewtoken}.fits` whose emission-line
-table (hdu=3) has one row (the stacked spectrum). EW tokens are percentile
-bins (`ew_p00_20`, ...), a supplementary EW > 300 A test bin (`ew_gt300`),
-or a pooled mass-only stack (`ew_all`) when all five EW cells in a mass bin
-have N < 50.
+table (hdu=3) has one row (the stacked spectrum). EW tokens are fixed bins:
+`ew_lt30`, `ew_30_100`, `ew_100_300`, `ew_gt300` (<30, 30-100, 100-300,
+>300 Angstrom). Stacks are produced only when N >= 50 in the (mass, EW) cell.
 
 This script:
   1. Globs the per-bin FastSpecFit stack outputs.
@@ -71,29 +70,19 @@ STACK_PATH = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/stack_files
 INPUT_GLOB = "fastspec_stack_ALL_mstar_*.fits"
 FASTSPEC_HDU = 3
 
-EW_QUINTILE_TOKENS = [
-    "ew_p00_20", "ew_p20_40", "ew_p40_60", "ew_p60_80", "ew_p80_100",
-]
-POOLED_EW_TOKEN = "ew_all"
-EW_GT300_TOKEN = "ew_gt300"
-EW_TOKENS = EW_QUINTILE_TOKENS + [EW_GT300_TOKEN, POOLED_EW_TOKEN]
-EW_PCT_LABELS = {
-    "ew_p00_20": "EW 0-20%",
-    "ew_p20_40": "EW 20-40%",
-    "ew_p40_60": "EW 40-60%",
-    "ew_p60_80": "EW 60-80%",
-    "ew_p80_100": "EW 80-100%",
-    EW_GT300_TOKEN: r"EW $>$ 300 $\AA$",
-    POOLED_EW_TOKEN: "EW pooled (all)",
+EW_BIN_TOKENS = ["ew_lt30", "ew_30_100", "ew_100_300", "ew_gt300"]
+EW_TOKENS = EW_BIN_TOKENS
+EW_BIN_LABELS = {
+    "ew_lt30": r"EW $\leq$ 30 $\AA$",
+    "ew_30_100": r"30 $<$ EW $\leq$ 100 $\AA$",
+    "ew_100_300": r"100 $<$ EW $\leq$ 300 $\AA$",
+    "ew_gt300": r"EW $>$ 300 $\AA$",
 }
 EW_COLORS = {
-    "ew_p00_20": "#1f77b4",
-    "ew_p20_40": "#ff7f0e",
-    "ew_p40_60": "#2ca02c",
-    "ew_p60_80": "#d62728",
-    "ew_p80_100": "#9467bd",
-    EW_GT300_TOKEN: "#e377c2",
-    POOLED_EW_TOKEN: "#7f7f7f",
+    "ew_lt30": "#1f77b4",
+    "ew_30_100": "#ff7f0e",
+    "ew_100_300": "#2ca02c",
+    "ew_gt300": "#d62728",
 }
 
 _TE_LINE_NAMES_BASE = ["HALPHA", "HBETA", "HGAMMA",
@@ -185,10 +174,8 @@ def read_nobj_from_input_stack(mlo, mhi, token):
 
 
 def ew_plot_label(token, ew_min, ew_max):
-    """Legend label with percentile name and numeric EW range."""
-    if token == POOLED_EW_TOKEN:
-        return EW_PCT_LABELS[POOLED_EW_TOKEN]
-    base = EW_PCT_LABELS.get(token, token)
+    """Legend label with fixed-bin name and numeric EW range."""
+    base = EW_BIN_LABELS.get(token, token)
     if np.isfinite(ew_max):
         return f"{base} ({ew_min:.1f}–{ew_max:.1f} $\\AA$)"
     return f"{base} ({ew_min:.1f}–$\\infty$ $\\AA$)"

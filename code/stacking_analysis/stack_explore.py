@@ -100,7 +100,7 @@ def load_catalog(filename="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/d
 
     derived_cat_f = derived_cat[ mask ]
     
-    tot_cat_new =  hstack( [tot_cat_f, fspec_cat_f["HALPHA_FLUX", "HALPHA_FLUX_IVAR","HBETA_FLUX", "HBETA_FLUX_IVAR", "OIII_5007_FLUX", "OIII_5007_FLUX_IVAR", "HALPHA_EW", "HALPHA_EW_IVAR", "OII_3726_FLUX", "OII_3726_FLUX_IVAR", "OII_3729_FLUX", "OII_3729_FLUX_IVAR", "HALPHA_BOXFLUX"], derived_cat_f["DELTA_MAG_G_KCORR", "DELTA_MAG_R_KCORR"], tractor_cat_f["FLUX_G","FLUX_R","FLUX_Z","FLUX_IVAR_G", "FLUX_IVAR_R", "FLUX_IVAR_Z"] ] )
+    tot_cat_new =  hstack( [tot_cat_f, fspec_cat_f["HALPHA_FLUX", "HALPHA_FLUX_IVAR","HBETA_FLUX", "HBETA_FLUX_IVAR", "OIII_5007_FLUX", "OIII_5007_FLUX_IVAR", "HALPHA_EW", "HALPHA_EW_IVAR", "OII_3726_FLUX", "OII_3726_FLUX_IVAR", "OII_3729_FLUX", "OII_3729_FLUX_IVAR", "HALPHA_BOXFLUX", "HALPHA_BOXFLUX_IVAR"], derived_cat_f["DELTA_MAG_G_KCORR", "DELTA_MAG_R_KCORR"], tractor_cat_f["FLUX_G","FLUX_R","FLUX_Z","FLUX_IVAR_G", "FLUX_IVAR_R", "FLUX_IVAR_Z"] ] )
     
     print(f"Cleaned catalog size = {len(tot_cat_new)}")
     
