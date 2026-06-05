@@ -6,11 +6,12 @@ Direct-method (T_e) nebular abundances for the M* x H-alpha-EW stacked
 spectra produced by `stack_mstar_haew_5pct.py` and fit with custom
 FastSpecFit (`job_scripts/fastspec/run_stack_fastspec_haew_5pct.sh`).
 
-For each (log M*, H-alpha EW percentile) bin there is one FastSpecFit stack
-output `fastspec_stack_ALL_mstar_{mlo}_{mhi}_{ewtoken}.fits` whose emission-line
-table (hdu=3) has:
-    row 0     -> the mean stack
-    rows 1..N -> the bootstrap realizations of that stack
+For each stack bin there is one FastSpecFit stack output
+`fastspec_stack_ALL_mstar_{mlo}_{mhi}_{ewtoken}.fits` whose emission-line
+table (hdu=3) has one row (the stacked spectrum). EW tokens are percentile
+bins (`ew_p00_20`, ...), a supplementary EW > 300 A test bin (`ew_gt300`),
+or a pooled mass-only stack (`ew_all`) when all five EW cells in a mass bin
+have N < 50.
 
 This script:
   1. Globs the per-bin FastSpecFit stack outputs.
@@ -21,12 +22,11 @@ This script:
      HBETA, HGAMMA, OIII_4363, OIII_5007, OII_3726, OII_3729; SII mode
      also requires SII_6716, SII_6731.
   3. Runs the UltraNest direct-method fit
-     (`pn_functions.compute_direct_metallicities`) on the mean stack AND
-     its bootstrap rows (default density diagnostic: SII).
+     (`pn_functions.compute_direct_metallicities`) on the stack spectrum
+     (default density diagnostic: SII).
   4. Reports per bin:
-       - central value  = the mean-stack posterior median, and
-       - uncertainty    = the 16/84 spread of the per-bootstrap posterior
-                          medians (sample variance; option B).
+       - central value  = posterior median from the stack fit, and
+       - uncertainty    = posterior 16/84 interval (no bootstrap refits).
   5. Writes ONE results row per candidate bin (kept and dropped alike, with
      a DETECTED_7LINE flag for bins that passed the TE line gate) to a
      FITS + ECSV table so the M*/EW trends can be plotted later.
@@ -37,6 +37,7 @@ Outputs (written to STACK_PATH):
   - plots/oh_av_vs_mstar.png
   - plots/te_ne_hahb_vs_mstar.png
   - plots/obs_hahb_vs_mstar.png
+  - plots/doublet_ratios_vs_mstar.png
 
 Usage:
     python stack_direct_metallicity.py --line-flux-type BOXFLUX
@@ -70,13 +71,20 @@ STACK_PATH = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/stack_files
 INPUT_GLOB = "fastspec_stack_ALL_mstar_*.fits"
 FASTSPEC_HDU = 3
 
-EW_TOKENS = ["ew_p00_20", "ew_p20_40", "ew_p40_60", "ew_p60_80", "ew_p80_100"]
+EW_QUINTILE_TOKENS = [
+    "ew_p00_20", "ew_p20_40", "ew_p40_60", "ew_p60_80", "ew_p80_100",
+]
+POOLED_EW_TOKEN = "ew_all"
+EW_GT300_TOKEN = "ew_gt300"
+EW_TOKENS = EW_QUINTILE_TOKENS + [EW_GT300_TOKEN, POOLED_EW_TOKEN]
 EW_PCT_LABELS = {
     "ew_p00_20": "EW 0-20%",
     "ew_p20_40": "EW 20-40%",
     "ew_p40_60": "EW 40-60%",
     "ew_p60_80": "EW 60-80%",
     "ew_p80_100": "EW 80-100%",
+    EW_GT300_TOKEN: r"EW $>$ 300 $\AA$",
+    POOLED_EW_TOKEN: "EW pooled (all)",
 }
 EW_COLORS = {
     "ew_p00_20": "#1f77b4",
@@ -84,6 +92,8 @@ EW_COLORS = {
     "ew_p40_60": "#2ca02c",
     "ew_p60_80": "#d62728",
     "ew_p80_100": "#9467bd",
+    EW_GT300_TOKEN: "#e377c2",
+    POOLED_EW_TOKEN: "#7f7f7f",
 }
 
 _TE_LINE_NAMES_BASE = ["HALPHA", "HBETA", "HGAMMA",
@@ -176,10 +186,56 @@ def read_nobj_from_input_stack(mlo, mhi, token):
 
 def ew_plot_label(token, ew_min, ew_max):
     """Legend label with percentile name and numeric EW range."""
+    if token == POOLED_EW_TOKEN:
+        return EW_PCT_LABELS[POOLED_EW_TOKEN]
     base = EW_PCT_LABELS.get(token, token)
     if np.isfinite(ew_max):
         return f"{base} ({ew_min:.1f}–{ew_max:.1f} $\\AA$)"
     return f"{base} ({ew_min:.1f}–$\\infty$ $\\AA$)"
+
+
+def _line_flux_type_for(line, line_flux_type):
+    """Flux column family for a line (O II doublet always uses FLUX)."""
+    if line in ("OII_3726", "OII_3729"):
+        return "FLUX"
+    return line_flux_type
+
+
+def measure_obs_line_ratio(row, num_line, den_line, line_flux_type):
+    """Observed line ratio from FastSpec fluxes on the mean stack (row 0)."""
+    num_ftype = _line_flux_type_for(num_line, line_flux_type)
+    den_ftype = _line_flux_type_for(den_line, line_flux_type)
+    num_col = f"{num_line}_{num_ftype}"
+    den_col = f"{den_line}_{den_ftype}"
+    num_ivar_col = f"{num_col}_IVAR"
+    den_ivar_col = f"{den_col}_IVAR"
+    if num_col not in row.colnames or den_col not in row.colnames:
+        return np.nan, np.nan
+    num = float(row[num_col][0])
+    den = float(row[den_col][0])
+    num_ivar = (
+        float(row[num_ivar_col][0])
+        if num_ivar_col in row.colnames else np.nan
+    )
+    den_ivar = (
+        float(row[den_ivar_col][0])
+        if den_ivar_col in row.colnames else np.nan
+    )
+    if not (np.isfinite(num) and np.isfinite(den) and den > 0):
+        return np.nan, np.nan
+    ratio = num / den
+    if (
+        np.isfinite(num_ivar) and num_ivar > 0
+        and np.isfinite(den_ivar) and den_ivar > 0
+    ):
+        num_err = 1.0 / np.sqrt(num_ivar)
+        den_err = 1.0 / np.sqrt(den_ivar)
+        err = np.abs(ratio) * np.sqrt(
+            (num_err / num) ** 2 + (den_err / den) ** 2
+        )
+    else:
+        err = np.nan
+    return ratio, err
 
 
 def measure_obs_ha_hb(row):
@@ -227,6 +283,63 @@ def boot_spread(values):
         return np.nan, np.nan, np.nan, 0
     p16, p50, p84 = np.nanpercentile(arr, [16, 50, 84])
     return 0.5 * (p84 - p16), p50 - p16, p84 - p50, int(arr.size)
+
+
+def _fill_param_errors(rec, lo_name, up, mean_fit, boot_ok):
+    """Write central value and asymmetric errors (bootstrap or posterior)."""
+    val = float(mean_fit[lo_name])
+    lo = float(mean_fit[f"{lo_name}_lo"])
+    hi = float(mean_fit[f"{lo_name}_hi"])
+    rec[up] = val
+    rec[f"{up}_MEANFIT_LO"] = lo
+    rec[f"{up}_MEANFIT_HI"] = hi
+    if len(boot_ok) > 0:
+        err, err_lo, err_hi, _ = boot_spread(boot_ok[lo_name])
+    else:
+        err_lo = val - lo
+        err_hi = hi - val
+        err = 0.5 * (err_lo + err_hi)
+    rec[f"{up}_ERR"] = err
+    rec[f"{up}_ERR_LO"] = err_lo
+    rec[f"{up}_ERR_HI"] = err_hi
+
+
+def _fill_intrinsic_ha_hb_errors(rec, mean_fit, boot_ok):
+    """Populate HA_HB_INTRINSIC and its error columns."""
+    ne_med = rec["NE_OII"]
+    te_med = rec["TE_OIII"]
+    if np.isfinite(ne_med) and np.isfinite(te_med):
+        rec["HA_HB_INTRINSIC"] = float(intrinsic_ha_hb(ne_med, te_med))
+
+    if len(boot_ok) > 0:
+        boot_ratios = intrinsic_ha_hb(
+            np.asarray(boot_ok["ne_oii"], dtype=float),
+            np.asarray(boot_ok["te_oiii"], dtype=float),
+        )
+        err, err_lo, err_hi, _ = boot_spread(boot_ratios)
+    elif np.isfinite(rec["HA_HB_INTRINSIC"]):
+        ne_vals = [
+            float(mean_fit["ne_oii_lo"]),
+            float(mean_fit["ne_oii"]),
+            float(mean_fit["ne_oii_hi"]),
+        ]
+        te_vals = [
+            float(mean_fit["te_oiii_lo"]),
+            float(mean_fit["te_oiii"]),
+            float(mean_fit["te_oiii_hi"]),
+        ]
+        ratios = [
+            intrinsic_ha_hb(ne, te)
+            for ne in ne_vals for te in te_vals
+            if np.isfinite(ne) and np.isfinite(te)
+        ]
+        err, err_lo, err_hi, _ = boot_spread(ratios)
+    else:
+        return
+
+    rec["HA_HB_INTRINSIC_ERR"] = err
+    rec["HA_HB_INTRINSIC_ERR_LO"] = err_lo
+    rec["HA_HB_INTRINSIC_ERR_HI"] = err_hi
 
 
 def _mstar_mid(tab):
@@ -336,6 +449,12 @@ def main(argv=None):
             continue
 
         obs_ha_hb, obs_err, _ = measure_obs_ha_hb(t[[0]])
+        obs_oii, obs_oii_err = measure_obs_line_ratio(
+            t[[0]], "OII_3726", "OII_3729", args.line_flux_type,
+        )
+        obs_sii, obs_sii_err = measure_obs_line_ratio(
+            t[[0]], "SII_6716", "SII_6731", args.line_flux_type,
+        )
 
         detected = bool(line_snr_mask(
             t[[0]], line_names=te_line_names,
@@ -357,6 +476,10 @@ def main(argv=None):
             "LOGZ": np.nan,
             "OBS_HA_HB": obs_ha_hb,
             "OBS_HA_HB_ERR": obs_err,
+            "OBS_OII_DOUBLET": obs_oii,
+            "OBS_OII_DOUBLET_ERR": obs_oii_err,
+            "OBS_SII_DOUBLET": obs_sii,
+            "OBS_SII_DOUBLET_ERR": obs_sii_err,
             "HA_HB_INTRINSIC": np.nan,
             "HA_HB_INTRINSIC_ERR": np.nan,
             "HA_HB_INTRINSIC_ERR_LO": np.nan,
@@ -376,8 +499,7 @@ def main(argv=None):
             rows.append(rec)
             continue
 
-        print(f"    Detected. Fitting {len(t)} rows "
-              f"(1 mean + {len(t) - 1} bootstraps) with UltraNest ...")
+        print(f"    Detected. Fitting {len(t)} row(s) with UltraNest ...")
         res = compute_direct_metallicities(
             t,
             args.line_flux_type,
@@ -406,28 +528,9 @@ def main(argv=None):
         rec["N_BOOT_FIT"] = int(len(boot_ok))
 
         for lo_name, up in PARAM_MAP:
-            rec[up] = float(mean_fit[lo_name])
-            rec[f"{up}_MEANFIT_LO"] = float(mean_fit[f"{lo_name}_lo"])
-            rec[f"{up}_MEANFIT_HI"] = float(mean_fit[f"{lo_name}_hi"])
-            if len(boot_ok) > 0:
-                err, err_lo, err_hi, _ = boot_spread(boot_ok[lo_name])
-                rec[f"{up}_ERR"] = err
-                rec[f"{up}_ERR_LO"] = err_lo
-                rec[f"{up}_ERR_HI"] = err_hi
+            _fill_param_errors(rec, lo_name, up, mean_fit, boot_ok)
 
-        ne_med = rec["NE_OII"]
-        te_med = rec["TE_OIII"]
-        if np.isfinite(ne_med) and np.isfinite(te_med):
-            rec["HA_HB_INTRINSIC"] = float(intrinsic_ha_hb(ne_med, te_med))
-        if len(boot_ok) > 0:
-            boot_ratios = intrinsic_ha_hb(
-                np.asarray(boot_ok["ne_oii"], dtype=float),
-                np.asarray(boot_ok["te_oiii"], dtype=float),
-            )
-            err, err_lo, err_hi, _ = boot_spread(boot_ratios)
-            rec["HA_HB_INTRINSIC_ERR"] = err
-            rec["HA_HB_INTRINSIC_ERR_LO"] = err_lo
-            rec["HA_HB_INTRINSIC_ERR_HI"] = err_hi
+        _fill_intrinsic_ha_hb_errors(rec, mean_fit, boot_ok)
 
         print(f"    -> 12+log(O/H) = {rec['TWELVE_LOG_OH']:.3f} "
               f"(+{rec['TWELVE_LOG_OH_ERR_HI']:.3f}/-{rec['TWELVE_LOG_OH_ERR_LO']:.3f}), "
@@ -446,6 +549,8 @@ def main(argv=None):
         "DENSITY_DIAGNOSTIC", "DETECTED_7LINE", "MEAN_FIT_SUCCESS",
         "N_BOOT_FIT", "N_RATIOS", "LOGZ",
         "OBS_HA_HB", "OBS_HA_HB_ERR",
+        "OBS_OII_DOUBLET", "OBS_OII_DOUBLET_ERR",
+        "OBS_SII_DOUBLET", "OBS_SII_DOUBLET_ERR",
         "HA_HB_INTRINSIC", "HA_HB_INTRINSIC_ERR",
         "HA_HB_INTRINSIC_ERR_LO", "HA_HB_INTRINSIC_ERR_HI",
     ]
@@ -472,9 +577,65 @@ def main(argv=None):
     return 0
 
 
+def _plot_obs_vs_mstar_by_ew(tab, ycol, yerr_col, ylab, ax, title=None):
+    """Observed quantity vs log M* midpoint, one series per EW_TOKEN."""
+    finite = np.isfinite(tab[ycol])
+    if not np.any(finite):
+        return False
+
+    plot_tab = tab[finite]
+    for token in EW_TOKENS:
+        sel = np.asarray(plot_tab["EW_TOKEN"]) == token
+        if not np.any(sel):
+            continue
+        sub = plot_tab[sel]
+        mid_sub = _mstar_mid(sub)
+        label = ew_plot_label(
+            token,
+            float(sub["EW_MIN"][0]),
+            float(sub["EW_MAX"][0]) if sub["EW_MAX"][0] >= 0 else np.inf,
+        )
+        y = np.asarray(sub[ycol])
+        yerr = np.asarray(sub[yerr_col])
+        det = np.asarray(sub["DETECTED_7LINE"], dtype=bool)
+        has_err = np.isfinite(yerr) & (yerr > 0)
+
+        if np.any(det & has_err):
+            m = det & has_err
+            ax.errorbar(
+                mid_sub[m], y[m], yerr=yerr[m],
+                fmt="o-", color=EW_COLORS[token], label=label,
+                capsize=3, lw=1.2,
+            )
+        elif np.any(det):
+            ax.plot(
+                mid_sub[det], y[det], "o-",
+                color=EW_COLORS[token], label=label, lw=1.2,
+            )
+        else:
+            ax.plot([], [], "o-", color=EW_COLORS[token], label=label)
+
+        if np.any(~det):
+            ax.plot(
+                mid_sub[~det], y[~det],
+                marker="o", fillstyle="none", ls="--", lw=1.0,
+                color=EW_COLORS[token], alpha=0.7,
+            )
+
+    ax.set_xlabel(r"log $M_\star$ [$M_\odot$]")
+    ax.set_ylabel(ylab)
+    ax.legend(frameon=False, fontsize=7)
+    if title:
+        ax.set_title(title, fontsize=10)
+    return True
+
+
 def make_all_plots(out_tab, plot_dir):
-    """Write oh_av, te_ne_hahb, and obs_hahb vs M* figures."""
-    for plot_fn in (make_oh_av_plot, make_te_ne_hahb_plot, make_obs_hahb_plot):
+    """Write oh_av, te_ne_hahb, obs_hahb, and doublet-ratio vs M* figures."""
+    for plot_fn in (
+        make_oh_av_plot, make_te_ne_hahb_plot, make_obs_hahb_plot,
+        make_doublet_ratios_vs_mstar_plot,
+    ):
         try:
             plot_fn(out_tab, plot_dir)
         except Exception as e:
@@ -550,58 +711,52 @@ def make_obs_hahb_plot(out_tab, plot_dir):
 
     os.makedirs(plot_dir, exist_ok=True)
 
-    finite = np.isfinite(out_tab["OBS_HA_HB"])
-    if not np.any(finite):
+    fig, ax = plt.subplots(figsize=(10, 5))
+    if not _plot_obs_vs_mstar_by_ew(
+        out_tab, "OBS_HA_HB", "OBS_HA_HB_ERR",
+        r"H$\alpha$/H$\beta$ (observed boxcar)", ax,
+        title="Observed Balmer decrement (mean stack)",
+    ):
+        plt.close(fig)
         print("    (no finite OBS_HA_HB; skipping obs_hahb_vs_mstar)")
         return
 
-    plot_tab = out_tab[finite]
-    fig, ax = plt.subplots(figsize=(10, 5))
-
-    for token in EW_TOKENS:
-        sel = np.asarray(plot_tab["EW_TOKEN"]) == token
-        if not np.any(sel):
-            continue
-        sub = plot_tab[sel]
-        mid_sub = _mstar_mid(sub)
-        label = ew_plot_label(
-            token,
-            float(sub["EW_MIN"][0]),
-            float(sub["EW_MAX"][0]) if sub["EW_MAX"][0] >= 0 else np.inf,
-        )
-        y = np.asarray(sub["OBS_HA_HB"])
-        yerr = np.asarray(sub["OBS_HA_HB_ERR"])
-        det = np.asarray(sub["DETECTED_7LINE"], dtype=bool)
-        has_err = np.isfinite(yerr) & (yerr > 0)
-
-        if np.any(det & has_err):
-            m = det & has_err
-            ax.errorbar(
-                mid_sub[m], y[m], yerr=yerr[m],
-                fmt="o-", color=EW_COLORS[token], label=label,
-                capsize=3, lw=1.2,
-            )
-        elif np.any(det):
-            ax.plot(
-                mid_sub[det], y[det], "o-",
-                color=EW_COLORS[token], label=label, lw=1.2,
-            )
-        else:
-            ax.plot([], [], "o-", color=EW_COLORS[token], label=label)
-
-        if np.any(~det):
-            ax.plot(
-                mid_sub[~det], y[~det],
-                marker="o", fillstyle="none", ls="--", lw=1.0,
-                color=EW_COLORS[token], alpha=0.7,
-            )
-
-    ax.set_xlabel(r"log $M_\star$ [$M_\odot$]")
-    ax.set_ylabel(r"H$\alpha$/H$\beta$ (observed boxcar)")
-    ax.legend(frameon=False, fontsize=7)
-    ax.set_title("Observed Balmer decrement (mean stack)")
     fig.tight_layout()
     out_png = os.path.join(plot_dir, "obs_hahb_vs_mstar.png")
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+    print(f"    Saved {os.path.basename(out_png)}")
+
+
+def make_doublet_ratios_vs_mstar_plot(out_tab, plot_dir):
+    """Observed [S II] and [O II] doublet ratios vs M* (all finite ratios)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    os.makedirs(plot_dir, exist_ok=True)
+
+    has_sii = np.isfinite(out_tab["OBS_SII_DOUBLET"])
+    has_oii = np.isfinite(out_tab["OBS_OII_DOUBLET"])
+    if not (np.any(has_sii) or np.any(has_oii)):
+        print("    (no finite doublet ratios; skipping doublet_ratios_vs_mstar)")
+        return
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    panels = [
+        ("OBS_SII_DOUBLET", "OBS_SII_DOUBLET_ERR",
+         axes[0], r"[S II] 6716/6731 (observed)"),
+        ("OBS_OII_DOUBLET", "OBS_OII_DOUBLET_ERR",
+         axes[1], r"[O II] 3726/3729 (observed FLUX)"),
+    ]
+    for ycol, yerr_col, ax, ylab in panels:
+        if not _plot_obs_vs_mstar_by_ew(out_tab, ycol, yerr_col, ylab, ax):
+            ax.set_title(f"{ylab} (no finite values)", fontsize=10)
+            ax.axis("off")
+
+    fig.suptitle("Density-diagnostic doublet ratios (mean stack)")
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    out_png = os.path.join(plot_dir, "doublet_ratios_vs_mstar.png")
     fig.savefig(out_png, dpi=150)
     plt.close(fig)
     print(f"    Saved {os.path.basename(out_png)}")

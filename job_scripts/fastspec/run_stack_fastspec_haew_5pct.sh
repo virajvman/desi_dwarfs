@@ -79,7 +79,16 @@ echo "Constraints   : ${constraintsfile}"
 echo "Emlines   : ${emlinesfile}"
 echo ""
 
+# Remove stale FastSpec outputs so removed/re-pooled bins are not analyzed downstream.
 shopt -s nullglob
+n_old=0
+for f in "${STACK_PATH}"/fastspec_stack_ALL_mstar_*.fits; do
+    rm -f "$f"
+    n_old=$((n_old + 1))
+done
+echo "Removed ${n_old} previous fastspec_stack_ALL_mstar_*.fits files"
+echo ""
+
 stack_files=("${STACK_PATH}"/stack_ALL_mstar_*.fits)
 if [ ${#stack_files[@]} -eq 0 ]; then
     echo "ERROR: no stack_ALL_mstar_*.fits files found in ${STACK_PATH}"
