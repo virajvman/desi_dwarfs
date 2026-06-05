@@ -35,4 +35,4 @@ python3 desi_dwarfs/code/download_spectra.py \
     -nchunks 370 \
     -checkpoint_every 25 \
     -save_name desi_dr1_dwarf_catalog_spectra \
-    --overwrite
+    -overwrite
