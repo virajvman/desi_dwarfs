@@ -1,5 +1,6 @@
 #!/bin/bash
-# Full M* x H-alpha-EW stack pipeline (includes new [9.0, 9.25] mass bin).
+# Full M* x H-alpha-EW stack pipeline.
+# Mass: 0.5 dex (6-8), 0.25 dex (8-9.25). EW: <30, 30-100, >100 A.
 # Run on a Perlmutter login or compute node with DESI env + pscratch access.
 
 set -euo pipefail

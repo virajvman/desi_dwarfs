@@ -2,15 +2,14 @@
 stack_mstar_haew_5pct.py
 ========================
 
-Bootstrap-stacked spectra in 0.5 dex bins of log M_star (6 -> 9.25) crossed
-with four fixed H-alpha EW bins (BGS_BRIGHT | BGS_FAINT | LOWZ):
+Bootstrap-stacked spectra in log M_star bins (6 -> 9.25) crossed with three
+fixed H-alpha EW bins (BGS_BRIGHT | BGS_FAINT | LOWZ):
 
-Mass edges: 6.0, 6.5, ..., 9.0, 9.25 (0.25 dex bin at the high-mass end).
+Mass edges: 6, 6.5, 7, 7.5, 8 (0.5 dex); 8.25, 8.5, 8.75, 9, 9.25 (0.25 dex).
 
     1. EW <= 30 A
     2. 30 < EW <= 100 A
-    3. 100 < EW <= 300 A
-    4. EW > 300 A
+    3. EW > 100 A
 
 Detection cuts (applied globally before binning):
   - HALPHA_EW * sqrt(HALPHA_EW_IVAR) >= 3
@@ -65,16 +64,15 @@ from stack_explore import (
 SAMPLES = ["BGS_BRIGHT", "BGS_FAINT", "LOWZ"]
 COMBINED_TAG = "ALL"
 
-MSTAR_BINS = np.array([6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.25])
+MSTAR_BINS = np.array([6.0, 6.5, 7.0, 7.5, 8.0, 8.25, 8.5, 8.75, 9.0, 9.25])
 
 # Fixed H-alpha EW bins (linear, Angstroms). Half-open (lo, hi].
-EW_EDGES = [0.0, 30.0, 100.0, 300.0, np.inf]
-EW_TOKENS = ["ew_lt30", "ew_30_100", "ew_100_300", "ew_gt300"]
+EW_EDGES = [0.0, 30.0, 100.0, np.inf]
+EW_TOKENS = ["ew_lt30", "ew_30_100", "ew_gt100"]
 EW_LABELS = [
     r"EW $\leq$ 30 $\AA$",
     r"30 $<$ EW $\leq$ 100 $\AA$",
-    r"100 $<$ EW $\leq$ 300 $\AA$",
-    r"EW $>$ 300 $\AA$",
+    r"EW $>$ 100 $\AA$",
 ]
 
 EW_SNR_MIN = 3.0
@@ -105,8 +103,7 @@ LINE_GUIDES = {
 EW_COLORS = {
     "ew_lt30": "#1f77b4",
     "ew_30_100": "#ff7f0e",
-    "ew_100_300": "#2ca02c",
-    "ew_gt300": "#d62728",
+    "ew_gt100": "#d62728",
 }
 
 
@@ -189,6 +186,15 @@ def plot_label_for_token(token):
     if token in EW_TOKENS:
         return EW_LABELS[EW_TOKENS.index(token)]
     return token
+
+
+def ew_bin_center(token):
+    """Reference EW center (Angstrom) for plot ordering."""
+    j = EW_TOKENS.index(token)
+    lo, hi = EW_EDGES[j], EW_EDGES[j + 1]
+    if np.isfinite(hi):
+        return 0.5 * (lo + hi)
+    return lo + 0.5 * (EW_EDGES[j] - EW_EDGES[j - 1])
 
 
 def clean_stack_outputs(stack_path):
@@ -336,12 +342,21 @@ def _add_line_guides(ax):
 
 
 def _stacks_for_mass_bin(results, i_mstar):
-    """Return list of (token, saved) for non-None stacks in one mass bin."""
+    """Return (token, saved) pairs in one mass bin, sorted by EW bin center."""
     out = []
-    for (i, token), saved in sorted(results.items()):
+    for (i, token), saved in results.items():
         if i == i_mstar and saved is not None:
             out.append((token, saved))
-    return out
+    return sorted(out, key=lambda x: ew_bin_center(x[0]))
+
+
+def _stack_by_token_for_mass_bin(results, i_mstar):
+    """Map EW token -> saved dict for non-None stacks in one mass bin."""
+    return {
+        token: saved
+        for (i, token), saved in results.items()
+        if i == i_mstar and saved is not None
+    }
 
 
 def make_overlay_plots(results, wave, mstar_bins, plot_dir):
@@ -388,31 +403,31 @@ def make_overlay_plots(results, wave, mstar_bins, plot_dir):
 
 
 def make_grid_plot(results, wave, mstar_bins, plot_dir):
-    """Grid: rows = mass bins, columns = stacks that exist (variable width)."""
+    """Grid: rows = mass bins, columns = EW bins (fixed, increasing EW center)."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     os.makedirs(plot_dir, exist_ok=True)
     n_mstar = len(mstar_bins) - 1
-    max_cols = max(len(_stacks_for_mass_bin(results, i)) for i in range(n_mstar))
-    if max_cols == 0:
+    n_ew = len(EW_TOKENS)
+    if not any(_stacks_for_mass_bin(results, i) for i in range(n_mstar)):
         print("    (no stacks; skipping grid_all_stacks)")
         return
 
     fig, axes = plt.subplots(
-        n_mstar, max_cols,
-        figsize=(3.5 * max_cols, 2.4 * n_mstar),
+        n_mstar, n_ew,
+        figsize=(3.5 * n_ew, 2.4 * n_mstar),
         sharex=True, squeeze=False,
     )
 
     for i in range(n_mstar):
         m_lo, m_hi = mstar_bins[i], mstar_bins[i + 1]
-        stacks = _stacks_for_mass_bin(results, i)
-        for j in range(max_cols):
+        by_token = _stack_by_token_for_mass_bin(results, i)
+        for j, token in enumerate(EW_TOKENS):
             ax = axes[i][j]
-            if j < len(stacks):
-                token, saved = stacks[j]
+            saved = by_token.get(token)
+            if saved is not None:
                 flux = saved["stack_spec"]
                 err = saved["stack_err"]
                 color = EW_COLORS.get(token, "k")
@@ -425,17 +440,16 @@ def make_grid_plot(results, wave, mstar_bins, plot_dir):
                     0.97, 0.92, f"N={saved['n_galaxies']}",
                     ha="right", va="top", transform=ax.transAxes, fontsize=7,
                 )
-                if i == 0:
-                    ax.set_title(plot_label_for_token(token), fontsize=7)
-            else:
-                ax.axis("off")
-            if j == 0 and len(stacks) > 0:
-                ax.set_ylabel(f"[{m_lo:.1f},{m_hi:.1f}]", fontsize=9)
-            if i == n_mstar - 1 and j < len(stacks):
-                ax.set_xlabel(r"Rest $\lambda$ [$\AA$]", fontsize=8)
-            if j < len(stacks):
                 _add_line_guides(ax)
                 ax.set_xlim(wave.min(), wave.max())
+            else:
+                ax.axis("off")
+            if i == 0:
+                ax.set_title(plot_label_for_token(token), fontsize=7)
+            if j == 0:
+                ax.set_ylabel(f"[{m_lo:.1f},{m_hi:.1f}]", fontsize=9)
+            if i == n_mstar - 1:
+                ax.set_xlabel(r"Rest $\lambda$ [$\AA$]", fontsize=8)
 
     fig.suptitle("Halpha-normalized stacks (fixed EW bins per mass bin)",
                  fontsize=12)

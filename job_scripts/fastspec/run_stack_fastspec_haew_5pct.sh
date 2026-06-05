@@ -1,8 +1,8 @@
 #!/bin/bash
 # Run custom FastSpecFit (stackfit) on the M* x H-alpha-EW fixed-bin
 # stacks produced by code/nebular_stuff/stack_mstar_haew_5pct.py.
-# Mass bins: 0.5 dex from log M*=6 to 9, plus [9.0, 9.25].
-# EW bins: <30, 30-100, 100-300, >300 Angstrom (stacked when N>=50).
+# Mass bins: 0.5 dex from log M*=6 to 8; 0.25 dex from 8 to 9.25.
+# EW bins: <30, 30-100, >100 Angstrom (stacked when N>=50).
 #
 # "Custom" = Chabrier 9.9.9 templates + narrow He II lambda4686 via a custom
 # emline-constraints YAML (see CONSTRAINTS setup below).
@@ -74,7 +74,7 @@ export DUST_DIR=/dvs_ro/cfs/cdirs/cosmo/data/dust/v0_1
 export FPHOTO_DIR=/dvs_ro/cfs/cdirs/desi/external/legacysurvey/dr9
 export FTEMPLATES_DIR=/dvs_ro/cfs/cdirs/desi/public/external/templates/fastspecfit
 
-echo "Running custom FastSpecFit (stackfit) on M* x H-alpha-EW fixed-bin stacks (<30, 30-100, 100-300, >300 A)"
+echo "Running custom FastSpecFit (stackfit) on M* x H-alpha-EW fixed-bin stacks (<30, 30-100, >100 A)"
 echo "Stack path    : ${STACK_PATH}"
 echo "Templates     : ${templates}"
 echo "Constraints   : ${constraintsfile}"

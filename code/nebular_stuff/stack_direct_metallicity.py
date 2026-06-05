@@ -9,8 +9,9 @@ FastSpecFit (`job_scripts/fastspec/run_stack_fastspec_haew_5pct.sh`).
 For each stack bin there is one FastSpecFit stack output
 `fastspec_stack_ALL_mstar_{mlo}_{mhi}_{ewtoken}.fits` whose emission-line
 table (hdu=3) has one row (the stacked spectrum). EW tokens are fixed bins:
-`ew_lt30`, `ew_30_100`, `ew_100_300`, `ew_gt300` (<30, 30-100, 100-300,
->300 Angstrom). Stacks are produced only when N >= 50 in the (mass, EW) cell.
+`ew_lt30`, `ew_30_100`, `ew_gt100` (<30, 30-100, >100 Angstrom). Mass bins:
+0.5 dex from log M*=6 to 8, then 0.25 dex to 9.25 (9 mass bins). Stacks are
+produced only when N >= 50 in the (mass, EW) cell.
 
 This script:
   1. Globs the per-bin FastSpecFit stack outputs.
@@ -70,19 +71,17 @@ STACK_PATH = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/stack_files
 INPUT_GLOB = "fastspec_stack_ALL_mstar_*.fits"
 FASTSPEC_HDU = 3
 
-EW_BIN_TOKENS = ["ew_lt30", "ew_30_100", "ew_100_300", "ew_gt300"]
+EW_BIN_TOKENS = ["ew_lt30", "ew_30_100", "ew_gt100"]
 EW_TOKENS = EW_BIN_TOKENS
 EW_BIN_LABELS = {
     "ew_lt30": r"EW $\leq$ 30 $\AA$",
     "ew_30_100": r"30 $<$ EW $\leq$ 100 $\AA$",
-    "ew_100_300": r"100 $<$ EW $\leq$ 300 $\AA$",
-    "ew_gt300": r"EW $>$ 300 $\AA$",
+    "ew_gt100": r"EW $>$ 100 $\AA$",
 }
 EW_COLORS = {
     "ew_lt30": "#1f77b4",
     "ew_30_100": "#ff7f0e",
-    "ew_100_300": "#2ca02c",
-    "ew_gt300": "#d62728",
+    "ew_gt100": "#d62728",
 }
 
 _TE_LINE_NAMES_BASE = ["HALPHA", "HBETA", "HGAMMA",
