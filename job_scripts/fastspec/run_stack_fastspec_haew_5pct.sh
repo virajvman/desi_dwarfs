@@ -1,6 +1,7 @@
 #!/bin/bash
 # Run custom FastSpecFit (stackfit) on the M* x H-alpha-EW fixed-bin
 # stacks produced by code/nebular_stuff/stack_mstar_haew_5pct.py.
+# Mass bins: 0.5 dex from log M*=6 to 9, plus [9.0, 9.25].
 # EW bins: <30, 30-100, 100-300, >300 Angstrom (stacked when N>=50).
 #
 # "Custom" = Chabrier 9.9.9 templates + narrow He II lambda4686 via a custom

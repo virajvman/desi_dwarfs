@@ -2,8 +2,10 @@
 stack_mstar_haew_5pct.py
 ========================
 
-Bootstrap-stacked spectra in 0.5 dex bins of log M_star (6 -> 9) crossed
+Bootstrap-stacked spectra in 0.5 dex bins of log M_star (6 -> 9.25) crossed
 with four fixed H-alpha EW bins (BGS_BRIGHT | BGS_FAINT | LOWZ):
+
+Mass edges: 6.0, 6.5, ..., 9.0, 9.25 (0.25 dex bin at the high-mass end).
 
     1. EW <= 30 A
     2. 30 < EW <= 100 A
@@ -63,7 +65,7 @@ from stack_explore import (
 SAMPLES = ["BGS_BRIGHT", "BGS_FAINT", "LOWZ"]
 COMBINED_TAG = "ALL"
 
-MSTAR_BINS = np.arange(6.0, 9.0 + 1e-6, 0.5)
+MSTAR_BINS = np.array([6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.25])
 
 # Fixed H-alpha EW bins (linear, Angstroms). Half-open (lo, hi].
 EW_EDGES = [0.0, 30.0, 100.0, 300.0, np.inf]

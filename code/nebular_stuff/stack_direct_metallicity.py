@@ -333,6 +333,78 @@ def _mstar_mid(tab):
     return 0.5 * (np.asarray(tab["MSTAR_MIN"]) + np.asarray(tab["MSTAR_MAX"]))
 
 
+def print_density_diagnostic_verification(out_tab, density_diagnostic):
+    """Print n_e sanity checks for the chosen density diagnostic."""
+    ne_prior_lo, ne_prior_hi = 10.0, 5000.0
+    print(f"\n[2b] Density-diagnostic verification ({density_diagnostic}):")
+
+    good = out_tab[
+        (out_tab["DETECTED_7LINE"]) & (out_tab["MEAN_FIT_SUCCESS"])
+    ]
+    if len(good) == 0:
+        print("    No successful fits; skipping n_e checks.")
+        return
+
+    ne = np.asarray(good["NE_OII"], dtype=float)
+    finite_ne = ne[np.isfinite(ne)]
+    if finite_ne.size == 0:
+        print("    No finite NE_OII values in successful fits.")
+        return
+
+    in_prior = (finite_ne >= ne_prior_lo) & (finite_ne <= ne_prior_hi)
+    print(
+        f"    NE_OII (fitted n_e): N={finite_ne.size}, "
+        f"median={np.median(finite_ne):.1f} cm^-3, "
+        f"range=[{finite_ne.min():.1f}, {finite_ne.max():.1f}]"
+    )
+    print(
+        f"    Within prior [{ne_prior_lo:g}, {ne_prior_hi:g}] cm^-3: "
+        f"{int(np.sum(in_prior))}/{finite_ne.size}"
+    )
+
+    if density_diagnostic == "SII":
+        obs_col = "OBS_SII_DOUBLET"
+        obs_label = "[S II] 6716/6731"
+    else:
+        obs_col = "OBS_OII_DOUBLET"
+        obs_label = "[O II] 3726/3729"
+
+    if obs_col not in good.colnames:
+        return
+
+    obs = np.asarray(good[obs_col], dtype=float)
+    ok = np.isfinite(ne) & np.isfinite(obs)
+    if int(np.sum(ok)) < 3:
+        print(f"    Too few finite {obs_label} ratios for trend check.")
+        return
+
+    corr = np.corrcoef(obs[ok], ne[ok])[0, 1]
+    print(
+        f"    Pearson r({obs_label}, NE_OII) = {corr:.3f} "
+        f"(expect negative: higher doublet ratio -> lower n_e)"
+    )
+
+    high_mass = good[np.asarray(good["MSTAR_MIN"], dtype=float) >= 9.0]
+    if len(high_mass) > 0:
+        hm_fit = high_mass[
+            (high_mass["DETECTED_7LINE"]) & (high_mass["MEAN_FIT_SUCCESS"])
+        ]
+        print(
+            f"    log M* >= 9.0 bins: {len(high_mass)} total, "
+            f"{len(hm_fit)} with successful fits"
+        )
+        for row in hm_fit:
+            mlo, mhi = float(row["MSTAR_MIN"]), float(row["MSTAR_MAX"])
+            token = row["EW_TOKEN"]
+            ne_val = float(row["NE_OII"])
+            obs_val = float(row[obs_col]) if np.isfinite(row[obs_col]) else np.nan
+            print(
+                f"      [{mlo:.2f},{mhi:.2f}] {token}: "
+                f"NE_OII={ne_val:.1f}, {obs_col}={obs_val:.3f}, "
+                f"12+log(O/H)={float(row['TWELVE_LOG_OH']):.3f}"
+            )
+
+
 def _plot_vs_mstar_by_ew(tab, ycol, yerr_lo, yerr_hi, ylab, ax, title=None):
     """Errorbar plot vs log M* midpoint, one series per EW_TOKEN."""
     mid = _mstar_mid(tab)
@@ -559,18 +631,24 @@ def main(argv=None):
     print(f"    {out_ecsv}")
 
     make_all_plots(out_tab, plot_dir)
+    print_density_diagnostic_verification(out_tab, density_diagnostic)
 
     print("\n[3] Done.")
     return 0
 
 
 def _plot_obs_vs_mstar_by_ew(tab, ycol, yerr_col, ylab, ax, title=None):
-    """Observed quantity vs log M* midpoint, one series per EW_TOKEN."""
+    """Observed quantity vs log M* midpoint, one series per EW_TOKEN.
+
+    Solid markers: bin passed the TE line-SNR gate (DETECTED_7LINE).
+    Dashed hollow markers: finite ratio but TE gate failed (not fitted).
+    """
     finite = np.isfinite(tab[ycol])
     if not np.any(finite):
         return False
 
     plot_tab = tab[finite]
+    has_undetected = False
     for token in EW_TOKENS:
         sel = np.asarray(plot_tab["EW_TOKEN"]) == token
         if not np.any(sel):
@@ -603,6 +681,7 @@ def _plot_obs_vs_mstar_by_ew(tab, ycol, yerr_col, ylab, ax, title=None):
             ax.plot([], [], "o-", color=EW_COLORS[token], label=label)
 
         if np.any(~det):
+            has_undetected = True
             ax.plot(
                 mid_sub[~det], y[~det],
                 marker="o", fillstyle="none", ls="--", lw=1.0,
@@ -611,7 +690,20 @@ def _plot_obs_vs_mstar_by_ew(tab, ycol, yerr_col, ylab, ax, title=None):
 
     ax.set_xlabel(r"log $M_\star$ [$M_\odot$]")
     ax.set_ylabel(ylab)
-    ax.legend(frameon=False, fontsize=7)
+    handles, labels = ax.get_legend_handles_labels()
+    from matplotlib.lines import Line2D
+    handles.append(Line2D(
+        [], [], color="k", marker="o", ls="-", lw=1.2,
+        label="TE lines detected",
+    ))
+    labels.append("TE lines detected")
+    if has_undetected:
+        handles.append(Line2D(
+            [], [], color="k", marker="o", fillstyle="none", ls="--",
+            lw=1.0, alpha=0.7, label="ratio only (TE gate failed)",
+        ))
+        labels.append("ratio only (TE gate failed)")
+    ax.legend(handles, labels, frameon=False, fontsize=7)
     if title:
         ax.set_title(title, fontsize=10)
     return True
@@ -672,9 +764,19 @@ def make_te_ne_hahb_plot(out_tab, plot_dir):
         print("    (no successful fits; skipping te_ne_hahb_vs_mstar)")
         return
 
+    dens_diag = "SII"
+    if "DENSITY_DIAGNOSTIC" in good.colnames and len(good) > 0:
+        uniq = np.unique(np.asarray(good["DENSITY_DIAGNOSTIC"]))
+        if len(uniq) == 1:
+            dens_diag = str(uniq[0])
+    ne_ylab = (
+        r"$n_e$ ([S II]) [cm$^{-3}$]" if dens_diag == "SII"
+        else r"$n_e$ ([O II]) [cm$^{-3}$]"
+    )
+
     fig, axes = plt.subplots(1, 3, figsize=(16, 5))
     for col, ax, ylab in [
-        ("NE_OII", axes[0], r"$n_e$ [cm$^{-3}$]"),
+        ("NE_OII", axes[0], ne_ylab),
         ("TE_OIII", axes[1], r"$T_e$ [K]"),
         ("HA_HB_INTRINSIC", axes[2], r"H$\alpha$/H$\beta$ (intrinsic)"),
     ]:
@@ -682,7 +784,10 @@ def make_te_ne_hahb_plot(out_tab, plot_dir):
             good, col, f"{col}_ERR_LO", f"{col}_ERR_HI", ylab, ax,
         )
 
-    fig.suptitle("Direct-method stacks: $n_e$, $T_e$, intrinsic Balmer ratio")
+    fig.suptitle(
+        f"Direct-method stacks ($n_e$ from {dens_diag}): "
+        r"$n_e$, $T_e$, intrinsic Balmer ratio"
+    )
     fig.tight_layout(rect=[0, 0, 1, 0.96])
     out_png = os.path.join(plot_dir, "te_ne_hahb_vs_mstar.png")
     fig.savefig(out_png, dpi=150)
@@ -708,7 +813,12 @@ def make_obs_hahb_plot(out_tab, plot_dir):
         print("    (no finite OBS_HA_HB; skipping obs_hahb_vs_mstar)")
         return
 
-    fig.tight_layout()
+    fig.suptitle(
+        "Observed Balmer decrement (mean stack); "
+        "dashed = ratio measured but TE lines not all detected",
+        fontsize=10,
+    )
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
     out_png = os.path.join(plot_dir, "obs_hahb_vs_mstar.png")
     fig.savefig(out_png, dpi=150)
     plt.close(fig)
@@ -741,7 +851,11 @@ def make_doublet_ratios_vs_mstar_plot(out_tab, plot_dir):
             ax.set_title(f"{ylab} (no finite values)", fontsize=10)
             ax.axis("off")
 
-    fig.suptitle("Density-diagnostic doublet ratios (mean stack)")
+    fig.suptitle(
+        "Density-diagnostic doublet ratios (mean stack); "
+        "dashed = ratio measured but TE lines not all detected",
+        fontsize=10,
+    )
     fig.tight_layout(rect=[0, 0, 1, 0.96])
     out_png = os.path.join(plot_dir, "doublet_ratios_vs_mstar.png")
     fig.savefig(out_png, dpi=150)
