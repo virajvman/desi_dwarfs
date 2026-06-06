@@ -26,7 +26,7 @@ is kept as a diagnostic only (pickle + plots).
 Outputs (written to STACK_PATH; stale stack_ALL_*.fits, stacks_spec_*.pkl,
 and fastspec_stack_ALL_*.fits removed at the start of each run):
   - stacks_spec_ALL_mstar_{mlo}_{mhi}_{ewtoken}.pkl
-  - stack_ALL_mstar_{mlo}_{mhi}_{ewtoken}.fits   (1 + 50 rows)
+  - stack_ALL_mstar_{mlo}_{mhi}_{ewtoken}.fits   (1 + 200 rows)
   - plots/overlay_mstar_{mlo}_{mhi}.png
   - plots/grid_all_stacks.png
   - plots/ivar_vs_bootstd_{label}.png  (validation, representative bins)

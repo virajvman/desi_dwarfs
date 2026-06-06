@@ -8,7 +8,7 @@ FastSpecFit (`job_scripts/fastspec/run_stack_fastspec_haew_5pct.sh`).
 
 For each stack bin there is one FastSpecFit stack output
 `fastspec_stack_ALL_mstar_{mlo}_{mhi}_{ewtoken}.fits` whose emission-line
-table (hdu=3) has 1 central row (IS_MEAN stack) plus 50 bootstrap rows.
+table (hdu=3) has 1 central row (IS_MEAN stack) plus 200 bootstrap rows.
 EW tokens are fixed bins:
 `ew_lt30`, `ew_30_100`, `ew_gt100` (<30, 30-100, >100 Angstrom). Mass bins:
 0.5 dex from log M*=6 to 8, then 0.25 dex to 9.25 (9 mass bins). Stacks are
@@ -96,7 +96,7 @@ MIN_FLUX = 0.0
 
 # Bootstrap reliability gate for direct-method errors (survivor bias on OIII_4363).
 MIN_N_BOOT_FIT = 30
-N_BOOT_TOTAL = 50
+N_BOOT_TOTAL = 200
 
 TE_DENSITY_DIAGNOSTIC = "SII"
 
