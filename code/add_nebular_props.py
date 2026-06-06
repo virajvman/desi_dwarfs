@@ -232,3 +232,7 @@ if __name__ == "__main__":
     sys.exit(main())
 
     #TODO: use BOXFLUX as fiducial flux value for stuff. Make note that is it likely biased for 20% of the toime
+    #TODO: run the latest version of fastspecfit 3.4.2 and get the emission line properties again! Validate the boxflux vs. normal flux agreement
+    #TODO: then likely need to rerun the stacked fit analysis again and the stellar mass comparison
+    #TODO: make a plot of a fastspecfit on a spectrum and make a plot of it!
+
