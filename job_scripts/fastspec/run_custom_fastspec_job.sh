@@ -17,41 +17,96 @@
 N=10
 mp=16                                # change after measuring avg targets/healpix
 samplefile=/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_dr1_dwarfs.fits
-emlinesfile=/global/homes/v/virajvm/DESI2_LOWZ/desi_dwarfs/data/data_metal/emlines.ecsv
+constraintsfile=/global/u1/v/virajvm/DESI2_LOWZ/desi_dwarfs/data/data_metal/emline-constraints-dwarfs.yaml
+emlinesfile=/global/u1/v/virajvm/DESI2_LOWZ/desi_dwarfs/data/data_metal/emlines-dwarfs.ecsv
 templates=/global/cfs/cdirs/desi/users/dscholte/data/ohno/templates/9.9.9/ftemplates-chabrier-9.9.9.fits
 outdir_data=/pscratch/sd/v/virajvm/desi_dwarf_catalogs/fastspecfit_custom_run/
 # ---------------------------------------------------------------------------
 
-# Match the recommended stack in etc/fastspecfit-env.sh
-export FASTSPECFIT_VERSION=3.4.1
-export DESITARGET_VERSION=4.7.2
-source /dvs_ro/common/software/desi/desi_environment.sh main-2.2.0
-module swap desitarget/${DESITARGET_VERSION}
-module load fastspecfit/${FASTSPECFIT_VERSION}
+# ---- fastspecfit environment: DESI stack + HEAD source override -------------
+# The tagged fastspecfit/3.4.2 module does NOT give mpi-fastspecfit a
+# --constraintsfile option: it was added to the mpi-fastspecfit parser ~7.5h
+# AFTER the 3.4.2 tag was cut (commit 6f982d0), and the propagation that makes
+# the per-healpix fastspec workers actually *use* it landed later still
+# (commit 1cbc08a -- "mpi.build_cmdargs needs constraintsfile, too"). Both are
+# 3.4.3-dev, which is not yet released as a NERSC module.
+#
+# So we shadow the 3.4.2 module with a HEAD checkout (this is the official
+# override pattern documented in fastspecfit etc/fastspecfit-env.sh):
+#   - module load fastspecfit/3.4.2 provides the deps and the stackfit/fastspec
+#     console-script shims; those shims do `from fastspecfit.fastspecfit import ...`
+#     so once PYTHONPATH points at HEAD they import HEAD code.
+#   - mpi-fastspecfit lives in bin/, picked up directly via the PATH prepend.
+# fastspecfit is pure Python (numba JITs at runtime), so no build/pip step is
+# needed -- the PYTHONPATH/PATH prepend alone runs HEAD.
+#
+# One-time setup on NERSC:
+#   git clone https://github.com/desihub/fastspecfit ${FSF_SRC}   # stay on main
+FSF_SRC=/global/homes/v/virajvm/packages/fastspecfit
 
-# ADD THIS BLOCK ---->
+source /dvs_ro/common/software/desi/desi_environment.sh main
+module swap desitarget/4.7.2
+module load fastspecfit/3.4.2
+export PYTHONPATH=${FSF_SRC}/py:$PYTHONPATH
+export PATH=${FSF_SRC}/bin:$PATH
+
+# ---- preflight: confirm we're running the HEAD override, not bare 3.4.2 -----
 if ! command -v mpi-fastspecfit &>/dev/null; then
-    echo "ERROR: mpi-fastspecfit not on PATH after module load. Aborting."
+    echo "ERROR: mpi-fastspecfit not on PATH after module load + override. Aborting."
     module avail fastspecfit 2>&1
+    exit 1
+fi
+
+fsf_file=$(python -c "import fastspecfit, os; print(os.path.dirname(fastspecfit.__file__))")
+echo "fastspecfit imported from: ${fsf_file}"
+case "${fsf_file}" in
+    "${FSF_SRC}"/*) : ;;
+    *) echo "ERROR: fastspecfit NOT imported from HEAD checkout ${FSF_SRC} (got ${fsf_file})."
+       echo "       Check FSF_SRC and that PYTHONPATH was prepended. Aborting."
+       exit 1 ;;
+esac
+
+if ! mpi-fastspecfit --help 2>&1 | grep -q -- '--constraintsfile'; then
+    echo "ERROR: mpi-fastspecfit lacks --constraintsfile (needs HEAD with PR #259)."
+    echo "       Your checkout ${FSF_SRC} is stale -- 'git pull' it onto main. Aborting."
     exit 1
 fi
 
 echo "=== Loaded modules ==="
 module list 2>&1 | grep -E 'fastspecfit|desiutil|desispec|desitarget|speclite|specsim'
+echo "fastspecfit HEAD: $(git -C "${FSF_SRC}" rev-parse --short HEAD 2>/dev/null || echo '?')"
 echo "======================"
 
+# ---- input files exist? -----------------------------------------------------
+for f in "${samplefile}" "${constraintsfile}" "${emlinesfile}"; do
+    if [[ ! -f "${f}" ]]; then
+        echo "ERROR: required input not found: ${f}"
+        exit 1
+    fi
+done
 
+# Validate the custom dwarfs constraint + line list load and tie He II 4686 narrow.
+python3 -c "
+from astropy.table import Table
+from fastspecfit.emlines import EmlineConstraints
+lt = Table.read('${emlinesfile}', format='ascii.ecsv')
+ec = EmlineConstraints('${constraintsfile}', lt)
+print('OK -', len(lt), 'lines; heii_4686 sigma_max =', ec.line_bounds('heii_4686')[1], 'km/s')
+"
 
 export DESI_SPECTRO_REDUX=/dvs_ro/cfs/cdirs/desi/spectro/redux
 export DUST_DIR=/dvs_ro/cfs/cdirs/cosmo/data/dust/v0_1
 export FPHOTO_DIR=/dvs_ro/cfs/cdirs/desi/external/legacysurvey/dr9
 export FTEMPLATES_DIR=/dvs_ro/cfs/cdirs/desi/public/external/templates/fastspecfit
 
-# Shared numba JIT cache (must be on a path visible from every compute node)
-export NUMBA_CACHE_DIR=${PSCRATCH}/fastspecfit/numba-cache/${FASTSPECFIT_VERSION}
+# Shared numba JIT cache, keyed by the checkout commit so a 'git pull' to the
+# HEAD source invalidates stale compiled kernels. Must be visible from every node.
+FSF_REF=$(git -C "${FSF_SRC}" rev-parse --short HEAD 2>/dev/null || echo head)
+export NUMBA_CACHE_DIR=${PSCRATCH}/fastspecfit/numba-cache/${FSF_REF}
 mkdir -p "${NUMBA_CACHE_DIR}" logs
 
 mpiscript=$(type -p mpi-fastspecfit)
+echo "mpi-fastspecfit: ${mpiscript}"
 
 # --- Numba warm-up on a single rank (populates NUMBA_CACHE_DIR) -------------
 echo "Warming up Numba cache on one rank..."
@@ -64,7 +119,9 @@ srun --nodes=1 --ntasks=1 --cpus-per-task=2 --cpu-bind=cores \
     --survey=${wu_survey} --program=${wu_program} --healpix=${wu_healpix} \
     --mp=1 --ntargets=1 --nmonte=0 --nompi \
     --outdir-data=/tmp/fastspecfit-warmup --overwrite \
-    --templates=${templates} --emlinesfile=${emlinesfile} \
+    --templates=${templates} \
+    --emlinesfile=${emlinesfile} \
+    --constraintsfile=${constraintsfile} \
     --vdisp-nominal 100 --vdisp-bounds 50 200 --ignore-quasarnet
 echo "Warm-up complete."
 
@@ -86,6 +143,7 @@ time srun --nodes=${N} --ntasks=${ntasks} \
         --samplefile=${samplefile} \
         --outdir-data=${outdir_data} \
         --emlinesfile=${emlinesfile} \
+        --constraintsfile=${constraintsfile} \
         --templates=${templates} \
         --specprod iron \
         --mp=${mp} \

@@ -9,6 +9,9 @@
 #   - Added neiii_3968 and oi_6364 to narrow forbidden groups
 #   - Includes hei_4471 (narrow Balmer group) and nii_5755 (forbidden group)
 #   - heii_4686 in narrow_balmer / narrow_all (narrow He II, not broad QSO)
+#   - narrow_only final_pass uses free_sigma: false (fix narrow widths in the
+#     final pass; only line centers float +/-100 km/s) to match the fastspecfit
+#     3.4.3 default (commit ab54017). Narrow widths stay tied to the group fit.
 #
 # Usage (stackfit / fastspec):
 #   --emlinesfile=path/to/emlines-dwarfs.ecsv
@@ -144,7 +147,7 @@ profiles:
           - oii_7330
           - siii_9069
           - siii_9532
-        final_pass: {free_vshift: true, free_sigma: true, delta_vshift_max: 100.0, delta_sigma_max: 100.0}
+        final_pass: {free_vshift: true, free_sigma: false, delta_vshift_max: 100.0, delta_sigma_max: 100.0}
 
       - name: narrow_balmer
         anchor: halpha
@@ -163,7 +166,7 @@ profiles:
           - hei_4471
           - heii_4686
           - hei_5876
-        final_pass: {free_vshift: true, free_sigma: true, delta_vshift_max: 100.0, delta_sigma_max: 100.0}
+        final_pass: {free_vshift: true, free_sigma: false, delta_vshift_max: 100.0, delta_sigma_max: 100.0}
 
     free_lines: []
 
