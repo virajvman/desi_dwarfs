@@ -114,10 +114,15 @@ dryout=$(mpi-fastspecfit \
     --vdisp-nominal 100 --vdisp-bounds 50 200 \
     --ignore-quasarnet \
     --overwrite --nompi --dry-run 2>&1)
-# Show a couple of representative generated commands.
-echo "${dryout}" | grep -m 3 -- '--constraintsfile' || true
-echo "${dryout}" | grep -q -- '--constraintsfile' \
-    || fail "--constraintsfile did NOT propagate into the per-healpix commands (HEAD missing commit 1cbc08a)."
+# Show a couple of representative generated commands (|| true guards the
+# pipefail+SIGPIPE that head/grep short-circuiting would otherwise trigger).
+printf '%s\n' "${dryout}" | grep -- '--constraintsfile' | head -3 || true
+# Substring test in PURE BASH -- not `echo | grep -q`. With `set -o pipefail`,
+# grep -q closes the pipe on first match, echo dies with SIGPIPE (141), and the
+# pipeline "fails" even though the match succeeded -> false negative.
+if [[ "${dryout}" != *"--constraintsfile"* ]]; then
+    fail "--constraintsfile did NOT propagate into the per-healpix commands (HEAD missing commit 1cbc08a)."
+fi
 echo "OK: --constraintsfile (and --emlinesfile) propagate into the worker fastspec commands."
 
 echo ""
