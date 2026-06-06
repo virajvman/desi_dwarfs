@@ -11,19 +11,20 @@
 # finalized; the stack_mstar_{elg,noelg}_*.fits globs below are left as-is and
 # will be updated in a later stage.
 
-# ---- fastspecfit environment: DESI stack + HEAD source override -------------
-# Same override as the production run so stackfit runs the same HEAD (3.4.3-dev)
-# code as mpi-fastspecfit. module load provides the stackfit console-script shim;
-# the PYTHONPATH prepend makes that shim import HEAD code. See the long comment
-# in run_custom_fastspec_job.sh for the full rationale.
+# ---- fastspecfit environment: DESI stack + HEAD editable checkout ----------
+# Same HEAD checkout as the production run so stackfit runs the same 3.4.3-dev
+# code as mpi-fastspecfit. The one-time editable install registers the HEAD
+# `stackfit` entry point (and the correct output-header version). See the long
+# comment in run_custom_fastspec_job.sh for the full rationale.
 #
-# One-time setup on NERSC:
+# One-time on NERSC, and again after each `git pull` of $FSF_SRC:
 #   git clone https://github.com/desihub/fastspecfit ${FSF_SRC}   # stay on main
+#   source /dvs_ro/common/software/desi/desi_environment.sh main
+#   pip install --no-deps -e ${FSF_SRC}
 FSF_SRC=/global/homes/v/virajvm/packages/fastspecfit
 
 source /dvs_ro/common/software/desi/desi_environment.sh main
-module swap desitarget/4.7.2
-module load fastspecfit/3.4.2
+# Do NOT module load fastspecfit -- the editable HEAD checkout provides it.
 export PYTHONPATH=${FSF_SRC}/py:$PYTHONPATH
 export PATH=${FSF_SRC}/bin:$PATH
 

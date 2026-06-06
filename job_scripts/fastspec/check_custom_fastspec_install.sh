@@ -26,17 +26,24 @@ samplefile=/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_dr1_dwarfs.fits
 constraintsfile=/global/u1/v/virajvm/DESI2_LOWZ/desi_dwarfs/data/data_metal/emline-constraints-dwarfs.yaml
 emlinesfile=/global/u1/v/virajvm/DESI2_LOWZ/desi_dwarfs/data/data_metal/emlines-dwarfs.ecsv
 templates=/global/cfs/cdirs/desi/users/dscholte/data/ohno/templates/9.9.9/ftemplates-chabrier-9.9.9.fits
-outdir_data=/pscratch/sd/v/virajvm/desi_dwarf_catalogs/fastspecfit_custom_run/   # listed only; nothing written
+# Use an EMPTY throwaway outdir so --plan/--dry-run see all files as "to do" and
+# actually generate commands. (Pointing at the real outdir with existing outputs
+# makes --dry-run emit 0 commands -> a false "propagation failed" result.)
+outdir_data=${PSCRATCH}/fastspecfit/check-dryrun
 FSF_SRC=/global/homes/v/virajvm/packages/fastspecfit
 mp=16
 # ---------------------------------------------------------------------------
 
-# ---- fastspecfit environment: DESI stack + HEAD source override ------------
+# ---- fastspecfit environment: DESI stack + HEAD editable checkout ----------
+# See run_custom_fastspec_job.sh for the full rationale + one-time setup:
+#   git clone https://github.com/desihub/fastspecfit ${FSF_SRC}   # stay on main
+#   source /dvs_ro/common/software/desi/desi_environment.sh main
+#   pip install --no-deps -e ${FSF_SRC}
 source /dvs_ro/common/software/desi/desi_environment.sh main
-module swap desitarget/4.7.2
-module load fastspecfit/3.4.2
+# Do NOT module load fastspecfit -- the editable HEAD checkout provides it.
 export PYTHONPATH=${FSF_SRC}/py:$PYTHONPATH
 export PATH=${FSF_SRC}/bin:$PATH
+mkdir -p "${outdir_data}"
 
 # external data dirs (needed so --plan/--dry-run can locate the redux files)
 export DESI_SPECTRO_REDUX=/dvs_ro/cfs/cdirs/desi/spectro/redux
@@ -89,7 +96,7 @@ mpi-fastspecfit \
     --outdir-data=${outdir_data} \
     --specprod iron \
     --mp=${mp} \
-    --nompi --plan \
+    --overwrite --nompi --plan \
     || fail "--plan failed (sample read / distribution)."
 
 # ---- 5. --dry-run: confirm --constraintsfile propagates --------------------
@@ -106,7 +113,7 @@ dryout=$(mpi-fastspecfit \
     --nmonte=100 \
     --vdisp-nominal 100 --vdisp-bounds 50 200 \
     --ignore-quasarnet \
-    --nompi --dry-run 2>&1)
+    --overwrite --nompi --dry-run 2>&1)
 # Show a couple of representative generated commands.
 echo "${dryout}" | grep -m 3 -- '--constraintsfile' || true
 echo "${dryout}" | grep -q -- '--constraintsfile' \

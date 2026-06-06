@@ -23,30 +23,27 @@ templates=/global/cfs/cdirs/desi/users/dscholte/data/ohno/templates/9.9.9/ftempl
 outdir_data=/pscratch/sd/v/virajvm/desi_dwarf_catalogs/fastspecfit_custom_run/
 # ---------------------------------------------------------------------------
 
-# ---- fastspecfit environment: DESI stack + HEAD source override -------------
-# The tagged fastspecfit/3.4.2 module does NOT give mpi-fastspecfit a
-# --constraintsfile option: it was added to the mpi-fastspecfit parser ~7.5h
-# AFTER the 3.4.2 tag was cut (commit 6f982d0), and the propagation that makes
-# the per-healpix fastspec workers actually *use* it landed later still
-# (commit 1cbc08a -- "mpi.build_cmdargs needs constraintsfile, too"). Both are
-# 3.4.3-dev, which is not yet released as a NERSC module.
+# ---- fastspecfit environment: DESI stack + HEAD editable checkout ----------
+# The tagged fastspecfit/3.4.2 module's mpi-fastspecfit has NO --constraintsfile:
+# it was added to the parser ~7.5h AFTER the 3.4.2 tag (commit 6f982d0), and the
+# propagation that makes the per-healpix fastspec workers actually *use* it
+# landed later still (commit 1cbc08a). Both are 3.4.3-dev, not yet a NERSC module.
+# So we run a HEAD git checkout instead of the module.
 #
-# So we shadow the 3.4.2 module with a HEAD checkout (this is the official
-# override pattern documented in fastspecfit etc/fastspecfit-env.sh):
-#   - module load fastspecfit/3.4.2 provides the deps and the stackfit/fastspec
-#     console-script shims; those shims do `from fastspecfit.fastspecfit import ...`
-#     so once PYTHONPATH points at HEAD they import HEAD code.
-#   - mpi-fastspecfit lives in bin/, picked up directly via the PATH prepend.
-# fastspecfit is pure Python (numba JITs at runtime), so no build/pip step is
-# needed -- the PYTHONPATH/PATH prepend alone runs HEAD.
+# fastspecfit is pure Python, but we still do a one-time *editable* install
+# (the dev-checkout flow from the fastspecfit install docs): it registers the
+# HEAD CLI entry points (stackfit, fastspec, fastqa) and regenerates _version.py
+# so the correct version is written into the output FITS headers. mpi-fastspecfit
+# lives in bin/ and is also picked up via the PATH prepend below.
 #
-# One-time setup on NERSC:
+# One-time on NERSC, and again after each `git pull` of $FSF_SRC:
 #   git clone https://github.com/desihub/fastspecfit ${FSF_SRC}   # stay on main
+#   source /dvs_ro/common/software/desi/desi_environment.sh main
+#   pip install --no-deps -e ${FSF_SRC}
 FSF_SRC=/global/homes/v/virajvm/packages/fastspecfit
 
 source /dvs_ro/common/software/desi/desi_environment.sh main
-module swap desitarget/4.7.2
-module load fastspecfit/3.4.2
+# Do NOT module load fastspecfit -- the editable HEAD checkout provides it.
 export PYTHONPATH=${FSF_SRC}/py:$PYTHONPATH
 export PATH=${FSF_SRC}/bin:$PATH
 
@@ -149,4 +146,5 @@ time srun --nodes=${N} --ntasks=${ntasks} \
         --mp=${mp} \
         --nmonte=100 \
         --vdisp-nominal 100 --vdisp-bounds 50 200 \
-        --ignore-quasarnet
+        --ignore-quasarnet \
+        --overwrite                # outdir holds stale 3.4.1 outputs; refit all

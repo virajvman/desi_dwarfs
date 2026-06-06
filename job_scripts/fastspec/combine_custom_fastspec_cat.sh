@@ -14,14 +14,13 @@
 
 # Merge the per-healpix fastspec catalogs produced by run_custom_fastspec_job.sh.
 # Must use the SAME fastspecfit code as the production run so the merged schema
-# matches the per-object outputs -- hence the same HEAD-source override below
-# (see the long comment in run_custom_fastspec_job.sh for why 3.4.2 alone is
-# insufficient). Merge itself needs no constraints/emlines/templates.
+# matches the per-object outputs -- hence the same HEAD editable checkout below
+# (see the long comment in run_custom_fastspec_job.sh, incl. the one-time
+# `pip install --no-deps -e ${FSF_SRC}` setup). Merge needs no constraints/templates.
 FSF_SRC=/global/homes/v/virajvm/packages/fastspecfit
 
 source /dvs_ro/common/software/desi/desi_environment.sh main
-module swap desitarget/4.7.2
-module load fastspecfit/3.4.2
+# Do NOT module load fastspecfit -- the editable HEAD checkout provides it.
 export PYTHONPATH=${FSF_SRC}/py:$PYTHONPATH
 export PATH=${FSF_SRC}/bin:$PATH
 
