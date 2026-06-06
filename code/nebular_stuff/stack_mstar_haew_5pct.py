@@ -18,9 +18,10 @@ Detection cuts (applied globally before binning):
 
 Per (mass, EW) cell: stack only when N >= 50; otherwise skip (no pooled fallback).
 
-Each output stack FITS has 1 central row (IS_MEAN=1) plus 50 bootstrap
-realizations (IS_MEAN=0). Row 0 carries propagated measurement ivar (not
-bootstrap std). Bootstrap std is kept as a diagnostic only (pickle + plots).
+Each output stack FITS has 1 central row (IS_MEAN=1) plus 200 bootstrap
+realizations (IS_MEAN=0), following the Scholte et al. recipe (200 samples).
+Row 0 carries propagated measurement ivar (not bootstrap std). Bootstrap std
+is kept as a diagnostic only (pickle + plots).
 
 Outputs (written to STACK_PATH; stale stack_ALL_*.fits, stacks_spec_*.pkl,
 and fastspec_stack_ALL_*.fits removed at the start of each run):
@@ -83,8 +84,8 @@ EW_STACK_NLIM = 50
 Z_MIN_GLOBAL = 0.0
 Z_MAX_GLOBAL = 0.5
 
-N_BOOTSTRAP = 50
-N_BOOT_SAVE = 50
+N_BOOTSTRAP = 200
+N_BOOT_SAVE = 200
 RANDOM_SEED = 42
 
 STACK_PATH = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/stack_files/mstar_haew_5pct/"
@@ -299,7 +300,12 @@ def write_multi_row_fits(saved, wave_for_fits, label):
     central_ivar = saved["central_ivar"]
     real_flux = saved["real_flux"]
     real_ivar = saved["real_ivar"]
-    n_galaxies = saved["n_galaxies"]
+    # NOBJ is the number of spectra actually stacked (matched to a spectrum),
+    # which can be < the catalog cell count when spectra are missing. The
+    # N>=50 stack gate is on the catalog count (n_cat), kept here as NCAT for
+    # provenance so the true stacked N is never misrepresented.
+    n_matched = saved["n_matched"]
+    n_cat = saved["n_galaxies"]
     mstar_min = saved["mstar_min"]
     mstar_max = saved["mstar_max"]
     ew_min = saved["ew_min"]
@@ -329,7 +335,8 @@ def write_multi_row_fits(saved, wave_for_fits, label):
         stack_redshift=np.zeros(n_rows),
         table_column_dict={
             "IS_MEAN":   np.array([1] + [0] * n_boot_keep, dtype=np.int64),
-            "NOBJ":      np.full(n_rows, n_galaxies, dtype=np.int64),
+            "NOBJ":      np.full(n_rows, n_matched, dtype=np.int64),
+            "NCAT":      np.full(n_rows, n_cat, dtype=np.int64),
             "MSTAR_MIN": np.full(n_rows, mstar_min, dtype=np.float32),
             "MSTAR_MAX": np.full(n_rows, mstar_max, dtype=np.float32),
             "EW_MIN":    np.full(n_rows, ew_min, dtype=np.float32),
@@ -338,6 +345,7 @@ def write_multi_row_fits(saved, wave_for_fits, label):
         table_format_dict={
             "IS_MEAN":   "K",
             "NOBJ":      "K",
+            "NCAT":      "K",
             "MSTAR_MIN": "E",
             "MSTAR_MAX": "E",
             "EW_MIN":    "E",
@@ -345,7 +353,8 @@ def write_multi_row_fits(saved, wave_for_fits, label):
         },
     )
     print(f"    {COMBINED_TAG} | {label}: "
-          f"N_gal={n_galaxies}, 1 mean + {n_boot_keep} bootstraps "
+          f"N_stacked={n_matched} (catalog N={n_cat}), "
+          f"1 mean + {n_boot_keep} bootstraps "
           f"-> {os.path.basename(out_fits)}")
 
 
