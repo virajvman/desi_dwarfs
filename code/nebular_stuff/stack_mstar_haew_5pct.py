@@ -18,16 +18,17 @@ Detection cuts (applied globally before binning):
 
 Per (mass, EW) cell: stack only when N >= 50; otherwise skip (no pooled fallback).
 
-Each output stack is a single FITS spectrum (mean over internal bootstrap
-coadds); bootstrap std sets the pixel ivar. Internal bootstrap is not written
-as extra FITS rows.
+Each output stack FITS has 1 central row (IS_MEAN=1) plus 50 bootstrap
+realizations (IS_MEAN=0). Row 0 carries propagated measurement ivar (not
+bootstrap std). Bootstrap std is kept as a diagnostic only (pickle + plots).
 
 Outputs (written to STACK_PATH; stale stack_ALL_*.fits, stacks_spec_*.pkl,
 and fastspec_stack_ALL_*.fits removed at the start of each run):
   - stacks_spec_ALL_mstar_{mlo}_{mhi}_{ewtoken}.pkl
-  - stack_ALL_mstar_{mlo}_{mhi}_{ewtoken}.fits   (1 row)
+  - stack_ALL_mstar_{mlo}_{mhi}_{ewtoken}.fits   (1 + 50 rows)
   - plots/overlay_mstar_{mlo}_{mhi}.png
   - plots/grid_all_stacks.png
+  - plots/ivar_vs_bootstd_{label}.png  (validation, representative bins)
 
 Usage:
     python stack_mstar_haew_5pct.py
@@ -82,8 +83,8 @@ EW_STACK_NLIM = 50
 Z_MIN_GLOBAL = 0.0
 Z_MAX_GLOBAL = 0.5
 
-N_BOOTSTRAP = 200
-N_DRAW      = 5000
+N_BOOTSTRAP = 50
+N_BOOT_SAVE = 50
 RANDOM_SEED = 42
 
 STACK_PATH = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/stack_files/mstar_haew_5pct/"
@@ -197,6 +198,13 @@ def ew_bin_center(token):
     return lo + 0.5 * (EW_EDGES[j] - EW_EDGES[j - 1])
 
 
+def bin_seed_index(mstar_min, mstar_max, ew_token):
+    """Stable per-bin RNG seed offset from bin definition (not loop order)."""
+    i_m = int(np.searchsorted(MSTAR_BINS, mstar_min, side="left"))
+    j_ew = EW_TOKENS.index(ew_token)
+    return i_m * len(EW_TOKENS) + j_ew
+
+
 def clean_stack_outputs(stack_path):
     """Remove previous stack, pickle, and FastSpec output files before a fresh run."""
     patterns = (
@@ -213,7 +221,7 @@ def clean_stack_outputs(stack_path):
 
 
 def stack_one_bin(sub_cat, spectra_data, wave, token, ew_min, ew_max_fits,
-                  mstar_min, mstar_max, label):
+                  mstar_min, mstar_max, label, bin_index):
     """Bootstrap-stack one bin; return saved dict or None."""
     n_sub = len(sub_cat)
     if n_sub == 0:
@@ -239,39 +247,44 @@ def stack_one_bin(sub_cat, spectra_data, wave, token, ew_min, ew_max_fits,
         return None
 
     n_matched = len(fluxes)
+    seed = RANDOM_SEED + bin_index
     print(f"      Bootstrap-stacking: N={n_sub}, matched={n_matched}, "
-          f"n_bootstrap={N_BOOTSTRAP}, n_draw={min(N_DRAW, n_matched)}")
-    stack_spec, stack_err, all_stacks = bootstrap_stack(
+          f"n_bootstrap={N_BOOTSTRAP}, seed={seed}")
+    central_flux, boot_std, real_flux, real_ivar, central_ivar = bootstrap_stack(
         fluxes=fluxes,
         ivars=ivars,
         wave=wave,
         n_bootstrap=N_BOOTSTRAP,
-        n_draw=N_DRAW,
-        random_seed=RANDOM_SEED,
+        random_seed=seed,
         norm_method=NORM_METHOD,
         catalog_line_fluxes=halpha_fluxes,
         min_n_valid=1,
     )
 
-    if all_stacks is None:
+    if real_flux is None:
         print("      bootstrap_stack returned None; skipping.")
         return None
 
     saved = {
-        "stack_spec":  stack_spec,
-        "stack_err":   stack_err,
-        "all_stacks":  all_stacks,
-        "samples":     list(SAMPLES),
-        "mstar_min":   float(mstar_min),
-        "mstar_max":   float(mstar_max),
-        "ew_min":      float(ew_min),
-        "ew_max":      float(ew_max_fits),
-        "ew_token":    token,
-        "z_min":       Z_MIN_GLOBAL,
-        "z_max":       Z_MAX_GLOBAL,
-        "n_galaxies":  int(n_sub),
-        "n_matched":   int(n_matched),
-        "tgids":       np.asarray(tgids_matched),
+        "stack_spec":    central_flux,
+        "stack_err":     boot_std,
+        "central_ivar":  central_ivar,
+        "real_flux":     real_flux,
+        "real_ivar":     real_ivar,
+        "all_stacks":    real_flux,
+        "samples":       list(SAMPLES),
+        "mstar_min":     float(mstar_min),
+        "mstar_max":     float(mstar_max),
+        "ew_min":        float(ew_min),
+        "ew_max":        float(ew_max_fits),
+        "ew_token":      token,
+        "z_min":         Z_MIN_GLOBAL,
+        "z_max":         Z_MAX_GLOBAL,
+        "n_galaxies":    int(n_sub),
+        "n_matched":     int(n_matched),
+        "tgids":         np.asarray(tgids_matched),
+        "bin_index":     int(bin_index),
+        "random_seed":   int(seed),
     }
 
     with open(pkl_path, "wb") as f:
@@ -280,44 +293,47 @@ def stack_one_bin(sub_cat, spectra_data, wave, token, ew_min, ew_max_fits,
     return saved
 
 
-def write_single_row_fits(saved, wave_for_fits, label):
-    """Write one-row FastSpecFit input FITS for a stacked bin."""
-    flux_mean = saved["stack_spec"]
-    err_mean = saved["stack_err"]
+def write_multi_row_fits(saved, wave_for_fits, label):
+    """Write 1 central + N_BOOT_SAVE bootstrap rows for FastSpecFit stackfit."""
+    central_flux = saved["stack_spec"]
+    central_ivar = saved["central_ivar"]
+    real_flux = saved["real_flux"]
+    real_ivar = saved["real_ivar"]
     n_galaxies = saved["n_galaxies"]
     mstar_min = saved["mstar_min"]
     mstar_max = saved["mstar_max"]
     ew_min = saved["ew_min"]
     ew_max_fits = saved["ew_max"]
 
-    ivar_mean = np.where(
-        np.isfinite(err_mean) & (err_mean > 0),
-        1.0 / err_mean ** 2,
-        0.0,
-    )
+    n_boot_keep = min(N_BOOT_SAVE, len(real_flux))
+    n_rows = 1 + n_boot_keep
+    n_wave = len(wave_for_fits)
 
-    flux_row = np.where(np.isfinite(flux_mean), flux_mean, 0.0).astype(np.float32)
-    ivar_row = np.where(
-        np.isfinite(ivar_mean) & (flux_row != 0),
-        ivar_mean, 0.0,
-    ).astype(np.float32)
+    all_flux = np.zeros((n_rows, n_wave), dtype=np.float32)
+    all_ivar = np.zeros((n_rows, n_wave), dtype=np.float32)
+
+    all_flux[0] = np.asarray(central_flux, dtype=np.float32)
+    all_ivar[0] = np.asarray(central_ivar, dtype=np.float32)
+    for k in range(n_boot_keep):
+        all_flux[k + 1] = np.asarray(real_flux[k], dtype=np.float32)
+        all_ivar[k + 1] = np.asarray(real_ivar[k], dtype=np.float32)
 
     out_fits = os.path.join(STACK_PATH, f"stack_{COMBINED_TAG}_{label}.fits")
 
     write_stacked_spectra(
         outfile=out_fits,
         wave=wave_for_fits,
-        flux=flux_row[np.newaxis, :],
-        ivar=ivar_row[np.newaxis, :],
-        stackids=np.array([0], dtype=np.int64),
-        stack_redshift=np.array([0.0]),
+        flux=all_flux,
+        ivar=all_ivar,
+        stackids=np.arange(n_rows, dtype=np.int64),
+        stack_redshift=np.zeros(n_rows),
         table_column_dict={
-            "IS_MEAN":   np.array([1], dtype=np.int64),
-            "NOBJ":      np.array([n_galaxies], dtype=np.int64),
-            "MSTAR_MIN": np.array([mstar_min], dtype=np.float32),
-            "MSTAR_MAX": np.array([mstar_max], dtype=np.float32),
-            "EW_MIN":    np.array([ew_min], dtype=np.float32),
-            "EW_MAX":    np.array([ew_max_fits], dtype=np.float32),
+            "IS_MEAN":   np.array([1] + [0] * n_boot_keep, dtype=np.int64),
+            "NOBJ":      np.full(n_rows, n_galaxies, dtype=np.int64),
+            "MSTAR_MIN": np.full(n_rows, mstar_min, dtype=np.float32),
+            "MSTAR_MAX": np.full(n_rows, mstar_max, dtype=np.float32),
+            "EW_MIN":    np.full(n_rows, ew_min, dtype=np.float32),
+            "EW_MAX":    np.full(n_rows, ew_max_fits, dtype=np.float32),
         },
         table_format_dict={
             "IS_MEAN":   "K",
@@ -329,8 +345,47 @@ def write_single_row_fits(saved, wave_for_fits, label):
         },
     )
     print(f"    {COMBINED_TAG} | {label}: "
-          f"N_gal={n_galaxies}, 1 spectrum -> {os.path.basename(out_fits)}")
+          f"N_gal={n_galaxies}, 1 mean + {n_boot_keep} bootstraps "
+          f"-> {os.path.basename(out_fits)}")
 
+
+
+
+def make_ivar_diagnostic_plots(results, wave, plot_dir, max_bins=2):
+    """Plot propagated measurement error vs bootstrap std (diagnostic)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    os.makedirs(plot_dir, exist_ok=True)
+    n_done = 0
+    for saved in results.values():
+        if saved is None or n_done >= max_bins:
+            continue
+        if "central_ivar" not in saved:
+            continue
+
+        central_ivar = np.asarray(saved["central_ivar"], dtype=float)
+        boot_std = np.asarray(saved["stack_err"], dtype=float)
+        with np.errstate(invalid="ignore"):
+            meas_err = np.where(central_ivar > 0, 1.0 / np.sqrt(central_ivar), np.nan)
+
+        label = bin_label(saved["mstar_min"], saved["mstar_max"], saved["ew_token"])
+        fig, ax = plt.subplots(figsize=(12, 4))
+        ax.plot(wave, meas_err, color="C0", lw=1.0, label=r"$1/\sqrt{\mathrm{ivar}}$ (measurement)")
+        ax.plot(wave, boot_std, color="C1", lw=1.0, alpha=0.8, label="bootstrap std (diagnostic)")
+        _add_line_guides(ax)
+        ax.set_xlim(wave.min(), wave.max())
+        ax.set_xlabel(r"Rest wavelength [$\AA$]")
+        ax.set_ylabel("Per-pixel uncertainty")
+        ax.set_title(f"ivar sanity check: {label}")
+        ax.legend(loc="upper right", fontsize=8, frameon=False)
+        fig.tight_layout()
+        out_png = os.path.join(plot_dir, f"ivar_vs_bootstd_{label}.png")
+        fig.savefig(out_png, dpi=150)
+        plt.close(fig)
+        print(f"    Saved {os.path.basename(out_png)}")
+        n_done += 1
 
 # =============================================================================
 # PLOTTING
@@ -561,9 +616,10 @@ def main():
             print(f"\n    >> {token} | EW in ({ew_min:.1f}, {ew_hi_str}] | "
                   f"N={len(sub_cat)}")
 
+            bin_index = bin_seed_index(mstar_min, mstar_max, token)
             saved = stack_one_bin(
                 sub_cat, spectra_data, wave, token, float(ew_min), ew_max_fits,
-                mstar_min, mstar_max, label,
+                mstar_min, mstar_max, label, bin_index,
             )
             results[(i, token)] = saved
 
@@ -574,7 +630,7 @@ def main():
         if saved is None:
             continue
         label = bin_label(saved["mstar_min"], saved["mstar_max"], token)
-        write_single_row_fits(saved, wave, label)
+        write_multi_row_fits(saved, wave, label)
         n_written += 1
 
     print(f"\n[5] Wrote {n_written} FITS files to {STACK_PATH}")
@@ -583,7 +639,10 @@ def main():
     make_overlay_plots(results, wave, MSTAR_BINS, plot_dir)
     make_grid_plot(results, wave, MSTAR_BINS, plot_dir)
 
-    print(f"\n[7] Done. Plots in {plot_dir}")
+    print("\n[7] ivar vs bootstrap-std diagnostic plots ...")
+    make_ivar_diagnostic_plots(results, wave, plot_dir, max_bins=2)
+
+    print(f"\n[8] Done. Plots in {plot_dir}")
 
 
 if __name__ == "__main__":

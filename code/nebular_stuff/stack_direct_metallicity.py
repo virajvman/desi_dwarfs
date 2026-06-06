@@ -8,7 +8,8 @@ FastSpecFit (`job_scripts/fastspec/run_stack_fastspec_haew_5pct.sh`).
 
 For each stack bin there is one FastSpecFit stack output
 `fastspec_stack_ALL_mstar_{mlo}_{mhi}_{ewtoken}.fits` whose emission-line
-table (hdu=3) has one row (the stacked spectrum). EW tokens are fixed bins:
+table (hdu=3) has 1 central row (IS_MEAN stack) plus 50 bootstrap rows.
+EW tokens are fixed bins:
 `ew_lt30`, `ew_30_100`, `ew_gt100` (<30, 30-100, >100 Angstrom). Mass bins:
 0.5 dex from log M*=6 to 8, then 0.25 dex to 9.25 (9 mass bins). Stacks are
 produced only when N >= 50 in the (mass, EW) cell.
@@ -25,8 +26,11 @@ This script:
      (`pn_functions.compute_direct_metallicities`) on the stack spectrum
      (default density diagnostic: SII).
   4. Reports per bin:
-       - central value  = posterior median from the stack fit, and
-       - uncertainty    = posterior 16/84 interval (no bootstrap refits).
+       - central value  = posterior median from the mean-stack fit (row 0), and
+       - uncertainty    = 16/50/84 percentiles of bootstrap-row posterior medians
+         when N_BOOT_FIT >= MIN_N_BOOT_FIT; otherwise posterior interval only
+         with BOOT_ERR_RELIABLE=False. Mean-stack posterior interval stored
+         separately as {PARAM}_MEANFIT_LO/HI (not combined with bootstrap error).
   5. Writes ONE results row per candidate bin (kept and dropped alike, with
      a DETECTED_7LINE flag for bins that passed the TE line gate) to a
      FITS + ECSV table so the M*/EW trends can be plotted later.
@@ -89,6 +93,10 @@ _TE_LINE_NAMES_BASE = ["HALPHA", "HBETA", "HGAMMA",
                        "OII_3726", "OII_3729"]
 SNR_VAL = 3
 MIN_FLUX = 0.0
+
+# Bootstrap reliability gate for direct-method errors (survivor bias on OIII_4363).
+MIN_N_BOOT_FIT = 30
+N_BOOT_TOTAL = 50
 
 TE_DENSITY_DIAGNOSTIC = "SII"
 
@@ -405,8 +413,13 @@ def print_density_diagnostic_verification(out_tab, density_diagnostic):
 
 
 def _plot_vs_mstar_by_ew(tab, ycol, yerr_lo, yerr_hi, ylab, ax, title=None):
-    """Errorbar plot vs log M* midpoint, one series per EW_TOKEN."""
+    """Errorbar plot vs log M* midpoint, one series per EW_TOKEN.
+
+    Solid: bootstrap errors reliable (N_BOOT_FIT >= MIN_N_BOOT_FIT).
+    Dotted triangles: detected but bootstrap survivor fraction too low.
+    """
     mid = _mstar_mid(tab)
+    has_unreliable = False
     for token in EW_TOKENS:
         sel = np.asarray(tab["EW_TOKEN"]) == token
         if not np.any(sel):
@@ -417,15 +430,56 @@ def _plot_vs_mstar_by_ew(tab, ycol, yerr_lo, yerr_hi, ylab, ax, title=None):
             float(sub["EW_MIN"][0]),
             float(sub["EW_MAX"][0]) if sub["EW_MAX"][0] >= 0 else np.inf,
         )
-        ax.errorbar(
-            mid[sel], np.asarray(sub[ycol]),
-            yerr=[np.asarray(sub[yerr_lo]), np.asarray(sub[yerr_hi])],
-            fmt="o-", color=EW_COLORS[token], label=label,
-            capsize=3, lw=1.2,
-        )
+        mid_sub = mid[sel]
+        y = np.asarray(sub[ycol], dtype=float)
+        err_lo = np.asarray(sub[yerr_lo], dtype=float)
+        err_hi = np.asarray(sub[yerr_hi], dtype=float)
+        if "BOOT_ERR_RELIABLE" in sub.colnames:
+            reliable = np.asarray(sub["BOOT_ERR_RELIABLE"], dtype=bool)
+        else:
+            reliable = np.ones(len(sub), dtype=bool)
+
+        has_err = np.isfinite(err_lo) & np.isfinite(err_hi)
+        rel = reliable & has_err
+        unrel = (~reliable) & has_err
+
+        if np.any(rel):
+            ax.errorbar(
+                mid_sub[rel], y[rel],
+                yerr=[err_lo[rel], err_hi[rel]],
+                fmt="o-", color=EW_COLORS[token], label=label,
+                capsize=3, lw=1.2,
+            )
+        elif np.any(reliable):
+            ax.plot(mid_sub[reliable], y[reliable], "o-",
+                    color=EW_COLORS[token], label=label, lw=1.2)
+        else:
+            ax.plot([], [], "o-", color=EW_COLORS[token], label=label)
+
+        if np.any(unrel):
+            has_unreliable = True
+            ax.errorbar(
+                mid_sub[unrel], y[unrel],
+                yerr=[err_lo[unrel], err_hi[unrel]],
+                fmt="^:", color=EW_COLORS[token], capsize=3, lw=1.0, alpha=0.75,
+            )
+
     ax.set_xlabel(r"log $M_\star$ [$M_\odot$]")
     ax.set_ylabel(ylab)
-    ax.legend(frameon=False, fontsize=7)
+    handles, labels = ax.get_legend_handles_labels()
+    from matplotlib.lines import Line2D
+    handles.append(Line2D(
+        [], [], color="k", marker="o", ls="-", lw=1.2,
+        label="bootstrap error reliable",
+    ))
+    labels.append("bootstrap error reliable")
+    if has_unreliable:
+        handles.append(Line2D(
+            [], [], color="k", marker="^", ls=":", lw=1.0, alpha=0.75,
+            label="low bootstrap survivor fraction",
+        ))
+        labels.append("low bootstrap survivor fraction")
+    ax.legend(handles, labels, frameon=False, fontsize=7)
     if title:
         ax.set_title(title, fontsize=10)
 
@@ -478,6 +532,14 @@ def main(argv=None):
     print(f"[1] Found {len(files)} FastSpecFit stack outputs in {STACK_PATH}")
     print(f"    TE density diagnostic: {density_diagnostic} "
           f"({te_min_lines} lines required for detection gate)")
+    print(
+        "    NOTE: propagated measurement ivar on row-0 stacks may increase "
+        "DETECTED_7LINE pass rate vs the old 1/boot_std^2 ivar (expected)."
+    )
+    print(
+        f"    UltraNest: n_jobs={N_JOBS} parallelizes per-row fits "
+        f"(~{N_BOOT_TOTAL + 1} rows/bin when bootstrap stacks are present)."
+    )
     if len(files) == 0:
         print(f"    Nothing matches {pattern}; exiting.")
         return 1
@@ -529,7 +591,9 @@ def main(argv=None):
             "DENSITY_DIAGNOSTIC": density_diagnostic,
             "DETECTED_7LINE": detected,
             "MEAN_FIT_SUCCESS": False,
+            "N_BOOT_TOTAL": 0,
             "N_BOOT_FIT": 0,
+            "BOOT_ERR_RELIABLE": False,
             "N_RATIOS": 0,
             "LOGZ": np.nan,
             "OBS_HA_HB": obs_ha_hb,
@@ -575,6 +639,8 @@ def main(argv=None):
         rec["N_RATIOS"] = int(mean_fit["n_ratios"])
         rec["LOGZ"] = float(mean_fit["logz"])
 
+        n_boot_total = max(len(res) - 1, 0)
+        rec["N_BOOT_TOTAL"] = int(n_boot_total)
         if len(res) > 1:
             boot = res[1:]
             ok = np.asarray(boot["fit_success"], dtype=bool) & np.isfinite(
@@ -584,6 +650,7 @@ def main(argv=None):
         else:
             boot_ok = res[:0]
         rec["N_BOOT_FIT"] = int(len(boot_ok))
+        rec["BOOT_ERR_RELIABLE"] = rec["N_BOOT_FIT"] >= MIN_N_BOOT_FIT
 
         for lo_name, up in PARAM_MAP:
             _fill_param_errors(rec, lo_name, up, mean_fit, boot_ok)
@@ -594,7 +661,7 @@ def main(argv=None):
               f"(+{rec['TWELVE_LOG_OH_ERR_HI']:.3f}/-{rec['TWELVE_LOG_OH_ERR_LO']:.3f}), "
               f"A_V = {rec['AV']:.3f} "
               f"(+{rec['AV_ERR_HI']:.3f}/-{rec['AV_ERR_LO']:.3f}); "
-              f"N_boot_fit={rec['N_BOOT_FIT']}")
+              f"N_boot_fit={rec['N_BOOT_FIT']}/{rec['N_BOOT_TOTAL']}, BOOT_ERR_RELIABLE={rec['BOOT_ERR_RELIABLE']}")
         rows.append(rec)
 
     if len(rows) == 0:
@@ -605,7 +672,7 @@ def main(argv=None):
     col_order = [
         "MSTAR_MIN", "MSTAR_MAX", "EW_MIN", "EW_MAX", "EW_TOKEN", "NOBJ",
         "DENSITY_DIAGNOSTIC", "DETECTED_7LINE", "MEAN_FIT_SUCCESS",
-        "N_BOOT_FIT", "N_RATIOS", "LOGZ",
+        "N_BOOT_TOTAL", "N_BOOT_FIT", "BOOT_ERR_RELIABLE", "N_RATIOS", "LOGZ",
         "OBS_HA_HB", "OBS_HA_HB_ERR",
         "OBS_OII_DOUBLET", "OBS_OII_DOUBLET_ERR",
         "OBS_SII_DOUBLET", "OBS_SII_DOUBLET_ERR",

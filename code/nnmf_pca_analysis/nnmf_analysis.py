@@ -46,10 +46,21 @@ def get_wave(wavemin=3600, wavemax=10000, dloglam=1e-4):
 
 
 def _deredshift_one_spectrum(args):
-    # print("Transforming both wave and flux arrays when de-redshifting!")
+    """De-redshift and resample one spectrum onto a common rest-frame grid.
+
+    DESI spectra are f_lambda (10^-17 erg/s/cm^2/A). The observed-to-rest
+    frame transformation applied before resampling is:
+
+        lambda_rest = lambda_obs / (1 + z)
+        f_lambda_rest = f_lambda_obs * (1 + z)
+        ivar_rest = ivar_obs / (1 + z)^2
+
+    The flux scaling conserves integrated flux (int f_lambda dlambda). The ivar
+    scaling follows from sigma_rest = sigma_obs * (1 + z).
+    """
     wave, flux, ivar, zred, wave_out, use_invvar = args
     rest_wave = wave / (1 + zred)
-    
+
     flux_rest = flux * (1 + zred)
     ivar_rest = ivar / (1 + zred)**2
 
@@ -73,6 +84,10 @@ def deredshift_resample_desi_spectra(all_waves, all_fluxs, all_ivar, all_zreds,
                                      use_invvar=True):
     """
     De-redshift and resample DESI spectra onto a common wavelength grid in parallel.
+
+    Per spectrum, observed-frame (wave, flux, ivar) are transformed to rest
+    frame using f_lambda conventions (see ``_deredshift_one_spectrum``), then
+    rebinned onto ``wave_out`` via ``desispec.interpolation.resample_flux``.
 
     Parameters
     ----------

@@ -279,7 +279,7 @@ def main():
                 #   - all_stacks = (N_BOOTSTRAP, n_wave) realizations
                 print(f"      Bootstrap-stacking: N={n_sub}, "
                       f"n_bootstrap={N_BOOTSTRAP}, n_draw={min(N_DRAW, n_sub)}")
-                stack_spec, stack_err, all_stacks = bootstrap_stack(
+                central_flux, boot_std, real_flux, real_ivar, central_ivar = bootstrap_stack(
                     fluxes=fluxes,
                     ivars=ivars,
                     wave=wave,
@@ -290,15 +290,18 @@ def main():
                     catalog_line_fluxes=halpha_fluxes,
                 )
 
-                if all_stacks is None:
+                if real_flux is None:
                     print(f"      bootstrap_stack returned None; skipping.")
                     results[(i, j)] = None
                     continue
 
                 saved = {
-                    "stack_spec":  stack_spec,
-                    "stack_err":   stack_err,
-                    "all_stacks":  all_stacks,
+                    "stack_spec":  central_flux,
+                    "stack_err":   boot_std,
+                    "all_stacks":  real_flux,
+                    "central_ivar": central_ivar,
+                    "real_flux": real_flux,
+                    "real_ivar": real_ivar,
                     "samples":     list(SAMPLES),
                     "mstar_min":   float(mstar_min),
                     "mstar_max":   float(mstar_max),

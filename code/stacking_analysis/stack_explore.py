@@ -20,9 +20,20 @@ from mass_and_photo_corrections import DWARF_CATALOG_SPEC_HDU, DWARF_CATALOG_DER
 
 ##deredshifting functions
 
-def deredshift_for_stacking(use_invvar=True):
+def deredshift_for_stacking(use_invvar=True, delta_wave=None):
+    spectra_dir = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files"
 
-    save_dered = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/desi_y1_dwarf_combine_deredshift_hires.h5"
+    if delta_wave is None:
+        grid_suffix = "_native"
+    elif delta_wave == 0.2:
+        grid_suffix = "_hires"
+    else:
+        grid_suffix = f"_d{delta_wave}"
+
+    save_dered = os.path.join(
+        spectra_dir,
+        f"desi_y1_dwarf_combine_deredshift{grid_suffix}.h5",
+    )
 
     # When using the flux-conserving rebin (use_invvar=False), write to a
     # distinct file so the existing inverse-variance-weighted output is not
@@ -31,7 +42,7 @@ def deredshift_for_stacking(use_invvar=True):
         base, ext = os.path.splitext(save_dered)
         save_dered = f"{base}_noinvvar{ext}"
 
-    print(f"Making deredshited spectra file! (use_invvar={use_invvar})")
+    print(f"Making deredshited spectra file! (use_invvar={use_invvar}, delta_wave={delta_wave})")
 
     #read the entire consolidated file!
     with h5py.File("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/data/desi_dr1_dwarf_catalog_spectra.h5", "r") as f:
@@ -52,10 +63,15 @@ def deredshift_for_stacking(use_invvar=True):
 
     print_stage("De-redshifting the spectra and clipping to relevant wavelength range")
 
-    #
-    # wave_out = wave
-    wave_out = np.arange(3600,9800,0.2)
+    if delta_wave is None:
+        wave_out = wave
+        step = np.median(np.diff(wave_out)) if len(wave_out) > 1 else np.nan
+        print(f"wave_out: native DESI grid, n={len(wave_out)}, median step={step:.4f} A")
+    else:
+        wave_out = np.arange(3600, 9800, delta_wave)
+        print(f"wave_out: linear grid 3600-9800 A, n={len(wave_out)}, step={delta_wave} A")
 
+    print(f"save path: {save_dered}")
     print(wave_out[:10])
     print(wave_out[-10:])
     
@@ -285,6 +301,29 @@ def normalize_by_line_catalog(fluxes, ivars, line_fluxes):
     return norm_fluxes, norm_ivars, valid_mask
 
 
+def coadd_mean_with_propagated_ivar(norm_flux, norm_ivar):
+    """Unweighted mean coadd + propagated measurement ivar.
+
+    norm_flux, norm_ivar: (N_gal, N_wave), already Hα-boxflux-normalized.
+    Masked/uncovered pixels are returned as flux=0.0, ivar=0.0 (NOT NaN).
+    """
+    valid = np.isfinite(norm_flux) & (norm_ivar > 0)
+    n_contrib = valid.sum(axis=0)
+
+    f = np.where(valid, norm_flux, np.nan)
+    mean = np.nanmean(f, axis=0)
+    stack_flux = np.where(n_contrib > 0, mean, 0.0)
+
+    var_i = np.where(valid, 1.0 / norm_ivar, np.nan)
+    sum_var = np.nansum(var_i, axis=0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        stack_ivar = np.where(
+            (n_contrib > 0) & (sum_var > 0), n_contrib ** 2 / sum_var, 0.0,
+        )
+
+    return stack_flux.astype(np.float32), stack_ivar.astype(np.float32)
+
+
 def bootstrap_stack(fluxes, ivars, wave, n_bootstrap=200, n_draw=5000,
                     random_seed=42,
                     norm_method="boxcar_line",
@@ -321,13 +360,18 @@ def bootstrap_stack(fluxes, ivars, wave, n_bootstrap=200, n_draw=5000,
 
     Returns
     -------
-    stacked_flux : 1D array
-    stacked_error : 1D array
-    all_stacks : 2D array (n_bootstrap, n_wavelengths)
+    central_flux : 1D array
+        Mean flux over bootstrap realizations.
+    boot_std : 1D array
+        Per-pixel bootstrap standard deviation (diagnostic only).
+    real_flux : 2D array (n_bootstrap, n_wavelengths) or None
+        Per-realization coadded flux.
+    real_ivar : 2D array (n_bootstrap, n_wavelengths) or None
+        Per-realization propagated measurement ivar.
+    central_ivar : 1D array
+        Mean propagated measurement ivar over realizations (Scholte step v).
     """
     rng = np.random.default_rng(random_seed)
-
-    print(f"NDRAW = {n_draw}")
 
     # Normalize
     if norm_method == "boxcar_line":
@@ -355,33 +399,37 @@ def bootstrap_stack(fluxes, ivars, wave, n_bootstrap=200, n_draw=5000,
     use_ivars = norm_ivars[valid].astype(np.float32, copy=False)
     n_valid, n_wave = use_fluxes.shape
 
+    nan_flux = np.full(n_wave, np.nan, dtype=np.float32)
+    nan_ivar = np.full(n_wave, np.nan, dtype=np.float32)
+
     if n_valid < min_n_valid:
         print(f"    Warning: only {n_valid} valid spectra "
               f"(< min_n_valid={min_n_valid}), returning NaN")
-        return np.full(n_wave, np.nan), np.full(n_wave, np.nan), None
+        return nan_flux, nan_flux, None, None, nan_ivar
+
+    print(f"    Bootstrap: n_valid={n_valid}, n_bootstrap={n_bootstrap}")
+
+    real_flux = np.empty((n_bootstrap, n_wave), dtype=np.float32)
+    real_ivar = np.empty((n_bootstrap, n_wave), dtype=np.float32)
 
     if n_valid == 1:
-        stacked_flux = use_fluxes[0].copy()
-        with np.errstate(divide="ignore"):
-            stacked_error = np.where(
-                np.isfinite(use_ivars[0]) & (use_ivars[0] > 0),
-                1.0 / np.sqrt(use_ivars[0]),
-                np.nan,
-            ).astype(np.float32)
-        all_stacks = np.tile(stacked_flux, (n_bootstrap, 1))
-        return stacked_flux, stacked_error, all_stacks
+        flux0, ivar0 = coadd_mean_with_propagated_ivar(use_fluxes, use_ivars)
+        real_flux[:] = flux0
+        real_ivar[:] = ivar0
+        boot_std = np.zeros(n_wave, dtype=np.float32)
+        return flux0, boot_std, real_flux, real_ivar, ivar0
 
-    n_draw = min(n_draw, n_valid)
+    for b in range(n_bootstrap):
+        idx = rng.integers(0, n_valid, size=n_valid)
+        real_flux[b], real_ivar[b] = coadd_mean_with_propagated_ivar(
+            use_fluxes[idx], use_ivars[idx],
+        )
 
-    # Bootstrap
-    indices = rng.integers(0, n_valid, size=(n_bootstrap, n_draw))
-    boot_fluxes = use_fluxes[indices]
-    all_stacks = np.nanmean(boot_fluxes, axis=1, dtype=np.float32)
+    central_flux = np.nanmean(real_flux, axis=0).astype(np.float32)
+    central_ivar = np.nanmean(real_ivar, axis=0).astype(np.float32)
+    boot_std = np.nanstd(real_flux, axis=0).astype(np.float32)
 
-    stacked_flux = np.nanmean(all_stacks, axis=0)
-    stacked_error = np.nanstd(all_stacks, axis=0)
-
-    return stacked_flux, stacked_error, all_stacks
+    return central_flux, boot_std, real_flux, real_ivar, central_ivar
 
 
 
