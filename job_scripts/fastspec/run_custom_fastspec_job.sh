@@ -117,5 +117,4 @@ time srun --nodes=${N} --ntasks=${ntasks} \
         --mp=${mp} \
         --nmonte=100 \
         --vdisp-nominal 100 --vdisp-bounds 50 200 \
-        --ignore-quasarnet \
-        --overwrite                # outdir holds stale 3.4.1 outputs; refit all
+        --ignore-quasarnet

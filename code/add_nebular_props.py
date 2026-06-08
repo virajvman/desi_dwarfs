@@ -235,4 +235,5 @@ if __name__ == "__main__":
     #TODO: run the latest version of fastspecfit 3.4.2 and get the emission line properties again! Validate the boxflux vs. normal flux agreement
     #TODO: then likely need to rerun the stacked fit analysis again and the stellar mass comparison
     #TODO: make a plot of a fastspecfit on a spectrum and make a plot of it!
+    #TODO: why do we have a mean stacked spectra and then just bootstrapped one, which one do we use for errors on the final science quantities
 

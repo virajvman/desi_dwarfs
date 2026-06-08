@@ -85,7 +85,7 @@ mpi-fastspecfit \
     --outdir-data=${outdir_data} \
     --specprod iron \
     --mp=${mp} \
-    --overwrite --nompi --plan \
+    --nompi --plan \
     || fail "--plan failed (sample read / distribution)."
 
 # ---- 5. --dry-run: confirm --constraintsfile propagates --------------------
@@ -102,7 +102,7 @@ dryout=$(mpi-fastspecfit \
     --nmonte=100 \
     --vdisp-nominal 100 --vdisp-bounds 50 200 \
     --ignore-quasarnet \
-    --overwrite --nompi --dry-run 2>&1)
+    --nompi --dry-run 2>&1)
 # Show a couple of representative generated commands (|| true guards the
 # pipefail+SIGPIPE that head/grep short-circuiting would otherwise trigger).
 printf '%s\n' "${dryout}" | grep -- '--constraintsfile' | head -3 || true
@@ -124,6 +124,6 @@ echo "  salloc -N1 -C cpu -q interactive -t 00:20:00 -A desi"
 echo "  # then, with the same env loaded:"
 echo "  read s p h <<< \$(python -c \"from astropy.table import Table; t=Table.read('${samplefile}')[0]; print(t['SURVEY'],t['PROGRAM'],t['HEALPIX'])\")"
 echo "  mpi-fastspecfit --specprod=iron --coadd-type=healpix --survey=\$s --program=\$p --healpix=\$h \\"
-echo "      --mp=1 --ntargets=1 --nmonte=0 --nompi --overwrite --outdir-data=/tmp/fsf-check \\"
+echo "      --mp=1 --ntargets=1 --nmonte=0 --nompi --outdir-data=/tmp/fsf-check \\"
 echo "      --templates=${templates} --emlinesfile=${emlinesfile} --constraintsfile=${constraintsfile} \\"
 echo "      --vdisp-nominal 100 --vdisp-bounds 50 200 --ignore-quasarnet"
