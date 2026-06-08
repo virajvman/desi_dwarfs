@@ -553,7 +553,7 @@ def main():
     print("\n[2] Loading de-redshifted spectra ...")
     spectra_data = load_spectra(
         "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/"
-        "desi_y1_dwarf_combine_deredshift_hires_noinvvar.h5"
+        "desi_y1_dwarf_combine_deredshift_d0.4_noinvvar.h5"
     )
     print(f"    Total spectra loaded: {len(spectra_data['targetid'])}")
 

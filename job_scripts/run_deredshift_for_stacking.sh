@@ -30,5 +30,5 @@ python3 -u -c "
 import sys
 sys.path.insert(0, 'desi_dwarfs/code')
 from stacking_analysis.stack_explore import deredshift_for_stacking
-deredshift_for_stacking(use_invvar=False, delta_wave=0.2)
+deredshift_for_stacking(use_invvar=False, delta_wave=0.4)
 "
