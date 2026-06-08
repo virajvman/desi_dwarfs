@@ -5,39 +5,27 @@
 # (run_custom_fastspec_job.sh): Chabrier 9.9.9 templates + the custom dwarfs
 # emline-constraints YAML (narrow He II 4686) + custom emlines list, so all
 # three fit contexts (per-object catalog, EW stacks, ELG/NO-ELG stacks) use
-# identical fastspecfit code and constraints.
+# the identical fastspecfit version and constraints.
 #
 # NOTE: the ELG / NO-ELG stack *input files* themselves are still being
 # finalized; the stack_mstar_{elg,noelg}_*.fits globs below are left as-is and
 # will be updated in a later stage.
 
-# ---- fastspecfit environment: DESI stack + HEAD editable checkout ----------
-# Same HEAD checkout as the production run so stackfit runs the same 3.4.3-dev
-# code as mpi-fastspecfit. The one-time editable install registers the HEAD
-# `stackfit` entry point (and the correct output-header version). See the long
-# comment in run_custom_fastspec_job.sh for the full rationale.
-#
-# One-time on NERSC, and again after each `git pull` of $FSF_SRC:
-#   git clone https://github.com/desihub/fastspecfit ${FSF_SRC}   # stay on main
-#   source /dvs_ro/common/software/desi/desi_environment.sh main
-#   pip install --no-deps -e ${FSF_SRC}
-FSF_SRC=/global/homes/v/virajvm/packages/fastspecfit
-
+# ---- fastspecfit environment ------------------------------------------------
+# Same fastspecfit/3.4.3 module as the production run, so stackfit runs the same
+# version as mpi-fastspecfit (incl. the narrow final-pass free_sigma:false +
+# doublet-locking line-fit changes). 3.4.3 gives stackfit --constraintsfile.
+export FASTSPECFIT_VERSION=3.4.3
 source /dvs_ro/common/software/desi/desi_environment.sh main
-# Do NOT module load fastspecfit -- the editable HEAD checkout provides it.
-export PYTHONPATH=${FSF_SRC}/py:$PYTHONPATH
-export PATH=${FSF_SRC}/bin:$PATH
+module load fastspecfit/${FASTSPECFIT_VERSION}
 
-# Confirm stackfit runs the HEAD override and supports --constraintsfile.
-fsf_file=$(python -c "import fastspecfit, os; print(os.path.dirname(fastspecfit.__file__))")
-echo "fastspecfit imported from: ${fsf_file}"
-case "${fsf_file}" in
-    "${FSF_SRC}"/*) : ;;
-    *) echo "ERROR: fastspecfit NOT imported from HEAD checkout ${FSF_SRC} (got ${fsf_file}). Aborting."
-       exit 1 ;;
-esac
+# Confirm stackfit is available and supports --constraintsfile.
+if ! command -v stackfit &>/dev/null; then
+    echo "ERROR: stackfit not on PATH after module load. Aborting."
+    exit 1
+fi
 if ! stackfit --help 2>&1 | grep -q -- '--constraintsfile'; then
-    echo "ERROR: stackfit does not support --constraintsfile. Need fastspecfit 3.4.2+ / HEAD."
+    echo "ERROR: stackfit does not support --constraintsfile. Need fastspecfit/3.4.2+."
     exit 1
 fi
 

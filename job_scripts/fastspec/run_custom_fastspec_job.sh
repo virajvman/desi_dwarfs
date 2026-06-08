@@ -23,55 +23,28 @@ templates=/global/cfs/cdirs/desi/users/dscholte/data/ohno/templates/9.9.9/ftempl
 outdir_data=/pscratch/sd/v/virajvm/desi_dwarf_catalogs/fastspecfit_custom_run/
 # ---------------------------------------------------------------------------
 
-# ---- fastspecfit environment: DESI stack + HEAD editable checkout ----------
-# The tagged fastspecfit/3.4.2 module's mpi-fastspecfit has NO --constraintsfile:
-# it was added to the parser ~7.5h AFTER the 3.4.2 tag (commit 6f982d0), and the
-# propagation that makes the per-healpix fastspec workers actually *use* it
-# landed later still (commit 1cbc08a). Both are 3.4.3-dev, not yet a NERSC module.
-# So we run a HEAD git checkout instead of the module.
-#
-# fastspecfit is pure Python, but we still do a one-time *editable* install
-# (the dev-checkout flow from the fastspecfit install docs): it registers the
-# HEAD CLI entry points (stackfit, fastspec, fastqa) and regenerates _version.py
-# so the correct version is written into the output FITS headers. mpi-fastspecfit
-# lives in bin/ and is also picked up via the PATH prepend below.
-#
-# One-time on NERSC, and again after each `git pull` of $FSF_SRC:
-#   git clone https://github.com/desihub/fastspecfit ${FSF_SRC}   # stay on main
-#   source /dvs_ro/common/software/desi/desi_environment.sh main
-#   pip install --no-deps -e ${FSF_SRC}
-FSF_SRC=/global/homes/v/virajvm/packages/fastspecfit
-
+# ---- fastspecfit environment ------------------------------------------------
+# fastspecfit/3.4.3 is now a tagged NERSC module. It includes the mpi-fastspecfit
+# --constraintsfile propagation (PR #259) and the narrow final-pass
+# free_sigma:false + doublet-locking line-fit changes -- everything we previously
+# needed a HEAD checkout for. So we just load the module (no more pip checkout).
+export FASTSPECFIT_VERSION=3.4.3
 source /dvs_ro/common/software/desi/desi_environment.sh main
-# Do NOT module load fastspecfit -- the editable HEAD checkout provides it.
-export PYTHONPATH=${FSF_SRC}/py:$PYTHONPATH
-export PATH=${FSF_SRC}/bin:$PATH
+module load fastspecfit/${FASTSPECFIT_VERSION}
 
-# ---- preflight: confirm we're running the HEAD override, not bare 3.4.2 -----
+# ---- preflight --------------------------------------------------------------
 if ! command -v mpi-fastspecfit &>/dev/null; then
-    echo "ERROR: mpi-fastspecfit not on PATH after module load + override. Aborting."
+    echo "ERROR: mpi-fastspecfit not on PATH after module load. Aborting."
     module avail fastspecfit 2>&1
     exit 1
 fi
-
-fsf_file=$(python -c "import fastspecfit, os; print(os.path.dirname(fastspecfit.__file__))")
-echo "fastspecfit imported from: ${fsf_file}"
-case "${fsf_file}" in
-    "${FSF_SRC}"/*) : ;;
-    *) echo "ERROR: fastspecfit NOT imported from HEAD checkout ${FSF_SRC} (got ${fsf_file})."
-       echo "       Check FSF_SRC and that PYTHONPATH was prepended. Aborting."
-       exit 1 ;;
-esac
-
 if ! mpi-fastspecfit --help 2>&1 | grep -q -- '--constraintsfile'; then
-    echo "ERROR: mpi-fastspecfit lacks --constraintsfile (needs HEAD with PR #259)."
-    echo "       Your checkout ${FSF_SRC} is stale -- 'git pull' it onto main. Aborting."
+    echo "ERROR: mpi-fastspecfit lacks --constraintsfile -- need fastspecfit/3.4.3+. Aborting."
     exit 1
 fi
 
 echo "=== Loaded modules ==="
 module list 2>&1 | grep -E 'fastspecfit|desiutil|desispec|desitarget|speclite|specsim'
-echo "fastspecfit HEAD: $(git -C "${FSF_SRC}" rev-parse --short HEAD 2>/dev/null || echo '?')"
 echo "======================"
 
 # ---- input files exist? -----------------------------------------------------
@@ -96,10 +69,8 @@ export DUST_DIR=/dvs_ro/cfs/cdirs/cosmo/data/dust/v0_1
 export FPHOTO_DIR=/dvs_ro/cfs/cdirs/desi/external/legacysurvey/dr9
 export FTEMPLATES_DIR=/dvs_ro/cfs/cdirs/desi/public/external/templates/fastspecfit
 
-# Shared numba JIT cache, keyed by the checkout commit so a 'git pull' to the
-# HEAD source invalidates stale compiled kernels. Must be visible from every node.
-FSF_REF=$(git -C "${FSF_SRC}" rev-parse --short HEAD 2>/dev/null || echo head)
-export NUMBA_CACHE_DIR=${PSCRATCH}/fastspecfit/numba-cache/${FSF_REF}
+# Shared numba JIT cache, keyed by the fastspecfit version. Visible from every node.
+export NUMBA_CACHE_DIR=${PSCRATCH}/fastspecfit/numba-cache/${FASTSPECFIT_VERSION}
 mkdir -p "${NUMBA_CACHE_DIR}" logs
 
 mpiscript=$(type -p mpi-fastspecfit)

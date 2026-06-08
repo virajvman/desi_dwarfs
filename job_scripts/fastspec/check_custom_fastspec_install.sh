@@ -1,17 +1,17 @@
 #!/bin/bash -l
 # =============================================================================
-# Login-node sanity check for the HEAD (3.4.3-dev) custom fastspec setup.
+# Login-node sanity check for the fastspecfit/3.4.3 custom fastspec setup.
 #
 # NO SLURM allocation needed -- run it directly on a Perlmutter login node:
 #     bash check_custom_fastspec_install.sh
 #
 # It validates, in seconds, everything that does NOT require real fitting:
-#   1. The HEAD fastspecfit checkout is actually imported (not bare 3.4.2)
+#   1. fastspecfit/3.4.3 module is loaded (mpi-fastspecfit on PATH)
 #   2. mpi-fastspecfit exposes --constraintsfile
 #   3. The custom dwarf constraints + emlines load and tie He II 4686 narrow
 #   4. The sample file reads and --plan computes a node/target distribution
 #   5. --dry-run shows --constraintsfile propagating into the per-healpix
-#      worker commands (the 3.4.3 fix, commit 1cbc08a)
+#      worker commands (the 3.4.3 fix, PR #259)
 #
 # What it does NOT test (no compute is run): numba JIT compilation, template
 # loading, the actual fit, or output writing. A clean pass here means the
@@ -30,19 +30,13 @@ templates=/global/cfs/cdirs/desi/users/dscholte/data/ohno/templates/9.9.9/ftempl
 # actually generate commands. (Pointing at the real outdir with existing outputs
 # makes --dry-run emit 0 commands -> a false "propagation failed" result.)
 outdir_data=${PSCRATCH}/fastspecfit/check-dryrun
-FSF_SRC=/global/homes/v/virajvm/packages/fastspecfit
 mp=16
 # ---------------------------------------------------------------------------
 
-# ---- fastspecfit environment: DESI stack + HEAD editable checkout ----------
-# See run_custom_fastspec_job.sh for the full rationale + one-time setup:
-#   git clone https://github.com/desihub/fastspecfit ${FSF_SRC}   # stay on main
-#   source /dvs_ro/common/software/desi/desi_environment.sh main
-#   pip install --no-deps -e ${FSF_SRC}
+# ---- fastspecfit environment ------------------------------------------------
+export FASTSPECFIT_VERSION=3.4.3
 source /dvs_ro/common/software/desi/desi_environment.sh main
-# Do NOT module load fastspecfit -- the editable HEAD checkout provides it.
-export PYTHONPATH=${FSF_SRC}/py:$PYTHONPATH
-export PATH=${FSF_SRC}/bin:$PATH
+module load fastspecfit/${FASTSPECFIT_VERSION}
 mkdir -p "${outdir_data}"
 
 # external data dirs (needed so --plan/--dry-run can locate the redux files)
@@ -53,23 +47,18 @@ export FTEMPLATES_DIR=/dvs_ro/cfs/cdirs/desi/public/external/templates/fastspecf
 
 fail() { echo "FAIL: $*"; exit 1; }
 
-# ---- 1. HEAD import + mpi-fastspecfit on PATH ------------------------------
-echo "=== 1. environment / HEAD override ==="
-command -v mpi-fastspecfit &>/dev/null || fail "mpi-fastspecfit not on PATH after module load + override."
-fsf_file=$(python -c "import fastspecfit, os; print(os.path.dirname(fastspecfit.__file__))")
-echo "fastspecfit imported from: ${fsf_file}"
-case "${fsf_file}" in
-    "${FSF_SRC}"/*) : ;;
-    *) fail "fastspecfit NOT imported from HEAD checkout ${FSF_SRC} (got ${fsf_file})." ;;
-esac
-echo "fastspecfit HEAD: $(git -C "${FSF_SRC}" rev-parse --short HEAD 2>/dev/null || echo '?')"
-echo "mpi-fastspecfit : $(type -p mpi-fastspecfit)"
+# ---- 1. module loaded + mpi-fastspecfit on PATH ----------------------------
+echo "=== 1. environment / fastspecfit module ==="
+command -v mpi-fastspecfit &>/dev/null || fail "mpi-fastspecfit not on PATH after module load."
+echo "fastspecfit version: $(python -c 'import fastspecfit; print(fastspecfit.__version__)' 2>/dev/null || echo '?')"
+echo "mpi-fastspecfit    : $(type -p mpi-fastspecfit)"
+module list 2>&1 | grep -E 'fastspecfit'
 
 # ---- 2. mpi-fastspecfit exposes --constraintsfile --------------------------
 echo ""
 echo "=== 2. --constraintsfile available on mpi-fastspecfit ==="
 mpi-fastspecfit --help 2>&1 | grep -q -- '--constraintsfile' \
-    || fail "mpi-fastspecfit lacks --constraintsfile -- checkout ${FSF_SRC} is stale (git pull onto main)."
+    || fail "mpi-fastspecfit lacks --constraintsfile -- need fastspecfit/3.4.3+ (got an older module)."
 echo "OK"
 
 # ---- 3. inputs exist + constraints/emlines load ----------------------------

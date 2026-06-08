@@ -13,35 +13,21 @@
 #SBATCH --mail-user=virajvm@stanford.edu
 
 # Merge the per-healpix fastspec catalogs produced by run_custom_fastspec_job.sh.
-# Must use the SAME fastspecfit code as the production run so the merged schema
-# matches the per-object outputs -- hence the same HEAD editable checkout below
-# (see the long comment in run_custom_fastspec_job.sh, incl. the one-time
-# `pip install --no-deps -e ${FSF_SRC}` setup). Merge needs no constraints/templates.
-FSF_SRC=/global/homes/v/virajvm/packages/fastspecfit
-
+# Must use the SAME fastspecfit version as the production run so the merged schema
+# matches the per-object outputs -- hence the same fastspecfit/3.4.3 module.
+export FASTSPECFIT_VERSION=3.4.3
 source /dvs_ro/common/software/desi/desi_environment.sh main
-# Do NOT module load fastspecfit -- the editable HEAD checkout provides it.
-export PYTHONPATH=${FSF_SRC}/py:$PYTHONPATH
-export PATH=${FSF_SRC}/bin:$PATH
+module load fastspecfit/${FASTSPECFIT_VERSION}
 
 # Fail fast if anything's off
 if ! command -v mpi-fastspecfit &>/dev/null; then
-    echo "ERROR: mpi-fastspecfit not on PATH after module load + override. Aborting."
+    echo "ERROR: mpi-fastspecfit not on PATH after module load. Aborting."
     module avail fastspecfit 2>&1
     exit 1
 fi
 
-fsf_file=$(python -c "import fastspecfit, os; print(os.path.dirname(fastspecfit.__file__))")
-echo "fastspecfit imported from: ${fsf_file}"
-case "${fsf_file}" in
-    "${FSF_SRC}"/*) : ;;
-    *) echo "ERROR: fastspecfit NOT imported from HEAD checkout ${FSF_SRC} (got ${fsf_file}). Aborting."
-       exit 1 ;;
-esac
-
 echo "=== Loaded modules ==="
 module list 2>&1 | grep -E 'fastspecfit|desiutil|desispec|desitarget|speclite|desiconda'
-echo "fastspecfit HEAD: $(git -C "${FSF_SRC}" rev-parse --short HEAD 2>/dev/null || echo '?')"
 echo "======================"
 
 export DESI_SPECTRO_REDUX=/dvs_ro/cfs/cdirs/desi/spectro/redux
