@@ -10,8 +10,12 @@
 # Run interactively on a CPU node or wrap in an sbatch header as needed.
 
 # --- module setup (match production custom-fastspec run) -------------------
+# 3.4.3 matches run_custom_fastspec_job.sh so the stacks are fit with the same
+# version as the per-object catalog (incl. the narrow final-pass free_sigma:false
+# + doublet-locking line-fit changes).
+export FASTSPECFIT_VERSION=3.4.3
 source /dvs_ro/common/software/desi/desi_environment.sh main
-module load fastspecfit/3.4.2
+module load fastspecfit/${FASTSPECFIT_VERSION}
 
 # Sanity check: stackfit must expose --constraintsfile (added in 3.4.2)
 if ! stackfit --help 2>&1 | grep -q constraintsfile; then

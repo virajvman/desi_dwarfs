@@ -1,12 +1,11 @@
 #!/bin/bash -l
 
-# Match the env in etc/fastspecfit-env.sh
+# Match the production run (run_custom_fastspec_job.sh): fastspecfit/3.4.3 module.
+# (The old desiutil/desispec/desitarget/speclite swaps were for the 3.4.1-era
+# stack and now fail to load against `main` -- let `main` provide them.)
+export FASTSPECFIT_VERSION=3.4.3
 source /dvs_ro/common/software/desi/desi_environment.sh main
-module swap desiutil/3.6.1
-module swap desispec/0.71.2
-module swap desitarget/4.7.2
-module swap speclite/v1.0.0
-module load fastspecfit/3.4.1
+module load fastspecfit/${FASTSPECFIT_VERSION}
 
 export DESI_SPECTRO_REDUX=/dvs_ro/cfs/cdirs/desi/spectro/redux
 export DUST_DIR=/dvs_ro/cfs/cdirs/cosmo/data/dust/v0_1

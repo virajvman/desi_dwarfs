@@ -42,6 +42,7 @@ Outputs (written to STACK_PATH):
   - plots/te_ne_hahb_vs_mstar.png
   - plots/obs_hahb_vs_mstar.png
   - plots/doublet_ratios_vs_mstar.png
+  - plots/ne_diagnostic_ratio_vs_density.png
 
 Usage:
     python stack_direct_metallicity.py --line-flux-type BOXFLUX
@@ -261,6 +262,39 @@ def intrinsic_ha_hb(ne, te):
         return H_alpha(te, ne) / H_beta(te, ne)
 
 
+def pyneb_ne_from_ratio(obs_ratio, te_oiii, density_diagnostic):
+    """Independent n_e via PyNeb's getTemDen diagnostic solver.
+
+    Inverts the OBSERVED density-doublet ratio to an electron density at the
+    fit's low-ionization temperature tlow = 0.7*T_high + 3000 (Campbell 1986),
+    using the SAME atomic data configured in pn_functions. This is a separate
+    code path from the nested-sampling fit, so agreement with the fitted
+    NE_OII validates that the doublet -> n_e mapping is being used correctly.
+
+    The wave1/wave2 order matches the reported convention:
+      SII -> 6716/6731, OII -> 3729/3726 (both decrease with n_e).
+    Returns NaN if the ratio is outside the doublet's valid (density-sensitive)
+    range or PyNeb fails to converge.
+    """
+    import pyneb as pn
+    import pn_functions  # noqa: F401  (configures pn.atomicData on import)
+    from pn_functions import tlow_thi
+
+    if not (np.isfinite(obs_ratio) and np.isfinite(te_oiii)):
+        return np.nan
+    tlow = float(tlow_thi(te_oiii))
+    try:
+        if density_diagnostic == "SII":
+            atom = pn.Atom("S", 2)
+            ne = atom.getTemDen(obs_ratio, tem=tlow, wave1=6716, wave2=6731)
+        else:
+            atom = pn.Atom("O", 2)
+            ne = atom.getTemDen(obs_ratio, tem=tlow, wave1=3729, wave2=3726)
+        return float(ne)
+    except Exception:
+        return np.nan
+
+
 def _te_line_gating(density_diagnostic):
     """Line-SNR mask lines and min_lines for the direct-method TE fit."""
     names = list(_TE_LINE_NAMES_BASE)
@@ -374,7 +408,7 @@ def print_density_diagnostic_verification(out_tab, density_diagnostic):
         obs_label = "[S II] 6716/6731"
     else:
         obs_col = "OBS_OII_DOUBLET"
-        obs_label = "[O II] 3726/3729"
+        obs_label = "[O II] 3729/3726"
 
     if obs_col not in good.colnames:
         return
@@ -391,6 +425,33 @@ def print_density_diagnostic_verification(out_tab, density_diagnostic):
         f"(expect negative: higher doublet ratio -> lower n_e)"
     )
 
+    # Independent PyNeb getTemDen cross-check: invert the observed doublet
+    # ratio to n_e at the fitted tlow and compare to the fitted NE_OII. This
+    # is a separate solver from the nested-sampling fit, so agreement confirms
+    # the doublet -> n_e mapping is being applied correctly.
+    te = np.asarray(good["TE_OIII"], dtype=float)
+    ne_pyneb = np.array([
+        pyneb_ne_from_ratio(o, t, density_diagnostic)
+        for o, t in zip(obs, te)
+    ])
+    both = np.isfinite(ne) & np.isfinite(ne_pyneb)
+    print(f"    PyNeb getTemDen cross-check (invert observed {obs_label} at tlow):")
+    if np.any(both):
+        frac = (ne[both] - ne_pyneb[both]) / ne_pyneb[both]
+        print(
+            f"      N={int(np.sum(both))}: median fitted NE_OII="
+            f"{np.median(ne[both]):.1f}, median getTemDen="
+            f"{np.median(ne_pyneb[both]):.1f} cm^-3"
+        )
+        print(
+            f"      median fractional diff (fit-pyneb)/pyneb = "
+            f"{np.median(frac):+.3f} "
+            f"[range {np.min(frac):+.3f}, {np.max(frac):+.3f}]"
+        )
+    else:
+        print("      No bins with both finite fitted and getTemDen n_e "
+              "(ratios likely outside the density-sensitive range).")
+
     high_mass = good[np.asarray(good["MSTAR_MIN"], dtype=float) >= 9.0]
     if len(high_mass) > 0:
         hm_fit = high_mass[
@@ -405,9 +466,13 @@ def print_density_diagnostic_verification(out_tab, density_diagnostic):
             token = row["EW_TOKEN"]
             ne_val = float(row["NE_OII"])
             obs_val = float(row[obs_col]) if np.isfinite(row[obs_col]) else np.nan
+            ne_pn = pyneb_ne_from_ratio(
+                obs_val, float(row["TE_OIII"]), density_diagnostic
+            )
             print(
                 f"      [{mlo:.2f},{mhi:.2f}] {token}: "
-                f"NE_OII={ne_val:.1f}, {obs_col}={obs_val:.3f}, "
+                f"NE_OII={ne_val:.1f}, getTemDen={ne_pn:.1f}, "
+                f"{obs_col}={obs_val:.3f}, "
                 f"12+log(O/H)={float(row['TWELVE_LOG_OH']):.3f}"
             )
 
@@ -569,8 +634,10 @@ def main(argv=None):
             continue
 
         obs_ha_hb, obs_err, _ = measure_obs_ha_hb(t[[0]])
+        # [O II] 3729/3726 (standard convention: decreases with n_e, mirrors
+        # [S II] 6716/6731). Numerator/denominator order matches DENSITY_RATIO_SPECS.
         obs_oii, obs_oii_err = measure_obs_line_ratio(
-            t[[0]], "OII_3726", "OII_3729", args.line_flux_type,
+            t[[0]], "OII_3729", "OII_3726", args.line_flux_type,
         )
         obs_sii, obs_sii_err = measure_obs_line_ratio(
             t[[0]], "SII_6716", "SII_6731", args.line_flux_type,
@@ -779,7 +846,7 @@ def make_all_plots(out_tab, plot_dir):
     """Write oh_av, te_ne_hahb, obs_hahb, and doublet-ratio vs M* figures."""
     for plot_fn in (
         make_oh_av_plot, make_te_ne_hahb_plot, make_obs_hahb_plot,
-        make_doublet_ratios_vs_mstar_plot,
+        make_doublet_ratios_vs_mstar_plot, make_ne_diagnostic_plot,
     ):
         try:
             plot_fn(out_tab, plot_dir)
@@ -910,7 +977,7 @@ def make_doublet_ratios_vs_mstar_plot(out_tab, plot_dir):
         ("OBS_SII_DOUBLET", "OBS_SII_DOUBLET_ERR",
          axes[0], r"[S II] 6716/6731 (observed)"),
         ("OBS_OII_DOUBLET", "OBS_OII_DOUBLET_ERR",
-         axes[1], r"[O II] 3726/3729 (observed FLUX)"),
+         axes[1], r"[O II] 3729/3726 (observed FLUX)"),
     ]
     for ycol, yerr_col, ax, ylab in panels:
         if not _plot_obs_vs_mstar_by_ew(out_tab, ycol, yerr_col, ylab, ax):
@@ -924,6 +991,99 @@ def make_doublet_ratios_vs_mstar_plot(out_tab, plot_dir):
     )
     fig.tight_layout(rect=[0, 0, 1, 0.96])
     out_png = os.path.join(plot_dir, "doublet_ratios_vs_mstar.png")
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+    print(f"    Saved {os.path.basename(out_png)}")
+
+
+def make_ne_diagnostic_plot(out_tab, plot_dir):
+    """Density-diagnostic ratio (y) vs electron density (x).
+
+    Two panels ([S II] 6716/6731 and [O II] 3729/3726). Each shows the PyNeb
+    model curve built from the SAME emissivity interpolators the direct-method
+    fit uses (pn_functions), drawn at T_e = 1e4 K with a shaded band over
+    T_e in [7000, 15000] K to expose the (weak) temperature dependence.
+    Horizontal lines mark the observed doublet ratio of each detected stack
+    (DETECTED_7LINE), colored by EW bin, with a faint band for the ratio error.
+    Reading where a horizontal line crosses the curve gives the implied n_e.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    from pn_functions import O2_3726, O2_3729, S2_6716, S2_6731, den_min, den_max
+
+    os.makedirs(plot_dir, exist_ok=True)
+
+    ne_grid = np.logspace(np.log10(den_min), np.log10(den_max), 200)
+    te_fid = 1.0e4
+    te_band = (7.0e3, 1.5e4)
+
+    def _curve(num_g, den_g, te):
+        te_arr = np.full_like(ne_grid, te)
+        return num_g(te_arr, ne_grid) / den_g(te_arr, ne_grid)
+
+    # (tag, obs col, obs err col, numerator grid, denominator grid, y-label)
+    panels = [
+        ("SII", "OBS_SII_DOUBLET", "OBS_SII_DOUBLET_ERR",
+         S2_6716, S2_6731, r"[S II] $\lambda6716/\lambda6731$"),
+        ("OII", "OBS_OII_DOUBLET", "OBS_OII_DOUBLET_ERR",
+         O2_3729, O2_3726, r"[O II] $\lambda3729/\lambda3726$"),
+    ]
+
+    det = np.asarray(out_tab["DETECTED_7LINE"], dtype=bool)
+    sub = out_tab[det]
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    for ax, (tag, ycol, yerr_col, num_g, den_g, ylab) in zip(axes, panels):
+        c_fid = _curve(num_g, den_g, te_fid)
+        c_lo = _curve(num_g, den_g, te_band[0])
+        c_hi = _curve(num_g, den_g, te_band[1])
+        band_lo = np.minimum(c_lo, c_hi)
+        band_hi = np.maximum(c_lo, c_hi)
+        ax.fill_between(ne_grid, band_lo, band_hi, color="0.7", alpha=0.4,
+                        label=r"$T_e\in[7,15]\times10^3$ K")
+        ax.plot(ne_grid, c_fid, "k-", lw=1.8, label=r"PyNeb ($T_e=10^4$ K)")
+
+        ew_present = []
+        if ycol in sub.colnames:
+            for token in EW_TOKENS:
+                rows = sub[np.asarray(sub["EW_TOKEN"]) == token]
+                drawn = False
+                for row in rows:
+                    val = float(row[ycol]) if np.isfinite(row[ycol]) else np.nan
+                    if not np.isfinite(val):
+                        continue
+                    color = EW_COLORS.get(token, "0.3")
+                    ax.axhline(val, color=color, lw=1.0, alpha=0.85)
+                    err = (float(row[yerr_col])
+                           if yerr_col in row.colnames
+                           and np.isfinite(row[yerr_col]) else np.nan)
+                    if np.isfinite(err) and err > 0:
+                        ax.axhspan(val - err, val + err, color=color, alpha=0.10)
+                    drawn = True
+                if drawn:
+                    ew_present.append(token)
+
+        ax.set_xscale("log")
+        ax.set_xlim(den_min, den_max)
+        ax.set_xlabel(r"$n_e$ [cm$^{-3}$]")
+        ax.set_ylabel(ylab)
+        ax.set_title(f"{tag} density diagnostic", fontsize=10)
+
+        handles, labels = ax.get_legend_handles_labels()
+        for token in ew_present:
+            handles.append(Line2D([], [], color=EW_COLORS[token], lw=1.0))
+            labels.append(EW_BIN_LABELS.get(token, token))
+        ax.legend(handles, labels, frameon=False, fontsize=7)
+
+    fig.suptitle(
+        "Density-diagnostic ratio vs $n_e$: PyNeb model curves and observed "
+        "stack ratios (detected bins, colored by EW)",
+        fontsize=10,
+    )
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    out_png = os.path.join(plot_dir, "ne_diagnostic_ratio_vs_density.png")
     fig.savefig(out_png, dpi=150)
     plt.close(fig)
     print(f"    Saved {os.path.basename(out_png)}")

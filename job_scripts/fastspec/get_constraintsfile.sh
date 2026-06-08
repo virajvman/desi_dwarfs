@@ -1,7 +1,7 @@
 #!/bin/bash
 
 source /global/cfs/cdirs/desi/software/desi_environment.sh main
-module load fastspecfit/3.4.2
+module load fastspecfit/3.4.3
 
 CONSTRAINTS_SRC=$(python -c "from importlib.resources import files; print(files('fastspecfit') / 'data/emline-constraints.yaml')")
 CONSTRAINTS_DST="/global/u1/v/virajvm/DESI2_LOWZ/desi_dwarfs/data/data_metal/emline-constraints-dwarfs.yaml"

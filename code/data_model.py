@@ -1749,7 +1749,7 @@ spec_derived_hdu_datamodel = {
     # ---------------------------------------------------------------
     "TE_NE_OII": {
         "unit": "cm-3",
-        "description": "Direct-method electron density inferred from the [O II] 3726/3729 doublet ratio (posterior median; NaN if te_mask fails or fit failed).",
+        "description": "Direct-method electron density inferred from the [O II] 3729/3726 doublet ratio (posterior median; NaN if te_mask fails or fit failed).",
         "dtype": "float64",
         "blank_value": np.nan,
     },

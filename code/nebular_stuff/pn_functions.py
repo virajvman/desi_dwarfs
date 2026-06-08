@@ -115,7 +115,7 @@ def calc_Av_Ha_Hb(Ha_Hb, Ha_Hb_intrinsic):
 # ---------------------------------------------------------------------------
 # Parameters: (ne_oii, thi_oiii, Av, log_O2_abund, log_O3_abund)
 # Ratios returned, in order:
-#   0. density doublet (n_e): [O II] 3726/3729 or [S II] 6716/6731
+#   0. density doublet (n_e): [O II] 3729/3726 or [S II] 6716/6731
 #   1. Hbeta / Halpha                      (A_V)
 #   2. Hgamma / Hbeta                      (A_V)
 #   3. [O III] 4363 / [O III] 5007         (T_high)
@@ -139,9 +139,13 @@ def r_model(theta, density_diagnostic='OII'):
             / (S2_6731(tlow, ne) * transmission_Av(6731., Av))
         )
     else:
+        # [O II] 3729/3726 (standard convention, decreases with n_e, mirrors
+        # [S II] 6716/6731). Inverted from the historical 3726/3729 so the
+        # reported/plotted convention matches [S II]; n_e is unchanged because
+        # this is 1/x on both the model and observed sides of the fit.
         r_dens_ratio = (
-            (O2_3726(tlow, ne) * transmission_Av(3726., Av))
-            / (O2_3729(tlow, ne) * transmission_Av(3729., Av))
+            (O2_3729(tlow, ne) * transmission_Av(3729., Av))
+            / (O2_3726(tlow, ne) * transmission_Av(3726., Av))
         )
     r_Hb_Ha = (
         (H_beta(thi, ne) * transmission_Av(4861., Av))
@@ -193,7 +197,7 @@ def ratio_err(a, b, a_err, b_err):
 # ===========================================================================
 # Order MUST match the order of ratios returned by r_model.
 RATIO_SPECS = [
-    ('OII_3726',  'OII_3729'),               # density
+    ('OII_3729',  'OII_3726'),               # density (overridden below)
     ('HBETA',     'HALPHA'),                 # A_V
     ('HGAMMA',    'HBETA'),                  # A_V
     ('OIII_4363', 'OIII_5007'),              # T_high
@@ -204,9 +208,11 @@ RATIO_SPECS = [
 PARAM_NAMES = ['ne_oii', 'te_oiii', 'Av', 'log_O2_abund', 'log_O3_abund']
 
 # Density-diagnostic doublet, selectable per fit. Overrides RATIO_SPECS[0].
-# 'OII' -> [O II] 3726/3729; 'SII' -> [S II] 6716/6731 (PyNeb fiducial data).
+# 'OII' -> [O II] 3729/3726; 'SII' -> [S II] 6716/6731 (PyNeb fiducial data).
+# Both numerators are the J=5/2 -> ground transition, so both ratios decrease
+# monotonically with n_e (standard density-diagnostic convention).
 DENSITY_RATIO_SPECS = {
-    'OII': ('OII_3726', 'OII_3729'),
+    'OII': ('OII_3729', 'OII_3726'),
     'SII': ('SII_6716', 'SII_6731'),
 }
 
