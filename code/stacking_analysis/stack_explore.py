@@ -11,30 +11,44 @@ _CODE_DIR = os.path.dirname(_THIS_DIR)
 if _CODE_DIR not in sys.path:
     sys.path.insert(0, _CODE_DIR)
 
+from multiprocessing import Pool
+
 from astropy.table import Table, hstack
 import h5py
 import numpy as np
-from nnmf_pca_analysis.nnmf_analysis import deredshift_resample_desi_spectra
+from tqdm import trange
+from nnmf_pca_analysis.nnmf_analysis import (
+    deredshift_resample_desi_spectra,
+    _deredshift_one_spectrum,
+)
 from desi_lowz_funcs import print_stage
 from mass_and_photo_corrections import DWARF_CATALOG_SPEC_HDU, DWARF_CATALOG_DERIVED_HDU
 
 ##deredshifting functions
 
-def deredshift_for_stacking(use_invvar=True, delta_wave=None):
-    spectra_dir = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files"
+def deredshift_for_stacking(use_invvar=True, delta_wave=None, chunk_size=5000, ncores=128):
+    """De-redshift + resample DESI spectra to a common rest-frame grid.
 
+    Streamed/chunked rewrite of the original full-load implementation, written
+    to avoid OOM on the full catalog: FLUX/IVAR are read off disk one chunk of
+    ``chunk_size`` rows at a time, de-redshifted in parallel via
+    ``_deredshift_one_spectrum``, and written straight into pre-sized chunked
+    HDF5 datasets. Numerically identical to the old
+    ``deredshift_resample_desi_spectra`` path; only the memory profile differs.
+
+    Note: the HDF5 storage chunk is ``(chunk_size, n_out)``, which must stay
+    under HDF5's 4 GB per-chunk limit. The default ``chunk_size=5000`` keeps
+    this safe even on the finest (hires, delta_wave=0.2 -> n_out=31000) grid
+    (~620 MB/chunk). Raise it only if you also keep that product < 4 GB.
+    """
+    spectra_dir = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files"
     if delta_wave is None:
         grid_suffix = "_native"
     elif delta_wave == 0.2:
         grid_suffix = "_hires"
     else:
         grid_suffix = f"_d{delta_wave}"
-
-    save_dered = os.path.join(
-        spectra_dir,
-        f"desi_y1_dwarf_combine_deredshift{grid_suffix}.h5",
-    )
-
+    save_dered = os.path.join(spectra_dir, f"desi_y1_dwarf_combine_deredshift{grid_suffix}.h5")
     # When using the flux-conserving rebin (use_invvar=False), write to a
     # distinct file so the existing inverse-variance-weighted output is not
     # overwritten.
@@ -42,27 +56,19 @@ def deredshift_for_stacking(use_invvar=True, delta_wave=None):
         base, ext = os.path.splitext(save_dered)
         save_dered = f"{base}_noinvvar{ext}"
 
-    print(f"Making deredshited spectra file! (use_invvar={use_invvar}, delta_wave={delta_wave})")
+    spectra_path = os.path.join(spectra_dir, "data", "desi_dr1_dwarf_catalog_spectra.h5")
+    print(f"Making deredshifted spectra file! (use_invvar={use_invvar}, delta_wave={delta_wave})")
 
-    #read the entire consolidated file!
-    with h5py.File("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/data/desi_dr1_dwarf_catalog_spectra.h5", "r") as f:
+    # --- read ONLY metadata + wave up front (small); leave FLUX/IVAR on disk ---
+    with h5py.File(spectra_path, "r") as f:
         wave = f["WAVE"][:]
-        all_flux = f["FLUX"][:] 
-        all_flux_ivar = f["FLUX_IVAR"][:] 
-        all_zreds = f["Z"][:]  
-        all_tgids = f["TARGETID"][:] 
-        
-    print("wave shape", wave.shape)
-    print("flux shape", all_flux.shape)
-    print("flux_ivar shape", all_flux_ivar.shape)
-    print("zreds shape", all_zreds.shape)
-    
-    # ################
+        n_spec = f["FLUX"].shape[0]
+        all_zreds = f["Z"][:]
+        all_tgids = f["TARGETID"][:]
 
-    ##I should de-redshift this once and then save it!
+    print("wave shape", wave.shape, "| n_spec", n_spec)
 
-    print_stage("De-redshifting the spectra and clipping to relevant wavelength range")
-
+    # --- output rest-frame grid (shared across all spectra) ---
     if delta_wave is None:
         wave_out = wave
         step = np.median(np.diff(wave_out)) if len(wave_out) > 1 else np.nan
@@ -70,24 +76,48 @@ def deredshift_for_stacking(use_invvar=True, delta_wave=None):
     else:
         wave_out = np.arange(3600, 9800, delta_wave)
         print(f"wave_out: linear grid 3600-9800 A, n={len(wave_out)}, step={delta_wave} A")
-
+    n_out = len(wave_out)
     print(f"save path: {save_dered}")
-    print(wave_out[:10])
-    print(wave_out[-10:])
-    
-    wave_rest, all_fluxs_out, all_flux_ivars_out = deredshift_resample_desi_spectra(wave, all_flux, all_flux_ivar, all_zreds,
-                                     wave_out=wave_out, ncores=128,verbose=True,
-                                     use_invvar=use_invvar)
+    print_stage("De-redshifting + resampling in chunks (streamed read -> write)")
 
-    with h5py.File(save_dered, "w") as f:
-        f.create_dataset("TARGETID", data=all_tgids, dtype='i8')
-        f.create_dataset("Z", data=all_zreds, dtype='f4')
-        f.create_dataset("WAVE_REST", data=wave_rest, dtype='f4')
-        f.create_dataset("FLUX", data=all_fluxs_out, dtype='f4')
-        f.create_dataset("FLUX_IVAR", data=all_flux_ivars_out, dtype='f4')
+    # --- pre-size chunked output datasets, fill incrementally ---
+    with h5py.File(save_dered, "w") as fout:
+        fout.create_dataset("TARGETID", data=all_tgids, dtype='i8')
+        fout.create_dataset("Z", data=all_zreds, dtype='f4')
+        fout.create_dataset("WAVE_REST", data=wave_out, dtype='f4')
+        row_chunk = min(chunk_size, n_spec)
+        dset_flux = fout.create_dataset("FLUX", shape=(n_spec, n_out), dtype='f4',
+                                        chunks=(row_chunk, n_out))
+        dset_ivar = fout.create_dataset("FLUX_IVAR", shape=(n_spec, n_out), dtype='f4',
+                                        chunks=(row_chunk, n_out))
+
+        with h5py.File(spectra_path, "r") as fin, Pool(processes=ncores) as pool:
+            flux_in = fin["FLUX"]
+            ivar_in = fin["FLUX_IVAR"]
+            for start in trange(0, n_spec, chunk_size, desc="chunks"):
+                stop = min(start + chunk_size, n_spec)
+                flux_chunk = flux_in[start:stop]     # slice-read off disk, not the whole array
+                ivar_chunk = ivar_in[start:stop]
+                z_chunk = all_zreds[start:stop]
+
+                # generator, NOT a materialized list -> no 450k-tuple blowup
+                args = ((wave, flux_chunk[i], ivar_chunk[i], z_chunk[i], wave_out, use_invvar)
+                        for i in range(stop - start))
+
+                # write straight into pre-allocated float32 buffers -> no float64 np.array
+                flux_out = np.empty((stop - start, n_out), dtype='f4')
+                ivar_out = np.empty((stop - start, n_out), dtype='f4')
+                for i, (fo, io) in enumerate(
+                        pool.imap(_deredshift_one_spectrum, args, chunksize=64)):
+                    flux_out[i] = fo
+                    ivar_out[i] = io
+
+                dset_flux[start:stop] = flux_out
+                dset_ivar[start:stop] = ivar_out
+                del flux_chunk, ivar_chunk, flux_out, ivar_out
 
     print(f"Saved {save_dered}")
-    return 
+    return
 
 ##data loading functions
 
