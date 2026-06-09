@@ -8,7 +8,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=128
-#SBATCH --mem=256GB
+#SBATCH --mem=460GB
 #SBATCH --time=00:30:00
 #SBATCH --job-name=deredshift_stacking
 #SBATCH --output=deredshift_stacking.log
@@ -30,5 +30,5 @@ python3 -u -c "
 import sys
 sys.path.insert(0, 'desi_dwarfs/code')
 from stacking_analysis.stack_explore import deredshift_for_stacking
-deredshift_for_stacking(use_invvar=False, delta_wave=0.4)
+deredshift_for_stacking(use_invvar=False, delta_wave=0.2)
 "
