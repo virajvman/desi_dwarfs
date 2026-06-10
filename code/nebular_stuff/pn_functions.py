@@ -252,12 +252,16 @@ def _flux_and_err(row, line, line_flux_type):
     return float(f), float(1.0 / np.sqrt(ivar))
 
 
-def _build_ratios(row, density_diagnostic, line_flux_type):
+def _build_ratios(row, density_diagnostic, line_flux_type, fixed_ne=None):
     """Build the ratio vector, its error vector, and a mask of usable ratios.
 
     The density-diagnostic ratio (index 0) uses [O II] 3726/3729 by default,
     or [S II] 6716/6731 when density_diagnostic='SII'. All other ratios
-    (including O+/H+, which always uses the O II doublet) are unchanged."""
+    (including O+/H+, which always uses the O II doublet) are unchanged.
+
+    When ``fixed_ne`` is set, the electron density is held fixed in the fit, so
+    the density-diagnostic ratio (index 0) carries no information and is dropped
+    from the usable mask regardless of whether its lines were detected."""
     n = len(RATIO_SPECS)
     r = np.full(n, np.nan)
     r_err = np.full(n, np.nan)
@@ -288,6 +292,10 @@ def _build_ratios(row, density_diagnostic, line_flux_type):
         r_err[i] = err
 
     mask = np.isfinite(r) & np.isfinite(r_err) & (r_err > 0)
+    if fixed_ne is not None:
+        # n_e is held fixed: the density-diagnostic doublet ratio (index 0)
+        # constrains nothing, so drop it from the fit.
+        mask[0] = False
     return r, r_err, mask
 
 
@@ -424,9 +432,16 @@ def _fit_row_ultranest(r, r_err, mask,
                        min_num_live_points=400,
                        verbose_sampler=False,
                        sampler_kwargs=None,
-                       density_diagnostic='OII'):
+                       density_diagnostic='OII',
+                       fixed_ne=None):
     """Nested sampling with UltraNest. Returns posterior 16/50/84 percentiles.
-    Matches the inference approach of Scholte+2026."""
+    Matches the inference approach of Scholte+2026.
+
+    When ``fixed_ne`` is not None the electron-density parameter (index 0) is
+    held at that value (its prior collapses to a degenerate point), so the fit
+    marginalizes only over {Te, Av, O+/H+, O++/H+} and the reported ``ne_oii``
+    equals ``fixed_ne``. The density-diagnostic ratio is expected to already be
+    masked out (see ``_build_ratios``)."""
     try:
         import ultranest
     except ImportError as e:
@@ -460,12 +475,19 @@ def _fit_row_ultranest(r, r_err, mask,
         resid = (r_m_col - models[mask_idx]) / e_m_col
         return -0.5 * np.sum(resid ** 2, axis=0)  # (N,)
 
-    # Vectorized prior transform.
-    spans = PRIOR_HIGHS - PRIOR_LOWS
+    # Vectorized prior transform. Use local copies so a fixed-ne run never
+    # mutates the module-level prior arrays. When fixed_ne is set, collapse the
+    # n_e prior (index 0) to a degenerate point; that dimension then maps to a
+    # constant and the (already masked) density ratio contributes nothing.
+    lows = PRIOR_LOWS.copy()
+    highs = PRIOR_HIGHS.copy()
+    if fixed_ne is not None:
+        lows[0] = highs[0] = float(fixed_ne)
+    spans = highs - lows
 
     def transform(cubes):
         cubes = np.asarray(cubes)
-        return PRIOR_LOWS + cubes * spans  # broadcasts for both 1D and 2D
+        return lows + cubes * spans  # broadcasts for both 1D and 2D
 
     # Silence ultranest's stderr output unless explicitly requested.
     import logging
@@ -575,11 +597,17 @@ def _fit_row_ultranest_twostage(r, r_err, mask,
                                 min_num_live_points=400,
                                 verbose_sampler=False,
                                 sampler_kwargs=None,
-                                density_diagnostic='OII'):
+                                density_diagnostic='OII',
+                                fixed_ne=None):
     """Two-stage informative-prior nested-sampling fit (Plan B).
 
     Returns the same result-dict contract as ``_fit_row_ultranest`` so the
     catalog driver and cache are agnostic to which method produced a row."""
+    if fixed_ne is not None:
+        raise NotImplementedError(
+            "fixed_ne is only supported for the single-stage fit "
+            "(use_informative_priors=False)."
+        )
     n_used = int(mask.sum())
     n_par = len(PARAM_NAMES)
     if n_used < 3:
@@ -716,30 +744,37 @@ def _fit_row_ultranest_twostage(r, r_err, mask,
 # Public driver
 # ---------------------------------------------------------------------------
 def _fit_one_row(row, min_num_live_points, verbose_sampler, sampler_kwargs,
-                 density_diagnostic, line_flux_type):
+                 density_diagnostic, line_flux_type, fixed_ne=None):
     """Top-level per-row worker. Defined at module level (not nested) so it
     can be pickled for joblib's loky workers."""
-    r, r_err, mask = _build_ratios(row, density_diagnostic, line_flux_type)
+    r, r_err, mask = _build_ratios(
+        row, density_diagnostic, line_flux_type, fixed_ne=fixed_ne,
+    )
     return _fit_row_ultranest(
         r, r_err, mask,
         min_num_live_points=min_num_live_points,
         verbose_sampler=verbose_sampler,
         sampler_kwargs=sampler_kwargs,
         density_diagnostic=density_diagnostic,
+        fixed_ne=fixed_ne,
     )
 
 
 def _fit_one_row_twostage(row, min_num_live_points, verbose_sampler,
-                          sampler_kwargs, density_diagnostic, line_flux_type):
+                          sampler_kwargs, density_diagnostic, line_flux_type,
+                          fixed_ne=None):
     """Top-level per-row worker for the two-stage fit (Plan B). Module-level
     so it can be pickled for joblib's loky workers."""
-    r, r_err, mask = _build_ratios(row, density_diagnostic, line_flux_type)
+    r, r_err, mask = _build_ratios(
+        row, density_diagnostic, line_flux_type, fixed_ne=fixed_ne,
+    )
     return _fit_row_ultranest_twostage(
         r, r_err, mask,
         min_num_live_points=min_num_live_points,
         verbose_sampler=verbose_sampler,
         sampler_kwargs=sampler_kwargs,
         density_diagnostic=density_diagnostic,
+        fixed_ne=fixed_ne,
     )
 
 
@@ -751,7 +786,8 @@ def compute_direct_metallicities(catalog,
                                  verbose_sampler=False,
                                  sampler_kwargs=None,
                                  use_informative_priors=False,
-                                 density_diagnostic='OII'):
+                                 density_diagnostic='OII',
+                                 fixed_ne=None):
     """
     Compute direct-Te oxygen abundances row-by-row from a line-flux catalog
     using UltraNest nested sampling (matches Scholte+2026).
@@ -802,6 +838,12 @@ def compute_direct_metallicities(catalog,
         uses the O II doublet. If the chosen doublet's lines are missing for a
         row, that density ratio is masked out and the density becomes
         prior-dominated for that row.
+    fixed_ne : float or None
+        If None (default), the electron density is a free parameter fit from
+        the density-diagnostic doublet. If a float (e.g. 100.0), the density is
+        held fixed at that value: the density-diagnostic ratio is dropped from
+        every row's fit and the reported ``ne_oii`` equals ``fixed_ne``. Only
+        supported with the single-stage fit (use_informative_priors=False).
 
     Returns
     -------
@@ -828,6 +870,11 @@ def compute_direct_metallicities(catalog,
             f"density_diagnostic must be one of {tuple(DENSITY_RATIO_SPECS)}, "
             f"got {density_diagnostic!r}"
         )
+    if fixed_ne is not None and use_informative_priors:
+        raise NotImplementedError(
+            "fixed_ne is only supported with the single-stage fit "
+            "(use_informative_priors=False)."
+        )
 
     n_rows = len(catalog)
 
@@ -844,7 +891,7 @@ def compute_direct_metallicities(catalog,
         for idx, row in enumerate(catalog):
             fit = worker(
                 row, min_num_live_points, verbose_sampler, sampler_kwargs,
-                density_diagnostic, line_flux_type,
+                density_diagnostic, line_flux_type, fixed_ne,
             )
             fits.append(fit)
             if verbose:
@@ -873,7 +920,7 @@ def compute_direct_metallicities(catalog,
                         verbose=10 if verbose else 0)(
             delayed(worker)(
                 row, min_num_live_points, verbose_sampler, sampler_kwargs,
-                density_diagnostic, line_flux_type,
+                density_diagnostic, line_flux_type, fixed_ne,
             )
             for row in catalog
         )

@@ -16,15 +16,19 @@ produced only when N >= 50 in the (mass, EW) cell.
 
 This script:
   1. Globs the per-bin FastSpecFit stack outputs.
-  2. Keeps only bins where the MEAN stack passes the TE line-SNR gate
-     (7 lines for OII density diagnostic, 9 for SII) at SNR > 3 with flux
-     > 1 (FastSpec units), reusing `sfr_and_metallicity.line_snr_mask`
-     with the same gating as `add_nebular_props.py`. Base lines: HALPHA,
-     HBETA, HGAMMA, OIII_4363, OIII_5007, OII_3726, OII_3729; SII mode
-     also requires SII_6716, SII_6731.
-  3. Runs the UltraNest direct-method fit
-     (`pn_functions.compute_direct_metallicities`) on the stack spectrum
-     (default density diagnostic: SII).
+  2. Keeps only bins where the MEAN stack (row 0 ONLY, the total stack)
+     passes the TE line-SNR gate at SNR > 10 with flux > 0.005 (FastSpec
+     units) in ALL relevant lines, via `sfr_and_metallicity.line_snr_mask`.
+     Base lines: HALPHA, HBETA, HGAMMA, OIII_4363, OIII_5007, OII_3726,
+     OII_3729 (7); SII density mode also requires SII_6716, SII_6731 (9).
+     With --fix-ne100 the density doublet is not needed, so the gate is the
+     7 base lines regardless of --density-diagnostic.
+  3. Of the 200 bootstrap rows, keeps those that INDEPENDENTLY pass the
+     SAME gate, and runs the UltraNest direct-method fit
+     (`pn_functions.compute_direct_metallicities`) on row 0 + those passing
+     bootstrap rows only (default density diagnostic: SII). With --fix-ne100
+     the electron density is held fixed at 100 cm^-3 instead of being fit
+     from the density doublet.
   4. Reports per bin:
        - central value  = posterior median from the mean-stack fit (row 0), and
        - uncertainty    = 16/50/84 percentiles of bootstrap-row posterior medians
@@ -92,14 +96,17 @@ EW_COLORS = {
 _TE_LINE_NAMES_BASE = ["HALPHA", "HBETA", "HGAMMA",
                        "OIII_4363", "OIII_5007",
                        "OII_3726", "OII_3729"]
-SNR_VAL = 3
-MIN_FLUX = 0.0
+SNR_VAL = 10
+MIN_FLUX = 0.005
 
 # Bootstrap reliability gate for direct-method errors (survivor bias on OIII_4363).
 MIN_N_BOOT_FIT = 30
 N_BOOT_TOTAL = 200
 
 TE_DENSITY_DIAGNOSTIC = "SII"
+
+# Electron density held fixed when --fix-ne100 is passed (cm^-3).
+FIXED_NE_VALUE = 100.0
 
 N_JOBS = 128
 MIN_NUM_LIVE_POINTS = 400
@@ -295,10 +302,14 @@ def pyneb_ne_from_ratio(obs_ratio, te_oiii, density_diagnostic):
         return np.nan
 
 
-def _te_line_gating(density_diagnostic):
-    """Line-SNR mask lines and min_lines for the direct-method TE fit."""
+def _te_line_gating(density_diagnostic, fix_ne=False):
+    """Line-SNR mask lines and min_lines for the direct-method TE fit.
+
+    With ``fix_ne`` the electron density is held fixed, so the density
+    diagnostic doublet is not needed and the gate reduces to the 7 base
+    abundance/Balmer lines regardless of ``density_diagnostic``."""
     names = list(_TE_LINE_NAMES_BASE)
-    if density_diagnostic == "SII":
+    if not fix_ne and density_diagnostic == "SII":
         names.extend(["SII_6716", "SII_6731"])
     return names, len(names)
 
@@ -579,10 +590,22 @@ def main(argv=None):
             "Default: SII (TE_DENSITY_DIAGNOSTIC)."
         ),
     )
+    parser.add_argument(
+        "--fix-ne100",
+        action="store_true",
+        help=(
+            "Hold the electron density fixed at n_e = 100 cm^-3 instead of "
+            "fitting it from the SII/OII density doublet. Drops the density "
+            "doublet from both the direct-method fit and the detection gate, "
+            "so --density-diagnostic becomes irrelevant."
+        ),
+    )
     args = parser.parse_args(argv)
 
     density_diagnostic = args.density_diagnostic or TE_DENSITY_DIAGNOSTIC
-    te_line_names, te_min_lines = _te_line_gating(density_diagnostic)
+    fix_ne = args.fix_ne100
+    fixed_ne = FIXED_NE_VALUE if fix_ne else None
+    te_line_names, te_min_lines = _te_line_gating(density_diagnostic, fix_ne=fix_ne)
 
     import sfr_and_metallicity as sam
     sam.line_flux_type = args.line_flux_type
@@ -595,8 +618,16 @@ def main(argv=None):
     files = sorted(glob.glob(pattern))
     files = [f for f in files if "fastspec_fastspec_" not in os.path.basename(f)]
     print(f"[1] Found {len(files)} FastSpecFit stack outputs in {STACK_PATH}")
-    print(f"    TE density diagnostic: {density_diagnostic} "
-          f"({te_min_lines} lines required for detection gate)")
+    if fix_ne:
+        print(f"    FIX n_e: holding n_e = {FIXED_NE_VALUE:g} cm^-3 fixed "
+              f"(density doublet dropped from fit AND gate; "
+              f"--density-diagnostic ignored)")
+    else:
+        print(f"    TE density diagnostic: {density_diagnostic} "
+              f"({te_min_lines} lines required for detection gate)")
+    print(f"    Detection gate: SNR > {SNR_VAL}, flux > {MIN_FLUX:g} in all "
+          f"{te_min_lines} lines, on the MEAN stack (row 0) only; bootstrap "
+          f"rows passing the same gate are fit for the error.")
     print(
         "    NOTE: propagated measurement ivar on row-0 stacks may increase "
         "DETECTED_7LINE pass rate vs the old 1/boot_std^2 ivar (expected)."
@@ -643,11 +674,14 @@ def main(argv=None):
             t[[0]], "SII_6716", "SII_6731", args.line_flux_type,
         )
 
-        detected = bool(line_snr_mask(
-            t[[0]], line_names=te_line_names,
+        # Gate every row (mean + bootstrap) with the same SNR/flux cut. Row 0
+        # is the total/mean stack; rows 1.. are the bootstrap realizations.
+        gate_mask = line_snr_mask(
+            t, line_names=te_line_names,
             snr_val=SNR_VAL, min_lines=te_min_lines, min_flux=MIN_FLUX,
             line_flux_type=args.line_flux_type,
-        )[0])
+        )
+        detected = bool(gate_mask[0])
 
         rec = {
             "MSTAR_MIN": mlo, "MSTAR_MAX": mhi,
@@ -656,9 +690,11 @@ def main(argv=None):
             "EW_TOKEN": token,
             "NOBJ": nobj,
             "DENSITY_DIAGNOSTIC": density_diagnostic,
+            "FIX_NE100": fix_ne,
             "DETECTED_7LINE": detected,
             "MEAN_FIT_SUCCESS": False,
             "N_BOOT_TOTAL": 0,
+            "N_BOOT_PASS_GATE": 0,
             "N_BOOT_FIT": 0,
             "BOOT_ERR_RELIABLE": False,
             "N_RATIOS": 0,
@@ -688,15 +724,29 @@ def main(argv=None):
             rows.append(rec)
             continue
 
-        print(f"    Detected. Fitting {len(t)} row(s) with UltraNest ...")
+        # Fit ONLY the mean stack (row 0) plus the bootstrap rows that
+        # independently pass the same line gate -- bootstrap realizations that
+        # fail the gate are dropped before fitting, so no nested-sampling cycles
+        # are spent on rows that wouldn't have been detected.
+        n_boot_raw = max(len(t) - 1, 0)
+        boot_pass_idx = np.where(gate_mask[1:])[0] + 1   # +1: skip mean row 0
+        fit_idx = [0] + boot_pass_idx.tolist()
+        fit_tab = t[fit_idx]
+        rec["N_BOOT_TOTAL"] = int(n_boot_raw)
+        rec["N_BOOT_PASS_GATE"] = int(len(boot_pass_idx))
+
+        print(f"    Detected. Fitting 1 mean + "
+              f"{rec['N_BOOT_PASS_GATE']}/{n_boot_raw} gate-passing bootstrap "
+              f"row(s) with UltraNest ...")
         res = compute_direct_metallicities(
-            t,
+            fit_tab,
             args.line_flux_type,
             n_jobs=N_JOBS,
             min_num_live_points=MIN_NUM_LIVE_POINTS,
             sampler_kwargs=SAMPLER_KWARGS,
             use_informative_priors=USE_INFORMATIVE_PRIORS,
             density_diagnostic=density_diagnostic,
+            fixed_ne=fixed_ne,
             verbose=False,
             verbose_sampler=False,
         )
@@ -706,8 +756,6 @@ def main(argv=None):
         rec["N_RATIOS"] = int(mean_fit["n_ratios"])
         rec["LOGZ"] = float(mean_fit["logz"])
 
-        n_boot_total = max(len(res) - 1, 0)
-        rec["N_BOOT_TOTAL"] = int(n_boot_total)
         if len(res) > 1:
             boot = res[1:]
             ok = np.asarray(boot["fit_success"], dtype=bool) & np.isfinite(
@@ -738,8 +786,9 @@ def main(argv=None):
     out_tab = Table(rows)
     col_order = [
         "MSTAR_MIN", "MSTAR_MAX", "EW_MIN", "EW_MAX", "EW_TOKEN", "NOBJ",
-        "DENSITY_DIAGNOSTIC", "DETECTED_7LINE", "MEAN_FIT_SUCCESS",
-        "N_BOOT_TOTAL", "N_BOOT_FIT", "BOOT_ERR_RELIABLE", "N_RATIOS", "LOGZ",
+        "DENSITY_DIAGNOSTIC", "FIX_NE100", "DETECTED_7LINE", "MEAN_FIT_SUCCESS",
+        "N_BOOT_TOTAL", "N_BOOT_PASS_GATE", "N_BOOT_FIT", "BOOT_ERR_RELIABLE",
+        "N_RATIOS", "LOGZ",
         "OBS_HA_HB", "OBS_HA_HB_ERR",
         "OBS_OII_DOUBLET", "OBS_OII_DOUBLET_ERR",
         "OBS_SII_DOUBLET", "OBS_SII_DOUBLET_ERR",
