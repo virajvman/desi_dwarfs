@@ -42,6 +42,6 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 python3 code/nebular_stuff/stack_direct_metallicity.py \
-    --line-flux-type BOXFLUX --density-diagnostic SII
+    --line-flux-type FLUX --ne-100
 
 echo "=== Pipeline complete ==="
