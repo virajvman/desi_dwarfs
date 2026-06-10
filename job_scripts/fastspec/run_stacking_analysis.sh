@@ -1,7 +1,31 @@
-#!/bin/bash
-# Full M* x H-alpha-EW stack pipeline.
+#!/bin/bash -l
+
+#SBATCH --account=desi
+#SBATCH --qos=regular
+#SBATCH --constraint=cpu
+#SBATCH --mail-user=virajvm@stanford.edu
+#SBATCH --mail-type=ALL
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=128
+#SBATCH --mem=256GB
+#SBATCH --time=06:00:00
+#SBATCH --job-name=run_stacking_analysis
+#SBATCH --output=run_stacking_analysis.log
+
+# Full M* x H-alpha-EW stack pipeline (3 stages), as a single batch job so it
+# runs on a scheduled compute node instead of an interactive Jupyter node.
 # Mass: 0.5 dex (6-8), 0.25 dex (8-9.25). EW: <30, 30-100, >100 A.
-# Run on a Perlmutter login or compute node with DESI env + pscratch access.
+#
+# Submit:   sbatch job_scripts/fastspec/run_stacking_analysis.sh
+# Monitor:  squeue --me   |   tail -f run_stacking_analysis.log
+# (Or run the body directly on an exclusive interactive Perlmutter CPU node.)
+#
+# Stage 2 (run_stack_fastspec_haew_5pct.sh) sets up its OWN FastSpecFit
+# environment in a child shell (`bash ...`), so its `module load fastspecfit`
+# does not leak into stages 1 and 3, which use the main DESI environment.
+
+set -e
 
 source /global/cfs/cdirs/desi/software/desi_environment.sh main
 
