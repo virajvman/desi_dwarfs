@@ -3,18 +3,37 @@
 """
 many_cutouts_general.py
 
-General-purpose MPI + multiprocessing wrapper to generate a large number of
-Legacy Survey image cutouts on NERSC via the dstndstn/cutouts Shifter container.
+General-purpose MPI + multiprocessing pipeline to generate Legacy Survey
+image cutouts on NERSC via the dstndstn/cutouts Shifter container, writing
+per-brick HDF5 shards (see code/cutout_store.py for the store layout).
+
+Design notes (decisions from the 2026-06 redesign):
+
+* Work is partitioned across MPI ranks BY BRICK (weighted by total pixel
+  area), so each shard has exactly one writing rank. Pool workers fetch
+  arrays in memory; the rank main process buffers per brick and writes each
+  shard atomically once all its objects have arrived.
+
+* The container image (all tags <= 2025-05) predates imagine fix 1a034cd
+  ("when rendering maskbits, only pass first band", 2025-07-16). Without it,
+  any ls-dr9 cutout straddling dec=32.375 in the NGC crashes with IndexError
+  in LegacySurveySplitLayer.render_rgb. _apply_split_layer_patch() reproduces
+  the upstream fix inside each worker; it is a no-op on a fixed container.
+
+* Deterministic per-object exceptions are NOT retried against the container;
+  they go straight to a one-shot fallback against the production viewer
+  (https://www.legacysurvey.org/viewer/ -- NOT viewer-dev, which serves 2x
+  invvar in brick overlaps since imagine d2ba303). Objects that fail both
+  paths are appended to {outdir}/permanently_failed.csv, which plan() reads
+  and excludes on subsequent runs (--retry-failed to override).
 
 Usage examples:
   # Dry run (no MPI)
   shifter --image dstndstn/cutouts:dvsro3 python3 many_cutouts_general.py \
-      --catalog-path /path/to/catalog.fits --outdir-data /path/to/output \
-      --ra-col RA --dec-col DEC --id-col TARGETID --cutout-size 152 \
-      --nompi --dry-run
+      --catalog-path /path/to/catalog.fits --outdir-data /path/to/store \
+      --cutout-size 152 --nompi --dry-run
 
-  # Production (launched via cutouts_cnn_general.sh / get_imgs_general.sbatch)
-  # See those wrapper scripts for SLURM submission.
+  # Production: see get_imgs_{clean,shreds,sga}.sbatch / cutouts_cnn_general.sh
 
 ---------------
 Modified again by: Viraj Manwadkar (virajvm) by code from John Moustakas
@@ -24,61 +43,49 @@ Original author: Dustin Lang (dstndstn)
 """
 
 import os
+import io
+import csv
 import sys
 import time
 import signal
-import threading
+import tempfile
 import multiprocessing
+from collections import defaultdict
+
 import numpy as np
-import fitsio
+
+# repo layout: job_scripts/image_cutouts/general/ -> repo root -> code/
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_CODE_DIR = os.path.abspath(os.path.join(_SCRIPT_DIR, '..', '..', '..', 'code'))
+if _CODE_DIR not in sys.path:
+    sys.path.insert(0, _CODE_DIR)
+
+import cutout_store
+
+FAILED_MANIFEST = 'permanently_failed.csv'
+URL_BASE_DEFAULT = 'https://www.legacysurvey.org/viewer'
 
 
-def weighted_partition(weights, n, groups_per_node=None):
-    '''
-    Partition `weights` into `n` groups with approximately same sum(weights)
+def weighted_partition(weights, n):
+    '''Partition `weights` into `n` groups with approximately equal sums.
 
-    Args:
-        weights: array-like weights
-        n: number of groups
-
-    Returns list of lists of indices of weights for each group
-
-    Notes:
-        compared to `dist_discrete_all`, this function allows non-contiguous
-        items to be grouped together which allows better balancing.
+    Returns list of lists of indices of weights for each group. Allows
+    non-contiguous items to be grouped together for better balancing.
     '''
     sumweights = np.zeros(n, dtype=float)
-
-    groups = list()
-    for i in range(n):
-        groups.append(list())
-
+    groups = [list() for _ in range(n)]
     weights = np.asarray(weights)
     for i in np.argsort(-weights):
         j = np.argmin(sumweights)
         groups[j].append(i)
         sumweights[j] += weights[i]
-
     assert len(groups) == n
+    return groups
 
-    if groups_per_node is None:
-        return groups
-    else:
-        distributed_groups = [None,] * len(groups)
-        num_nodes = (n + groups_per_node - 1) // groups_per_node
-        i = 0
-        for noderank in range(groups_per_node):
-            for inode in range(num_nodes):
-                j = inode*groups_per_node + noderank
-                if i < n and j < n:
-                    distributed_groups[j] = groups[i]
-                    i += 1
 
-        for i in range(len(distributed_groups)):
-            assert distributed_groups[i] is not None, 'group {} not set'.format(i)
-
-        return distributed_groups
-
+# ----------------------------------------------------------------------
+# Worker-side fetching
+# ----------------------------------------------------------------------
 
 class _CutoutTimeout(Exception):
     pass
@@ -88,228 +95,452 @@ def _timeout_handler(signum, frame):
     raise _CutoutTimeout("Cutout call timed out")
 
 
-def cutout_one(jpegfile, ra, dec, dry_run, rank, iobj, cut_size,
-               layer, pixscale, bands, invvar, maskbits):
+_PATCH_DONE = False
+
+
+def _apply_split_layer_patch():
+    """Reproduce imagine fix 1a034cd inside the (older) container code.
+
+    When rendering the (band-independent) maskbits plane, the sub-layer
+    renderers return a 1-element list, but the SplitLayer merge loop for
+    dec-split-straddling cutouts indexes it with the full band list ->
+    IndexError. Truncating the requested bands to the first band when
+    maskbits=True restores the intended behavior for all objects.
+    """
+    global _PATCH_DONE
+    if _PATCH_DONE:
+        return
+    _PATCH_DONE = True
+    try:
+        from map import views as _views
+        cls = getattr(_views, 'LegacySurveySplitLayer', None)
+        if cls is None or getattr(cls.render_rgb, '_maskbits_patched', False):
+            return
+        _orig = cls.render_rgb
+
+        def render_rgb_fixed(self, wcs, zoom, x, y, bands=None, **kwargs):
+            if kwargs.get('maskbits') and bands is not None and len(bands) > 1:
+                bands = bands[:1]
+            return _orig(self, wcs, zoom, x, y, bands=bands, **kwargs)
+
+        render_rgb_fixed._maskbits_patched = True
+        cls.render_rgb = render_rgb_fixed
+    except Exception as exc:
+        print('WARNING: maskbits monkeypatch not applied: {}'.format(exc), flush=True)
+
+
+def _parse_cutout_fits(hdul, want_invvar, want_maskbits):
+    """Extract image/invvar/mask arrays + primary header string from an
+    open HDUList, keying on IMAGETYP with positional fallback."""
+    image = invvar = mask = None
+    for i, hdu in enumerate(hdul):
+        itype = str(hdu.header.get('IMAGETYP', '')).strip().upper()
+        if i == 0 or itype == 'IMAGE':
+            image = np.asarray(hdu.data, dtype=np.float32)
+        elif itype == 'INVVAR':
+            invvar = np.asarray(hdu.data, dtype=np.float32)
+        elif itype == 'MASKBITS':
+            mask = np.asarray(hdu.data)
+        elif itype == '':
+            # no IMAGETYP card: fall back on HDU order (IMAGE, [INVVAR], [MASKBITS])
+            if want_invvar and invvar is None:
+                invvar = np.asarray(hdu.data, dtype=np.float32)
+            elif want_maskbits and mask is None:
+                mask = np.asarray(hdu.data)
+    if image is None:
+        raise RuntimeError('cutout FITS contained no image HDU')
+    if want_invvar and invvar is None:
+        raise RuntimeError('cutout FITS missing INVVAR HDU')
+    if want_maskbits and mask is None:
+        raise RuntimeError('cutout FITS missing MASKBITS HDU')
+    header_str = hdul[0].header.tostring()
+    return image, invvar, mask, header_str
+
+
+def _fetch_container(task):
+    """Fetch one cutout via the container (CFS reads); returns a store record."""
     from cutout import cutout
+    from astropy.io import fits
 
-    width = cut_size
-    height = cut_size
+    _apply_split_layer_patch()
 
-    if dry_run:
-        print(f'Rank {rank}, object {iobj}: ra={ra} dec={dec} '
-              f'output={jpegfile} size={cut_size} layer={layer} '
-              f'pixscale={pixscale} bands={bands}')
-    else:
-        cutout(ra, dec, jpegfile, width=width, height=height,
-               layer=layer, pixscale=pixscale, force=False,
-               bands=bands, invvar=invvar, maskbits=maskbits)
-
-
-def _cutout_one_safe(args):
-    """Worker wrapper with per-task timeout and error handling."""
-    (jpegfile, ra, dec, dry_run, rank, iobj, cut_size,
-     layer, pixscale, bands, invvar, maskbits,
-     timeout, max_retries) = args
-
-    for attempt in range(max_retries + 1):
+    tmpfn = os.path.join(
+        tempfile.gettempdir(),
+        'cutout_{}_{}.fits'.format(task['targetid'], os.getpid()))
+    try:
+        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+        signal.alarm(task['timeout'])
         try:
-            old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
-            signal.alarm(timeout)
-            cutout_one(jpegfile, ra, dec, dry_run, rank, iobj, cut_size,
-                       layer, pixscale, bands, invvar, maskbits)
+            cutout(task['ra'], task['dec'], tmpfn,
+                   width=task['size'], height=task['size'],
+                   layer=task['layer'], pixscale=task['pixscale'],
+                   force=True, bands=list(task['bands']),
+                   invvar=task['invvar'], maskbits=task['maskbits'])
+        finally:
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old_handler)
-            return None
+
+        if not os.path.exists(tmpfn):
+            raise RuntimeError('container cutout produced no output file')
+        with fits.open(tmpfn, memmap=False) as hdul:
+            image, invvar, mask, header_str = _parse_cutout_fits(
+                hdul, task['invvar'], task['maskbits'])
+    finally:
+        if os.path.exists(tmpfn):
+            os.remove(tmpfn)
+
+    return _make_record(task, image, invvar, mask, header_str, 'container')
+
+
+def _fetch_url(task):
+    """One-shot fallback fetch from the production Legacy Surveys viewer."""
+    import urllib.request
+    from astropy.io import fits
+
+    url = ('{base}/cutout.fits?ra={ra}&dec={dec}&width={s}&height={s}'
+           '&layer={layer}&pixscale={pixscale}&bands={bands}').format(
+        base=task['url_base'], ra=task['ra'], dec=task['dec'],
+        s=task['size'], layer=task['layer'], pixscale=task['pixscale'],
+        bands=''.join(task['bands']))
+    if task['invvar']:
+        url += '&invvar'
+    if task['maskbits']:
+        url += '&maskbits'
+
+    with urllib.request.urlopen(url, timeout=task['url_timeout']) as resp:
+        payload = resp.read()
+    with fits.open(io.BytesIO(payload), memmap=False) as hdul:
+        image, invvar, mask, header_str = _parse_cutout_fits(
+            hdul, task['invvar'], task['maskbits'])
+
+    return _make_record(task, image, invvar, mask, header_str, 'url')
+
+
+def _make_record(task, image, invvar, mask, header_str, fetch_method):
+    expected = (len(task['bands']), task['size'], task['size'])
+    if image.shape != expected:
+        raise RuntimeError('image shape {} != expected {}'.format(image.shape, expected))
+    return {
+        'targetid': task['targetid'],
+        'ra': task['ra'],
+        'dec': task['dec'],
+        'box_size': task['size'],
+        'image': image,
+        'invvar': invvar,
+        'mask': mask,
+        'header': header_str,
+        'fetch_method': fetch_method,
+    }
+
+
+def _fetch_one_safe(task):
+    """Worker entry point. Returns ('ok', brick, record) or ('fail', failrec).
+
+    Container timeouts are retried up to max_retries; any other container
+    exception is deterministic and skips straight to the URL fallback.
+    """
+    brick = task['brick']
+
+    if task['dry_run']:
+        print('Rank {}, object {}: ra={} dec={} brick={} size={} layer={}'.format(
+            task['rank'], task['targetid'], task['ra'], task['dec'],
+            brick, task['size'], task['layer']), flush=True)
+        return ('ok', brick, None)
+
+    errors = []
+    for attempt in range(task['max_retries'] + 1):
+        try:
+            return ('ok', brick, _fetch_container(task))
         except _CutoutTimeout:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, old_handler)
-            print(f'Rank {rank}: TIMEOUT on object {iobj} (attempt {attempt+1}/{max_retries+1}): {jpegfile}',
-                  flush=True)
-        except Exception as e:
-            signal.alarm(0)
-            try:
-                signal.signal(signal.SIGALRM, old_handler)
-            except Exception:
-                pass
-            print(f'Rank {rank}: ERROR on object {iobj} (attempt {attempt+1}/{max_retries+1}): {e}',
-                  flush=True)
+            errors.append('container timeout (attempt {})'.format(attempt + 1))
+            print('Rank {}: TIMEOUT on {} (attempt {}/{})'.format(
+                task['rank'], task['targetid'], attempt + 1,
+                task['max_retries'] + 1), flush=True)
+        except Exception as exc:
+            errors.append('container: {!r}'.format(exc))
+            print('Rank {}: ERROR on {}: {!r}'.format(
+                task['rank'], task['targetid'], exc), flush=True)
+            break  # deterministic -- retrying the container is pointless
 
-    return (iobj, ra, dec, jpegfile)
+    if task['url_fallback']:
+        try:
+            return ('ok', brick, _fetch_url(task))
+        except Exception as exc:
+            errors.append('url: {!r}'.format(exc))
+            print('Rank {}: URL fallback failed on {}: {!r}'.format(
+                task['rank'], task['targetid'], exc), flush=True)
+
+    failrec = {
+        'targetid': task['targetid'],
+        'ra': task['ra'],
+        'dec': task['dec'],
+        'brickname': brick,
+        'reason': ' | '.join(errors),
+    }
+    return ('fail', brick, failrec)
 
 
-def plan(comm=None, outdir_data='.', catalog_path=None,
-         ra_col='RA', dec_col='DEC', id_col='TARGETID',
-         cutout_size=152, size_col=None):
+# ----------------------------------------------------------------------
+# Planning
+# ----------------------------------------------------------------------
 
+def _load_tombstones(outdir):
+    path = os.path.join(outdir, FAILED_MANIFEST)
+    tombs = set()
+    if os.path.exists(path):
+        with open(path, newline='') as f:
+            for row in csv.DictReader(f):
+                try:
+                    tombs.add(int(row['targetid']))
+                except (KeyError, ValueError):
+                    continue
+    return tombs
+
+
+def plan(args, outdir_data, size):
+    """Rank-0 planning: decide what needs fetching and partition by brick.
+
+    Returns (brick_names, brick_rows, ra, dec, tgid, sizes, groups) where
+    brick_rows[i] indexes into the needed-object arrays for brick_names[i]
+    and groups[r] lists brick indices assigned to MPI rank r.
+    """
     from astropy.table import Table
 
+    cat = Table.read(args.catalog_path)
+    n = len(cat)
+    print('Total objects in catalog: {}'.format(n), flush=True)
+
+    for col, name in ((args.ra_col, '--ra-col'), (args.dec_col, '--dec-col'),
+                      (args.id_col, '--id-col'), (args.brick_col, '--brick-col')):
+        if col not in cat.colnames:
+            sys.exit("ERROR: column '{}' ({}) not found in {}. Available: {}".format(
+                col, name, args.catalog_path, ', '.join(cat.colnames[:40])))
+
+    allra = np.asarray(cat[args.ra_col], dtype=np.float64)
+    alldec = np.asarray(cat[args.dec_col], dtype=np.float64)
+    alltgid = np.asarray(cat[args.id_col], dtype=np.int64)
+    allbrick = np.asarray(cat[args.brick_col]).astype(str)
+
+    if args.size_col is not None:
+        if args.size_col not in cat.colnames:
+            sys.exit("ERROR: --size-col '{}' not found in catalog".format(args.size_col))
+        allsizes = np.asarray(cat[args.size_col], dtype=np.int64)
+    else:
+        allsizes = np.full(n, args.cutout_size, dtype=np.int64)
+
+    tombs = set()
+    if not args.retry_failed:
+        tombs = _load_tombstones(outdir_data)
+        if tombs:
+            print('Excluding {} tombstoned objects from {} '
+                  '(--retry-failed to re-attempt)'.format(len(tombs), FAILED_MANIFEST),
+                  flush=True)
+
+    print('Scanning existing shards in {} ...'.format(outdir_data), flush=True)
     t0 = time.time()
-    if comm is None:
-        rank, size = 0, 1
-    else:
-        rank, size = comm.rank, comm.size
+    existing = cutout_store.list_existing(outdir_data)
+    n_existing = sum(len(v) for v in existing.values())
+    print('  {} objects already in {} shards ({:.1f}s)'.format(
+        n_existing, len(existing), time.time() - t0), flush=True)
 
-    out = Table.read(catalog_path)
-    print(f"Total objects in catalog: {len(out)}")
-
-    allra = np.array(out[ra_col], dtype=object)
-    alldec = np.array(out[dec_col], dtype=object)
-    allobjids = np.array(out[id_col], dtype=object)
-
-    if size_col is not None and size_col in out.colnames:
-        allsizes = np.array(out[size_col], dtype=object)
-    else:
-        allsizes = np.full(len(out), cutout_size, dtype=int)
-
-    file_names = []
-    need_inds = []
-    n = len(out)
-
-    print("Checking which cutouts already exist...")
+    seen = set()
+    need = []
     for k in range(n):
-        file_i = os.path.join(
-            outdir_data,
-            f"image_tgid_{allobjids[k]:d}_ra_{allra[k]:.3f}_dec_{alldec[k]:.3f}.fits"
-        )
-        if not os.path.exists(file_i):
-            file_names.append(file_i)
-            need_inds.append(k)
+        tgid = int(alltgid[k])
+        if tgid in seen:
+            continue
+        seen.add(tgid)
+        if tgid in tombs:
+            continue
+        if tgid in existing.get(allbrick[k], ()):
+            continue
+        need.append(k)
+    need = np.asarray(need, dtype=np.int64)
+    print('Need to fetch {}/{} cutouts'.format(len(need), n), flush=True)
 
-        if (k + 1) % 10000 == 0 or (k + 1) == n:
-            print(f"  Checked {k+1}/{n} ({(k+1)/n:.1%})")
+    ra, dec = allra[need], alldec[need]
+    tgid, sizes, brick = alltgid[need], allsizes[need], allbrick[need]
 
-    need_inds = np.array(need_inds)
-    print(f"Need to generate {len(need_inds)}/{n} cutouts")
+    brick_names, brick_inverse = np.unique(brick, return_inverse=True)
+    brick_rows = [np.flatnonzero(brick_inverse == i) for i in range(len(brick_names))]
+    # weight by total pixel area so ranks get comparable work
+    brick_weights = np.array([np.sum(sizes[rows].astype(float) ** 2) for rows in brick_rows])
 
-    if len(need_inds) == 0:
-        return (np.array([], dtype=object), np.array([]), np.array([]),
-                weighted_partition(np.array([]), size),
-                np.array([]), np.array([], dtype=int))
-
-    allra = allra[need_inds]
-    alldec = alldec[need_inds]
-    allobjids = allobjids[need_inds]
-    allsizes = allsizes[need_inds]
-
-    jpegfiles = np.array(file_names, dtype=object)
-    groups = weighted_partition(np.ones_like(alldec), size)
-
-    return jpegfiles, allra, alldec, groups, allobjids, allsizes
+    return brick_names, brick_rows, ra, dec, tgid, sizes, brick_weights
 
 
-def _join_pool_with_timeout(pool, timeout=300):
-    """Call pool.join() in a thread; terminate the pool if it takes too long."""
-    join_thread = threading.Thread(target=pool.join)
-    join_thread.start()
-    join_thread.join(timeout=timeout)
-    if join_thread.is_alive():
-        print("WARNING: Pool.join() timed out, forcing terminate()", flush=True)
-        pool.terminate()
-        join_thread.join(timeout=30)
-
+# ----------------------------------------------------------------------
+# Main driver
+# ----------------------------------------------------------------------
 
 def do_cutouts(args, comm=None, outdir_data='.'):
-
     if comm is None:
         rank, size = 0, 1
     else:
         rank, size = comm.rank, comm.size
 
-    bands = [b.strip() for b in args.bands.split(',')]
+    bands = tuple(b.strip() for b in args.bands.split(','))
 
     t0 = time.time()
     if rank == 0:
-        jpegfiles, allra, alldec, groups, allobjids, allsizes = plan(
-            comm=comm, outdir_data=outdir_data,
-            catalog_path=args.catalog_path,
-            ra_col=args.ra_col, dec_col=args.dec_col, id_col=args.id_col,
-            cutout_size=args.cutout_size, size_col=args.size_col,
-        )
-        print(f'Planning took {(time.time() - t0):.2f} sec')
+        os.makedirs(outdir_data, exist_ok=True)
+        (brick_names, brick_rows, ra, dec, tgid,
+         sizes, brick_weights) = plan(args, outdir_data, size)
+        groups = weighted_partition(brick_weights, size)
+        print('Planning took {:.2f} sec'.format(time.time() - t0), flush=True)
     else:
-        jpegfiles, allra, alldec, groups, allobjids, allsizes = [], [], [], [], [], []
+        brick_names = brick_rows = ra = dec = tgid = sizes = groups = None
 
     if comm:
-        jpegfiles = comm.bcast(jpegfiles, root=0)
-        allra = comm.bcast(allra, root=0)
-        alldec = comm.bcast(alldec, root=0)
+        brick_names = comm.bcast(brick_names, root=0)
+        brick_rows = comm.bcast(brick_rows, root=0)
+        ra = comm.bcast(ra, root=0)
+        dec = comm.bcast(dec, root=0)
+        tgid = comm.bcast(tgid, root=0)
+        sizes = comm.bcast(sizes, root=0)
         groups = comm.bcast(groups, root=0)
-        allobjids = comm.bcast(allobjids, root=0)
-        allsizes = comm.bcast(allsizes, root=0)
 
-    sys.stdout.flush()
-
-    if len(jpegfiles) == 0:
-        print(f'Rank {rank}: nothing to do')
+    if len(brick_names) == 0:
+        if rank == 0:
+            print('Nothing to do.', flush=True)
         if comm is not None:
             comm.barrier()
         return
 
-    assert len(groups) == size
+    my_bricks = groups[rank]
+    tasks = []
+    expected = {}
+    for bi in my_bricks:
+        bname = brick_names[bi]
+        rows = brick_rows[bi]
+        expected[bname] = len(rows)
+        for r in rows:
+            tasks.append({
+                'targetid': int(tgid[r]), 'ra': float(ra[r]), 'dec': float(dec[r]),
+                'brick': bname, 'size': int(sizes[r]),
+                'layer': args.layer, 'pixscale': args.pixscale, 'bands': bands,
+                'invvar': args.invvar, 'maskbits': args.maskbits,
+                'timeout': args.timeout, 'max_retries': args.max_retries,
+                'url_fallback': args.url_fallback, 'url_base': args.url_base,
+                'url_timeout': args.url_timeout,
+                'dry_run': args.dry_run, 'rank': rank,
+            })
 
-    my_indices = groups[rank]
-    total_for_rank = len(my_indices)
-    print(f'Rank {rank}: assigned {total_for_rank} cutouts', flush=True)
+    total = len(tasks)
+    print('Rank {}: assigned {} objects in {} bricks'.format(
+        rank, total, len(my_bricks)), flush=True)
 
-    all_mpargs = [
-        (jpegfiles[ii], allra[ii], alldec[ii], args.dry_run, rank,
-         allobjids[ii], allsizes[ii],
-         args.layer, args.pixscale, bands, args.invvar, args.maskbits,
-         args.timeout, args.max_retries)
-        for ii in my_indices
-    ]
-
+    buffers = defaultdict(list)
+    settled = defaultdict(int)   # successes + failures per brick
     failed = []
+    n_done = 0
+    n_written = 0
 
-    if args.mp > 1:
+    def handle_result(result):
+        nonlocal n_done, n_written
+        status, bname, payload = result
+        n_done += 1
+        settled[bname] += 1
+        if status == 'ok':
+            if payload is not None:           # None on dry runs
+                buffers[bname].append(payload)
+        else:
+            failed.append(payload)
+        if settled[bname] == expected[bname]:
+            recs = buffers.pop(bname, [])
+            if recs:
+                cutout_store.write_cutouts_batch(outdir_data, bname, recs)
+                n_written += 1
+        if n_done % 100 == 0 or n_done == total:
+            print('Rank {}: {}/{} done, {} failed, {} shards written, {:.0f}s'.format(
+                rank, n_done, total, len(failed), n_written, time.time() - t0),
+                flush=True)
+
+    if total > 0 and args.mp > 1 and not args.dry_run:
         pool = multiprocessing.Pool(args.mp, maxtasksperchild=50)
         try:
-            for i, result in enumerate(
-                pool.imap_unordered(_cutout_one_safe, all_mpargs, chunksize=4)
-            ):
-                if result is not None:
-                    failed.append(result)
-                done = i + 1
-                if done % 100 == 0 or done == total_for_rank:
-                    elapsed = time.time() - t0
-                    print(f'Rank {rank}: {done}/{total_for_rank} done, '
-                          f'{len(failed)} failed, {elapsed:.0f}s elapsed',
-                          flush=True)
-        except Exception as e:
-            print(f'Rank {rank}: Pool iteration error: {e}', flush=True)
+            for result in pool.imap_unordered(_fetch_one_safe, tasks, chunksize=1):
+                handle_result(result)
         finally:
             pool.close()
-            _join_pool_with_timeout(pool, timeout=300)
+            pool.join()
     else:
-        for i, task_args in enumerate(all_mpargs):
-            result = _cutout_one_safe(task_args)
-            if result is not None:
-                failed.append(result)
-            done = i + 1
-            if done % 100 == 0 or done == total_for_rank:
-                elapsed = time.time() - t0
-                print(f'Rank {rank}: {done}/{total_for_rank} done, '
-                      f'{len(failed)} failed, {elapsed:.0f}s elapsed',
-                      flush=True)
+        for task in tasks:
+            handle_result(_fetch_one_safe(task))
+
+    # flush anything left (only possible after a pool error)
+    for bname in list(buffers.keys()):
+        recs = buffers.pop(bname)
+        if recs:
+            print('Rank {}: WARNING flushing incomplete brick {}'.format(rank, bname),
+                  flush=True)
+            cutout_store.write_cutouts_batch(outdir_data, bname, recs)
 
     if failed:
-        manifest_path = os.path.join(outdir_data, f'failed_cutouts_rank{rank}.csv')
-        with open(manifest_path, 'w') as f:
-            f.write("targetid,ra,dec,filepath\n")
-            for (objid, ra, dec, fpath) in failed:
-                f.write(f"{objid},{ra},{dec},{fpath}\n")
-        print(f'Rank {rank}: {len(failed)} failures written to {manifest_path}',
+        rank_manifest = os.path.join(outdir_data, 'failed_rank{}.csv'.format(rank))
+        with open(rank_manifest, 'w', newline='') as f:
+            w = csv.DictWriter(f, fieldnames=['targetid', 'ra', 'dec', 'brickname', 'reason'])
+            w.writeheader()
+            w.writerows(failed)
+        print('Rank {}: {} failures -> {}'.format(rank, len(failed), rank_manifest),
               flush=True)
 
-    print(f'Rank {rank}: finished at {time.asctime()} '
-          f'({total_for_rank - len(failed)}/{total_for_rank} succeeded)',
-          flush=True)
+    print('Rank {}: finished at {} ({}/{} succeeded)'.format(
+        rank, time.asctime(), total - len(failed), total), flush=True)
 
     if comm is not None:
         comm.barrier()
 
     if rank == 0 and not args.dry_run:
-        print(f'All ranks done at {time.asctime()}')
+        _merge_failures(outdir_data)
+        print('All ranks done at {}'.format(time.asctime()), flush=True)
+
+
+def _merge_failures(outdir_data):
+    """Merge per-rank failure files into the cumulative manifest (dedup by
+    TARGETID, dropping rows for objects that made it into the store)."""
+    from glob import glob
+
+    rank_files = sorted(glob(os.path.join(outdir_data, 'failed_rank*.csv')))
+    manifest = os.path.join(outdir_data, FAILED_MANIFEST)
+
+    rows = {}
+    if os.path.exists(manifest):
+        with open(manifest, newline='') as f:
+            for row in csv.DictReader(f):
+                rows[int(row['targetid'])] = row
+
+    n_new = 0
+    stamp = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+    for rf in rank_files:
+        with open(rf, newline='') as f:
+            for row in csv.DictReader(f):
+                tg = int(row['targetid'])
+                if tg not in rows:
+                    row['timestamp'] = stamp
+                    rows[tg] = row
+                    n_new += 1
+
+    if rows:
+        # drop tombstones for anything that now exists in the store
+        existing = cutout_store.list_existing(outdir_data, quarantine_corrupt=False)
+        all_present = set()
+        for s in existing.values():
+            all_present |= s
+        rows = {tg: r for tg, r in rows.items() if tg not in all_present}
+
+        with open(manifest, 'w', newline='') as f:
+            w = csv.DictWriter(f, fieldnames=['targetid', 'ra', 'dec', 'brickname',
+                                              'reason', 'timestamp'])
+            w.writeheader()
+            for tg in sorted(rows):
+                w.writerow({k: rows[tg].get(k, '') for k in w.fieldnames})
+
+    for rf in rank_files:
+        os.remove(rf)
+
+    print('Failure manifest: {} total tombstones ({} new this run)'.format(
+        len(rows), n_new), flush=True)
 
 
 def main():
@@ -317,49 +548,60 @@ def main():
 
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-        description='Generate Legacy Survey image cutouts in bulk using MPI + multiprocessing.',
+        description='Bulk Legacy Survey cutouts -> per-brick HDF5 shards '
+                    '(MPI + multiprocessing).',
     )
 
     parser.add_argument('--catalog-path', type=str, required=True,
                         help='Path to the input FITS catalog.')
     parser.add_argument('--outdir-data', type=str, required=True,
-                        help='Output directory for cutout FITS files.')
+                        help='Cutout store directory (per-brick HDF5 shards).')
 
-    parser.add_argument('--ra-col', type=str, default='RA',
-                        help='Catalog column name for RA.')
-    parser.add_argument('--dec-col', type=str, default='DEC',
-                        help='Catalog column name for DEC.')
-    parser.add_argument('--id-col', type=str, default='TARGETID',
-                        help='Catalog column name for target IDs.')
+    parser.add_argument('--ra-col', type=str, default='RA')
+    parser.add_argument('--dec-col', type=str, default='DEC')
+    parser.add_argument('--id-col', type=str, default='TARGETID')
+    parser.add_argument('--brick-col', type=str, default='BRICKNAME',
+                        help='Catalog column with the Legacy Surveys brick name '
+                             '(shard key).')
     parser.add_argument('--cutout-size', type=int, default=152,
                         help='Cutout size in pixels (used if --size-col is not set).')
     parser.add_argument('--size-col', type=str, default=None,
-                        help='Catalog column for per-object cutout sizes (overrides --cutout-size).')
+                        help='Catalog column for per-object cutout sizes.')
 
-    parser.add_argument('--pixscale', type=float, default=0.262,
-                        help='Pixel scale in arcsec/pixel.')
-    parser.add_argument('--layer', type=str, default='ls-dr9',
-                        help='Legacy Survey layer name.')
-    parser.add_argument('--bands', type=str, default='g,r,z',
-                        help='Comma-separated band names.')
-    parser.add_argument('--invvar', action=argparse.BooleanOptionalAction, default=True,
-                        help='Include inverse-variance maps.')
-    parser.add_argument('--maskbits', action=argparse.BooleanOptionalAction, default=True,
-                        help='Include maskbits maps.')
+    parser.add_argument('--pixscale', type=float, default=0.262)
+    parser.add_argument('--layer', type=str, default='ls-dr9')
+    parser.add_argument('--bands', type=str, default='g,r,z')
+    # NOTE: paired flags instead of argparse.BooleanOptionalAction --
+    # the container python is 3.8, BooleanOptionalAction needs 3.9+
+    parser.add_argument('--invvar', dest='invvar', action='store_true', default=True,
+                        help='Include inverse-variance maps (default).')
+    parser.add_argument('--no-invvar', dest='invvar', action='store_false')
+    parser.add_argument('--maskbits', dest='maskbits', action='store_true', default=True,
+                        help='Include maskbits maps (default).')
+    parser.add_argument('--no-maskbits', dest='maskbits', action='store_false')
 
     parser.add_argument('--timeout', type=int, default=120,
-                        help='Per-cutout timeout in seconds (safety net for hung I/O).')
+                        help='Per-cutout container timeout in seconds.')
     parser.add_argument('--max-retries', type=int, default=2,
-                        help='Number of retries per failed cutout.')
+                        help='Container retries per object (timeouts only; '
+                             'deterministic errors go straight to the URL fallback).')
+    parser.add_argument('--url-fallback', dest='url_fallback', action='store_true',
+                        default=True,
+                        help='Fall back to the production viewer for objects the '
+                             'container cannot fetch (default).')
+    parser.add_argument('--no-url-fallback', dest='url_fallback', action='store_false')
+    parser.add_argument('--url-base', type=str, default=URL_BASE_DEFAULT,
+                        help='Viewer base URL for the fallback (use production, not '
+                             'viewer-dev: dev serves 2x invvar in brick overlaps).')
+    parser.add_argument('--url-timeout', type=int, default=120)
+    parser.add_argument('--retry-failed', action='store_true',
+                        help='Re-attempt objects listed in {} (e.g. after a container '
+                             'fix).'.format(FAILED_MANIFEST))
 
     parser.add_argument('--mp', type=int, default=1,
-                        help='Number of multiprocessing workers per MPI rank.')
-    parser.add_argument('--plan', action='store_true',
-                        help='Plan how many nodes to use and exit.')
-    parser.add_argument('--nompi', action='store_true',
-                        help='Do not use MPI parallelism.')
-    parser.add_argument('--dry-run', action='store_true',
-                        help='Print cutout commands without executing.')
+                        help='Multiprocessing workers per MPI rank.')
+    parser.add_argument('--nompi', action='store_true')
+    parser.add_argument('--dry-run', action='store_true')
 
     args = parser.parse_args()
 

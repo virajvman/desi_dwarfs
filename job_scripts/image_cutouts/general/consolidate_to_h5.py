@@ -3,19 +3,21 @@
 """
 consolidate_to_h5.py
 
-Read individual FITS cutouts produced by many_cutouts_general.py and pack them
-into a single HDF5 file suitable for ML training.
+Read cutouts from the per-brick HDF5 shard store (written by
+many_cutouts_general.py, layout in code/cutout_store.py) and pack them into
+a single fixed-size HDF5 file suitable for ML training.
 
 Usage:
   python3 consolidate_to_h5.py \
       --catalog-path /path/to/catalog.fits \
-      --image-dir /path/to/cutouts/ \
+      --cutouts-dir /path/to/shard/store/ \
       --output-h5 /path/to/output.h5 \
       --cutout-size 152 --extra-cols "Z,MAG_G,MAG_R,MAG_Z" \
       --include-invvar --include-maskbits
 
-This script does NOT require the Shifter container or MPI.  It only needs
-numpy, h5py, fitsio (or astropy), and runs on a single node.
+This script does NOT require the Shifter container or MPI. It only needs
+numpy, h5py, astropy, and runs on a single node. Set
+HDF5_USE_FILE_LOCKING=FALSE when reading shards on Lustre.
 """
 
 import os
@@ -23,7 +25,17 @@ import sys
 import time
 import argparse
 import multiprocessing
+from collections import defaultdict
+
 import numpy as np
+
+# repo layout: job_scripts/image_cutouts/general/ -> repo root -> code/
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_CODE_DIR = os.path.abspath(os.path.join(_SCRIPT_DIR, '..', '..', '..', 'code'))
+if _CODE_DIR not in sys.path:
+    sys.path.insert(0, _CODE_DIR)
+
+import cutout_store
 
 
 def get_binary_mask(maskbits_array, set_bits=(0, 1, 2, 3, 4, 5, 6, 7, 11)):
@@ -42,76 +54,46 @@ def get_binary_mask(maskbits_array, set_bits=(0, 1, 2, 3, 4, 5, 6, 7, 11)):
     return ((maskbits_array & mask_val) == 0).astype(np.uint8)
 
 
-def _expected_filename(image_dir, objid, ra, dec):
-    """Build the FITS filename that many_cutouts_general.py would have written."""
-    return os.path.join(
-        image_dir,
-        f"image_tgid_{objid:d}_ra_{ra:.3f}_dec_{dec:.3f}.fits",
-    )
-
-
-def _read_one_fits(args):
-    """Read a FITS cutout, optionally including invvar and maskbits extensions.
+def _read_shard_group(args):
+    """Read a batch of objects from one shard.
 
     Parameters
     ----------
     args : tuple
-        (path, include_invvar, include_maskbits)
+        (shard_path, [(slot, targetid), ...], include_invvar, include_maskbits)
+        where slot is the destination row offset within the current block.
 
     Returns
     -------
-    dict with keys 'image' (always), 'invvar' (optional), 'maskbits' (optional).
-    Values are numpy arrays or None on failure.
+    list of (slot, dict) with keys 'image', 'invvar', 'maskbits'
+    (values are numpy arrays or None on failure).
     """
-    path, include_invvar, include_maskbits = args
-    result = {"image": None, "invvar": None, "maskbits": None}
+    shard, items, include_invvar, include_maskbits = args
+    import h5py
 
+    out = []
     try:
-        import fitsio
-        result["image"] = fitsio.read(path, ext=0).astype(np.float32)
-        if include_invvar:
-            try:
-                result["invvar"] = fitsio.read(path, ext="INVVAR").astype(np.float32)
-            except Exception:
-                try:
-                    result["invvar"] = fitsio.read(path, ext=1).astype(np.float32)
-                except Exception:
-                    pass
-        if include_maskbits:
-            try:
-                result["maskbits"] = fitsio.read(path, ext="MASKBITS").astype(np.int16)
-            except Exception:
-                try:
-                    idx = 2 if include_invvar else 1
-                    result["maskbits"] = fitsio.read(path, ext=idx).astype(np.int16)
-                except Exception:
-                    pass
-        return result
-    except Exception:
-        pass
-
-    try:
-        from astropy.io import fits
-        with fits.open(path, memmap=False) as hdul:
-            result["image"] = hdul[0].data.astype(np.float32)
-            if include_invvar:
-                for ext_name in ("INVVAR", 1):
+        with h5py.File(shard, "r") as f:
+            for slot, tgid in items:
+                res = {"image": None, "invvar": None, "maskbits": None}
+                key = str(tgid)
+                if key in f:
+                    g = f[key]
                     try:
-                        result["invvar"] = hdul[ext_name].data.astype(np.float32)
-                        break
-                    except Exception:
-                        continue
-            if include_maskbits:
-                for ext_name in ("MASKBITS", 2 if include_invvar else 1):
-                    try:
-                        result["maskbits"] = hdul[ext_name].data.astype(np.int16)
-                        break
-                    except Exception:
-                        continue
-        return result
-    except Exception as exc:
-        print(f"WARNING: could not read {path}: {exc}", flush=True)
-        return result
+                        res["image"] = g["image"][:].astype(np.float32)
+                        if include_invvar and "invvar" in g:
+                            res["invvar"] = g["invvar"][:].astype(np.float32)
+                        if include_maskbits and "mask" in g:
+                            res["maskbits"] = g["mask"][:].astype(np.int32)
+                    except Exception as exc:
+                        print(f"WARNING: failed reading {tgid} from {shard}: {exc}",
+                              flush=True)
+                out.append((slot, res))
+    except OSError as exc:
+        print(f"WARNING: could not open shard {shard}: {exc}", flush=True)
+        out = [(slot, {"image": None, "invvar": None, "maskbits": None})
+               for slot, tgid in items]
+    return out
 
 
 def _numpy_dtype_for_h5(col_data):
@@ -132,19 +114,21 @@ def _numpy_dtype_for_h5(col_data):
 def main():
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-        description="Consolidate individual FITS cutouts into a single HDF5 file.",
+        description="Consolidate per-brick cutout shards into a single fixed-size HDF5.",
     )
 
     parser.add_argument("--catalog-path", type=str, required=True,
                         help="Path to the FITS catalog (same one used for cutout generation).")
-    parser.add_argument("--image-dir", type=str, required=True,
-                        help="Directory containing individual FITS cutouts.")
+    parser.add_argument("--cutouts-dir", type=str, required=True,
+                        help="Directory containing the per-brick HDF5 shard store.")
     parser.add_argument("--output-h5", type=str, required=True,
                         help="Output HDF5 file path.")
 
     parser.add_argument("--ra-col", type=str, default="RA")
     parser.add_argument("--dec-col", type=str, default="DEC")
     parser.add_argument("--id-col", type=str, default="TARGETID")
+    parser.add_argument("--brick-col", type=str, default="BRICKNAME",
+                        help="Catalog column with the Legacy Surveys brick name (shard key).")
 
     parser.add_argument("--cutout-size", type=int, default=152,
                         help="Expected cutout dimension in pixels.")
@@ -156,9 +140,9 @@ def main():
                              "(e.g. 'Z,MAG_G,MAG_R,MAG_Z,IS_DWARF').")
 
     parser.add_argument("--include-invvar", action="store_true",
-                        help="Read and store inverse-variance maps from FITS extensions.")
+                        help="Read and store inverse-variance maps from the shards.")
     parser.add_argument("--include-maskbits", action="store_true",
-                        help="Read and store maskbits maps from FITS extensions.")
+                        help="Read and store maskbits maps from the shards.")
     parser.add_argument("--binary-mask", action="store_true",
                         help="Compute and store a binary clean-pixel mask from maskbits. "
                              "Implies --include-maskbits.")
@@ -171,20 +155,18 @@ def main():
     parser.add_argument("--compression", type=str, default="gzip",
                         help="HDF5 compression filter. Use 'none' to disable.")
     parser.add_argument("--nworkers", type=int, default=8,
-                        help="Number of parallel FITS-reading workers.")
+                        help="Number of parallel shard-reading workers.")
 
     parser.add_argument("--skip-missing", action="store_true",
-                        help="Skip missing FITS files (fill with NaN). "
+                        help="Skip objects missing from the store (fill with NaN). "
                              "Without this flag, the script errors if any are missing.")
-    parser.add_argument("--delete-fits", action="store_true",
-                        help="Delete individual FITS files after successful consolidation.")
 
     args = parser.parse_args()
 
     import h5py
     from astropy.table import Table
 
-    image_dir = os.path.expandvars(args.image_dir)
+    cutouts_dir = os.path.expandvars(args.cutouts_dir)
     catalog_path = os.path.expandvars(args.catalog_path)
     output_h5 = os.path.expandvars(args.output_h5)
 
@@ -202,7 +184,7 @@ def main():
     extra_col_names = [c.strip() for c in args.extra_cols.split(",") if c.strip()]
 
     # ------------------------------------------------------------------
-    # 1. Read catalog and build expected file paths
+    # 1. Read catalog
     # ------------------------------------------------------------------
     t0 = time.time()
     print(f"Reading catalog: {catalog_path}")
@@ -210,26 +192,29 @@ def main():
     N = len(cat)
     print(f"  {N} objects in catalog")
 
+    if args.brick_col not in cat.colnames:
+        print(f"ERROR: brick column '{args.brick_col}' not in catalog", file=sys.stderr)
+        sys.exit(1)
+
     allra = np.asarray(cat[args.ra_col], dtype=np.float64)
     alldec = np.asarray(cat[args.dec_col], dtype=np.float64)
     allobjids = np.asarray(cat[args.id_col], dtype=np.int64)
-
-    filepaths = np.array([
-        _expected_filename(image_dir, allobjids[k], allra[k], alldec[k])
-        for k in range(N)
-    ], dtype=object)
+    allbricks = np.asarray(cat[args.brick_col]).astype(str)
 
     # ------------------------------------------------------------------
-    # 2. Check file existence
+    # 2. Check existence against the shard store
     # ------------------------------------------------------------------
-    print("Checking which FITS files exist...")
-    exists = np.array([os.path.exists(fp) for fp in filepaths], dtype=bool)
+    print(f"Scanning shard store: {cutouts_dir}")
+    store = cutout_store.list_existing(cutouts_dir, quarantine_corrupt=False)
+    exists = np.array(
+        [int(allobjids[k]) in store.get(allbricks[k], ()) for k in range(N)],
+        dtype=bool)
     n_found = int(exists.sum())
     n_missing = N - n_found
-    print(f"  Found {n_found}/{N} files ({n_missing} missing)")
+    print(f"  Found {n_found}/{N} objects in {len(store)} shards ({n_missing} missing)")
 
     if n_missing > 0 and not args.skip_missing:
-        print("ERROR: missing FITS files detected and --skip-missing is not set. "
+        print("ERROR: objects missing from the store and --skip-missing is not set. "
               "Finish cutout generation first or pass --skip-missing.", file=sys.stderr)
         sys.exit(1)
 
@@ -265,10 +250,11 @@ def main():
         d_maskbits = None
         if include_maskbits:
             maskbits_chunk = (min(block, N), sz, sz)
+            # int32: DR9/DR10 maskbits use bits up to 15, which overflows int16
             d_maskbits = hf.create_dataset(
                 "maskbits",
                 shape=(N, sz, sz),
-                dtype=np.int16,
+                dtype=np.int32,
                 chunks=maskbits_chunk,
                 compression=compression,
             )
@@ -301,13 +287,13 @@ def main():
             print(f"  Added extra column '{col_name}' (dtype={dt})")
 
         # ------------------------------------------------------------------
-        # 4. Read FITS in blocks and write to datasets
+        # 4. Read shards in blocks and write to datasets
         # ------------------------------------------------------------------
         print(f"Writing images (block_size={block}, workers={args.nworkers})...")
 
         nan_image = np.full((nb, sz, sz), np.nan, dtype=np.float32)
         nan_invvar = np.full((nb, sz, sz), np.nan, dtype=np.float32) if include_invvar else None
-        zero_maskbits = np.zeros((sz, sz), dtype=np.int16) if include_maskbits else None
+        zero_maskbits = np.zeros((sz, sz), dtype=np.int32) if include_maskbits else None
 
         pool = multiprocessing.Pool(args.nworkers)
         try:
@@ -315,57 +301,50 @@ def main():
                 blk_end = min(blk_start + block, N)
                 blk_size = blk_end - blk_start
 
-                blk_paths = filepaths[blk_start:blk_end]
-                blk_exists = exists[blk_start:blk_end]
+                # group the block's objects by shard so each worker opens
+                # one shard and reads all its objects in one go
+                by_shard = defaultdict(list)
+                for j in range(blk_size):
+                    k = blk_start + j
+                    if exists[k]:
+                        shard = cutout_store.shard_path(cutouts_dir, allbricks[k])
+                        by_shard[shard].append((j, int(allobjids[k])))
 
                 read_args = [
-                    (p, include_invvar, include_maskbits)
-                    for p, e in zip(blk_paths, blk_exists) if e
+                    (shard, items, include_invvar, include_maskbits)
+                    for shard, items in by_shard.items()
                 ]
-
+                read_results = []
                 if read_args:
-                    read_results = list(pool.imap(_read_one_fits, read_args))
-                else:
-                    read_results = []
+                    for batch in pool.imap_unordered(_read_shard_group, read_args):
+                        read_results.extend(batch)
 
                 images_blk = np.empty((blk_size, nb, sz, sz), dtype=np.float32)
-                invvar_blk = np.empty((blk_size, nb, sz, sz), dtype=np.float32) if include_invvar else None
-                maskbits_blk = np.zeros((blk_size, sz, sz), dtype=np.int16) if include_maskbits else None
+                images_blk[:] = nan_image
+                invvar_blk = None
+                if include_invvar:
+                    invvar_blk = np.empty((blk_size, nb, sz, sz), dtype=np.float32)
+                    invvar_blk[:] = nan_invvar
+                maskbits_blk = np.zeros((blk_size, sz, sz), dtype=np.int32) if include_maskbits else None
 
-                read_idx = 0
-                for j in range(blk_size):
-                    if blk_exists[j]:
-                        res = read_results[read_idx]
-                        read_idx += 1
-                        img = res["image"]
-                        if img is not None and img.shape == (nb, sz, sz):
-                            images_blk[j] = img
-                        else:
-                            images_blk[j] = nan_image
-                            if img is not None:
-                                print(f"  WARNING: image shape mismatch at index "
-                                      f"{blk_start+j}: expected ({nb},{sz},{sz}), "
-                                      f"got {img.shape}", flush=True)
+                for j, res in read_results:
+                    img = res["image"]
+                    if img is not None and img.shape == (nb, sz, sz):
+                        images_blk[j] = img
+                    elif img is not None:
+                        print(f"  WARNING: image shape mismatch at index "
+                              f"{blk_start+j}: expected ({nb},{sz},{sz}), "
+                              f"got {img.shape}", flush=True)
 
-                        if include_invvar:
-                            iv = res["invvar"]
-                            if iv is not None and iv.shape == (nb, sz, sz):
-                                invvar_blk[j] = iv
-                            else:
-                                invvar_blk[j] = nan_invvar
+                    if include_invvar:
+                        iv = res["invvar"]
+                        if iv is not None and iv.shape == (nb, sz, sz):
+                            invvar_blk[j] = iv
 
-                        if include_maskbits:
-                            mb = res["maskbits"]
-                            if mb is not None and mb.shape == (sz, sz):
-                                maskbits_blk[j] = mb
-                            else:
-                                maskbits_blk[j] = zero_maskbits
-                    else:
-                        images_blk[j] = nan_image
-                        if include_invvar:
-                            invvar_blk[j] = nan_invvar
-                        if include_maskbits:
-                            maskbits_blk[j] = zero_maskbits
+                    if include_maskbits:
+                        mb = res["maskbits"]
+                        if mb is not None and mb.shape == (sz, sz):
+                            maskbits_blk[j] = mb
 
                 d_images[blk_start:blk_end] = images_blk
                 if d_invvar is not None:
@@ -387,22 +366,6 @@ def main():
 
     elapsed = time.time() - t0
     print(f"HDF5 written to: {output_h5}  ({elapsed:.1f}s total)")
-
-    # ------------------------------------------------------------------
-    # 5. Optionally delete individual FITS files
-    # ------------------------------------------------------------------
-    if args.delete_fits:
-        print("Deleting individual FITS files...")
-        n_deleted = 0
-        for fp, ex in zip(filepaths, exists):
-            if ex:
-                try:
-                    os.remove(fp)
-                    n_deleted += 1
-                except OSError as exc:
-                    print(f"  WARNING: could not delete {fp}: {exc}")
-        print(f"  Deleted {n_deleted} files")
-
     print("Done.")
 
 

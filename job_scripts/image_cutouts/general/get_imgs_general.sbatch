@@ -7,39 +7,44 @@
 #SBATCH --mail-user=virajvm@stanford.edu
 #SBATCH --mail-type=ALL
 #SBATCH --nodes=1
-#SBATCH --time=00:15:00
+#SBATCH --time=02:00:00
 #SBATCH --output=get_imgs_general.log
 
 # ============================================================
-# USER CONFIG -- edit these before submitting with sbatch
+# GENERAL template -- edit before submitting, or use the
+# preconfigured get_imgs_{clean,shreds,sga}.sbatch instead.
+#
+# Phase 1 writes per-brick HDF5 shards into OUTDIR (incremental:
+# objects already in shards or tombstoned in permanently_failed.csv
+# are skipped).
 # ============================================================
 CATALOG_PATH="/pscratch/sd/v/virajvm/agent_ai_data/download_round_2_catalog.fits"
-OUTDIR="$PSCRATCH/agent_ai_data/images"
+OUTDIR="$PSCRATCH/dwarf_cutouts/general"
 RA_COL="RA"
 DEC_COL="DEC"
 ID_COL="TARGETID"
 CUTOUT_SIZE=152
 
-N=1       # number of nodes
+N=1       # number of nodes (must match #SBATCH --nodes)
 mp=4      # multiprocessing workers per MPI rank
 
-# Optional: any extra flags forwarded directly to many_cutouts_general.py
-# e.g. "--no-invvar --timeout 180 --max-retries 3 --layer ls-dr10"
+# Extra flags forwarded to many_cutouts_general.py
+# e.g. "--size-col IMAGE_SIZE_PIX --no-invvar --retry-failed --layer ls-dr10"
 EXTRA_ARGS=""
 
-# Phase 2 (optional): consolidate individual FITS into a single HDF5 file.
-# Set H5_OUTPUT to a file path to enable; leave empty to skip.
+# Phase 2 (optional): consolidate shards into a single fixed-size HDF5
+# for ML training. Set H5_OUTPUT to a file path to enable; empty = skip.
 H5_OUTPUT=""
 EXTRA_COLS=""       # e.g. "Z,MAG_G,MAG_R,MAG_Z,IS_DWARF"
-H5_NWORKERS=8      # parallel FITS-reading workers for consolidation
+H5_NWORKERS=8       # parallel shard-reading workers for consolidation
 # ============================================================
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-echo Starting at $(date)
+echo "Starting at $(date)"
 
-# --- Phase 1: generate cutouts (runs inside Shifter container via srun) ---
-cmd="sh cutouts_cnn_general.sh $N $mp $CATALOG_PATH $OUTDIR $RA_COL $DEC_COL $ID_COL $CUTOUT_SIZE $EXTRA_ARGS"
+# --- Phase 1: generate cutouts (inside Shifter container via srun) ---
+cmd="sh $SCRIPT_DIR/cutouts_cnn_general.sh $N $mp $CATALOG_PATH $OUTDIR $RA_COL $DEC_COL $ID_COL $CUTOUT_SIZE $EXTRA_ARGS"
 echo $cmd
 $cmd
 
@@ -50,11 +55,15 @@ else
     exit 1
 fi
 
-# --- Phase 2 (optional): consolidate FITS into HDF5 ---
+# --- Phase 2 (optional): consolidate shards into one fixed-size HDF5 ---
 if [[ -n "$H5_OUTPUT" ]]; then
     echo "Starting Phase 2: HDF5 consolidation at $(date)"
 
-    h5_args="--catalog-path $CATALOG_PATH --image-dir $OUTDIR --output-h5 $H5_OUTPUT"
+    # Phase 2 runs OUTSIDE the container -- get h5py/astropy from the DESI env
+    source /global/cfs/cdirs/desi/software/desi_environment.sh main
+    export HDF5_USE_FILE_LOCKING=FALSE
+
+    h5_args="--catalog-path $CATALOG_PATH --cutouts-dir $OUTDIR --output-h5 $H5_OUTPUT"
     h5_args="$h5_args --ra-col $RA_COL --dec-col $DEC_COL --id-col $ID_COL"
     h5_args="$h5_args --cutout-size $CUTOUT_SIZE --nworkers $H5_NWORKERS"
     h5_args="$h5_args --skip-missing"

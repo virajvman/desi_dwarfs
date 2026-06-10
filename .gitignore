@@ -14,3 +14,4 @@ __pycache__/
 # OS-specific files
 .DS_Store
 CLAUDE.md
+IMAGE_CUTOUTS_HDF5_MIGRATION.md

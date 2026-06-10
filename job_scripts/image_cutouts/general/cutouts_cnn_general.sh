@@ -3,7 +3,7 @@
 # Shell wrapper for many_cutouts_general.py
 # Handles MPI task layout and CPU affinity on NERSC Perlmutter.
 #
-# Usage (called by get_imgs_general.sbatch):
+# Usage (called by get_imgs_{general,clean,shreds,sga}.sbatch):
 #   sh cutouts_cnn_general.sh <N> <mp> <catalog_path> <outdir> \
 #       [ra_col] [dec_col] [id_col] [cutout_size] [extra_args...]
 
@@ -13,6 +13,8 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export KMP_AFFINITY=disabled
 export MPICH_GNI_FORK_MODE=FULLCOPY
+# Lustre + h5py: ranks write disjoint shards; readers open shards read-only
+export HDF5_USE_FILE_LOCKING=FALSE
 
 N=${1:-1}                  # nodes
 mp=${2:-1}                 # multiprocessing workers per MPI rank
@@ -24,6 +26,8 @@ id_col=${7:-TARGETID}
 cutout_size=${8:-152}
 shift 8 2>/dev/null
 extra_args="$@"
+
+mkdir -p "$outdir_data"
 
 args="--catalog-path $catalog_path --outdir-data $outdir_data"
 args="$args --ra-col $ra_col --dec-col $dec_col --id-col $id_col"
