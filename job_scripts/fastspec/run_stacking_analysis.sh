@@ -37,11 +37,11 @@ python3 code/nebular_stuff/stack_mstar_haew_5pct.py
 echo "=== [2/3] FastSpecFit on stacks ==="
 bash job_scripts/fastspec/run_stack_fastspec_haew_5pct.sh
 
-echo "=== [3/3] Direct-method metallicity (SII n_e default) ==="
+echo "=== [3/3] Direct-method metallicity (n_e fixed at 100 cm^-3) ==="
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 python3 code/nebular_stuff/stack_direct_metallicity.py \
-    --line-flux-type FLUX --ne-100
+    --line-flux-type FLUX --fix-ne100
 
 echo "=== Pipeline complete ==="
