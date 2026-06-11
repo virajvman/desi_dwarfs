@@ -1,13 +1,13 @@
 #!/bin/bash -l
 
 #SBATCH --account=desi
-#SBATCH --qos=regular
+#SBATCH --qos=debug
 #SBATCH --constraint=cpu
 #SBATCH --image=dstndstn/cutouts:dvsro3
 #SBATCH --mail-user=virajvm@stanford.edu
 #SBATCH --mail-type=ALL
 #SBATCH --nodes=1
-#SBATCH --time=04:00:00
+#SBATCH --time=00:20:00
 #SBATCH --output=get_imgs_all.log
 
 # ============================================================
@@ -37,16 +37,17 @@ N=1       # number of nodes (must match #SBATCH --nodes)
 mp=4      # multiprocessing workers per MPI rank
 
 # Per-phase enable flags + catalogs
-RUN_SHREDS=true
-SHREDS_CATALOG="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v5.fits"
-SHREDS_ARGS="--size-col IMAGE_SIZE_PIX"
 
-RUN_SGA=true
+RUN_SGA=false
 SGA_CATALOG="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_SGA_matched_dwarfs_REPROCESS_V2.fits"
 SGA_ARGS="--size-col IMAGE_SIZE_PIX"
 
-RUN_CLEAN=false
-CLEAN_CATALOG="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v5.fits"
+RUN_SHREDS=false
+SHREDS_CATALOG="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v5.fits"
+SHREDS_ARGS="--size-col IMAGE_SIZE_PIX"
+
+RUN_CLEAN=true
+CLEAN_CATALOG="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v5_RUN_W_APER.fits"
 CLEAN_ARGS="--size-col IMAGE_SIZE_PIX"
 
 # Extra flags applied to every phase, e.g. "--retry-failed --timeout 180"
@@ -68,8 +69,9 @@ run_phase () {
     echo "Phase $name SUCCESS at $(date)"
 }
 
-if [ "$RUN_CLEAN" = true ];  then run_phase clean  "$CLEAN_CATALOG"  "$CLEAN_ARGS";  fi
-if [ "$RUN_SHREDS" = true ]; then run_phase shreds "$SHREDS_CATALOG" "$SHREDS_ARGS"; fi
 if [ "$RUN_SGA" = true ];    then run_phase sga    "$SGA_CATALOG"    "$SGA_ARGS";    fi
+if [ "$RUN_SHREDS" = true ]; then run_phase shreds "$SHREDS_CATALOG" "$SHREDS_ARGS"; fi
+if [ "$RUN_CLEAN" = true ];  then run_phase clean  "$CLEAN_CATALOG"  "$CLEAN_ARGS";  fi
+
 
 echo "All done at $(date)"
