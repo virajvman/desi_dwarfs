@@ -2147,6 +2147,62 @@ def load_clean_dwarf_catalog(
     return cat_clean
 
 
+def report_fastspec_coverage(
+    cat_path,
+    fastspec_path,
+    fastspec_hdu=3,
+    missing_out_path=None,
+):
+    """
+    Loudly report how many MAIN dwarfs have a matching row in the FastSpecFit
+    run that feeds the FASTSPEC HDU, and how many do not -- matched by TARGETID
+    against ``hdu=fastspec_hdu`` of ``fastspec_path``.
+
+    The custom FastSpecFit run is *supposed* to cover every dwarf in the
+    catalog, so a non-zero "without match" count is a flag to investigate why
+    those objects' fastspecfit failed. The unmatched TARGETIDs are written to
+    ``missing_out_path`` (default: ``missing_fastspec_targetids.txt`` next to
+    ``cat_path``) for follow-up.
+
+    This NEVER modifies the catalog and NEVER raises on missing matches: missing
+    dwarfs remain full rows in MAIN/FASTSPEC with sentinel-filled FastSpec
+    columns (see ``match_fastspec_catalog_targetid``), so all extensions stay
+    row-aligned. Downstream nebular analysis (add_nebular_props.py) drops these
+    rows implicitly -- they fail its line-SNR gating and get NaN/False fills
+    rather than polluting real measurements.
+    """
+    main_tids = np.asarray(safe_read_table(cat_path, hdu="MAIN")["TARGETID"])
+    src_tids = np.asarray(Table.read(fastspec_path, hdu=fastspec_hdu)["TARGETID"])
+
+    have = np.isin(main_tids, src_tids)
+    n_tot = len(main_tids)
+    n_have = int(np.sum(have))
+    n_miss = n_tot - n_have
+    missing_tids = main_tids[~have]
+
+    if missing_out_path is None:
+        missing_out_path = os.path.join(
+            os.path.dirname(os.path.abspath(cat_path)) or ".",
+            "missing_fastspec_targetids.txt",
+        )
+    np.savetxt(missing_out_path, missing_tids, fmt="%d")
+
+    # ANSI bold so the summary stands out in the SLURM .log. The uppercase
+    # token "FASTSPEC COVERAGE" is easy to grep for in plain-text viewers.
+    B, E = "\033[1m", "\033[0m"
+    pct = (100.0 * n_miss / n_tot) if n_tot else 0.0
+    bar = "=" * 72
+    print(B + bar + E)
+    print(B + "FASTSPEC COVERAGE CHECK" + E)
+    print(B + f"  source: {fastspec_path} (hdu={fastspec_hdu})" + E)
+    print(B + f"  DWARFS WITH    FASTSPECFIT MATCH: {n_have}/{n_tot}" + E)
+    print(B + f"  DWARFS WITHOUT FASTSPECFIT MATCH: {n_miss}/{n_tot} ({pct:.2f}%)" + E)
+    print(B + f"  missing TARGETID list -> {missing_out_path}" + E)
+    print(B + bar + E)
+
+    return missing_tids
+
+
 if __name__ == '__main__':
 
     save_path = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/temp_cats"
@@ -2172,7 +2228,7 @@ if __name__ == '__main__':
     # shred / clean / qso_scnd interim files.
     #   "default": precomputed v2.1 combined catalog (iron_fastspec_v21.fits)
     #   "custom":  HDU=3 of the custom fastspecfit run
-    #              (/pscratch/sd/v/virajvm/desi_dwarf_catalogs/fastspecfit_custom_run/iron/catalogs/fastspec-iron-sample.fits)
+    #              (/pscratch/sd/v/virajvm/desi_dwarf_catalogs/fastspecfit_custom_run/iron/catalogs/fastspec-iron-dr1-dwarfs.fits)
     # The QSO/SCND SNR pre-filter inside load_and_filter_qso_scnd_candidates
     # always uses the default v2.1 file, regardless of this setting.
     fastspec_source = "custom"
@@ -2342,6 +2398,23 @@ if __name__ == '__main__':
     apply_post_emission_mstar_dwarf_cut(main_cat_outpath)
 
     consolidate_associated_fiber_properties(main_cat_outpath)
+
+    # Loud, bold coverage check on the FINAL dwarf sample: how many have / lack
+    # a row in the FastSpecFit run feeding the FASTSPEC HDU, and dump the
+    # missing TARGETIDs for follow-up. Never crashes; missing dwarfs stay as
+    # sentinel-filled rows in FASTSPEC so all extensions remain row-aligned.
+    if process_fastspec:
+        if fastspec_source == "custom":
+            _cov_path, _cov_hdu = (
+                "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/fastspecfit_custom_run/iron/catalogs/fastspec-iron-dr1-dwarfs.fits",
+                3,
+            )
+        else:
+            _cov_path, _cov_hdu = (
+                "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_fastspec_catalog/iron_fastspec_v21.fits",
+                1,
+            )
+        report_fastspec_coverage(main_cat_outpath, _cov_path, fastspec_hdu=_cov_hdu)
 
     # Objects with LOG_MSTAR_M24 >= 9.25 after the low-SNR fallback in
     # compute_emission_subtracted_photo_errors are dropped by apply_post_emission_mstar_dwarf_cut

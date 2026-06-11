@@ -12,5 +12,5 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 
-python3 desi_dwarfs/code/add_nebular_props.py --use-informative-priors --overwrite-te-cache \
+python3 desi_dwarfs/code/add_nebular_props.py --line-flux-type FLUX --use-informative-priors --overwrite-te-cache \
     /pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits 2>&1 | tee add_nebular_props_interactive.log

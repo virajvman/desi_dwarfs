@@ -1409,9 +1409,15 @@ def match_fastspec_catalog_targetid(gal_cat, vac_data):
     aligned_arr_masked[found_mask] = vac_arr_sorted[inds[found_mask]]
 
     n_miss = int(np.sum(~found_mask))
+    n_match = len(gal_cat) - n_miss
+    # ANSI bold so the per-sample match summary is loud in the SLURM .log.
+    _B, _E = "\033[1m", "\033[0m"
     print(
-        f"match_fastspec_catalog_targetid: {n_miss}/{len(gal_cat)} gal_cat TARGETIDs "
-        f"not found in fastspec source (filled with dtype-appropriate blanks)"
+        _B
+        + f"match_fastspec_catalog_targetid: {n_match}/{len(gal_cat)} matched, "
+        + f"{n_miss}/{len(gal_cat)} NOT found in fastspec source "
+        + "(kept as rows, filled with dtype-appropriate blanks)"
+        + _E
     )
 
     # Step 7: convert back to Astropy Table
@@ -1464,7 +1470,7 @@ def match_fastspec_catalog(gal_cat, coord_name="", match_method="RADEC", source=
           - "default": the precomputed combined v2.1 catalog
             ``iron_fastspec_v21.fits`` (subset of columns, includes RA/DEC).
           - "custom":  the FASTSPEC HDU (hdu=3) of the custom fastspecfit run at
-            ``/pscratch/sd/v/virajvm/desi_dwarf_catalogs/fastspecfit_custom_run/iron/catalogs/fastspec-iron-sample.fits``.
+            ``/pscratch/sd/v/virajvm/desi_dwarf_catalogs/fastspecfit_custom_run/iron/catalogs/fastspec-iron-dr1-dwarfs.fits``.
             All columns from that HDU are returned verbatim (no subsetting).
             The FASTSPEC HDU carries no RA/DEC, so matching is forced to TARGETID.
     '''
