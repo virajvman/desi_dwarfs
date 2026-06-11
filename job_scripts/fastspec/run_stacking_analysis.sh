@@ -13,9 +13,10 @@
 #SBATCH --job-name=run_stacking_analysis
 #SBATCH --output=run_stacking_analysis.log
 
-# Full M* x H-alpha-EW stack pipeline (3 stages), as a single batch job so it
-# runs on a scheduled compute node instead of an interactive Jupyter node.
-# Mass: 0.5 dex (6-8), 0.25 dex (8-9.25). EW: <30, 30-100, >100 A.
+# Full stack pipeline (3 stages), as a single batch job so it runs on a
+# scheduled compute node instead of an interactive Jupyter node.
+# Products: EW-binned (M* x H-alpha EW) + mass-only (M* only, mstar_only/).
+# Mass: 0.5 dex (6-8), 0.25 dex (8-9.25). EW: <30, 30-100, >100 A (EW product only).
 #
 # Submit:   sbatch job_scripts/fastspec/run_stacking_analysis.sh
 # Monitor:  squeue --me   |   tail -f run_stacking_analysis.log
@@ -24,6 +25,8 @@
 # Stage 2 (run_stack_fastspec_haew_5pct.sh) sets up its OWN FastSpecFit
 # environment in a child shell (`bash ...`), so its `module load fastspecfit`
 # does not leak into stages 1 and 3, which use the main DESI environment.
+# Stage 2 fits both STACK_PATH/ (EW-binned) and STACK_PATH/mstar_only/.
+# Stage 3 runs direct-method metallicity on both products (default --products both).
 
 set -e
 

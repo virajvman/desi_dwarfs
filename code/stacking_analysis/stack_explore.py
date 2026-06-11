@@ -354,6 +354,59 @@ def coadd_mean_with_propagated_ivar(norm_flux, norm_ivar):
     return stack_flux.astype(np.float32), stack_ivar.astype(np.float32)
 
 
+def mean_stack(fluxes, ivars, wave,
+               norm_method="boxcar_line",
+               line_window=None, cont_width=5.0,
+               flux_window=None,
+               catalog_line_fluxes=None,
+               min_n_valid=1):
+    """
+    Single mean coadd with propagated measurement ivar (no bootstrap).
+
+    Normalization options mirror ``bootstrap_stack``.
+
+    Returns
+    -------
+    stack_flux : 1D array or None
+    stack_ivar : 1D array or None
+    n_valid : int
+        Number of spectra that passed normalization.
+    """
+    if norm_method == "boxcar_line":
+        if line_window is None:
+            raise ValueError("line_window required for boxcar_line normalization")
+        norm_fluxes, norm_ivars, valid, _ = normalize_by_boxcar_line(
+            fluxes, ivars, wave, line_window, cont_width=cont_width
+        )
+    elif norm_method == "flux_window":
+        if flux_window is None:
+            raise ValueError("flux_window required for flux_window normalization")
+        norm_fluxes, norm_ivars, valid, _ = normalize_by_flux_window(
+            fluxes, ivars, wave, flux_window
+        )
+    elif norm_method == "catalog":
+        if catalog_line_fluxes is None:
+            raise ValueError("catalog_line_fluxes required for catalog normalization")
+        norm_fluxes, norm_ivars, valid = normalize_by_line_catalog(
+            fluxes, ivars, catalog_line_fluxes
+        )
+    else:
+        raise ValueError(f"Unknown norm_method: {norm_method}")
+
+    use_fluxes = norm_fluxes[valid].astype(np.float32, copy=False)
+    use_ivars = norm_ivars[valid].astype(np.float32, copy=False)
+    n_valid = use_fluxes.shape[0]
+
+    if n_valid < min_n_valid:
+        print(f"    Warning: only {n_valid} valid spectra "
+              f"(< min_n_valid={min_n_valid}), skipping mean stack")
+        return None, None, n_valid
+
+    print(f"    Mean stack: n_valid={n_valid}")
+    stack_flux, stack_ivar = coadd_mean_with_propagated_ivar(use_fluxes, use_ivars)
+    return stack_flux, stack_ivar, n_valid
+
+
 def bootstrap_stack(fluxes, ivars, wave, n_bootstrap=200, n_draw=5000,
                     random_seed=42,
                     norm_method="boxcar_line",

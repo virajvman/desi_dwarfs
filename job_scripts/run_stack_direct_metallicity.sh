@@ -13,10 +13,10 @@
 #SBATCH --job-name=stack_direct_metallicity
 #SBATCH --output=stack_direct_metallicity.log
 
-# Run the direct-method (T_e) abundance fits on the M* x H-alpha-EW stacked
-# spectra. UltraNest fits many bootstrap rows per bin, so this wants a full
-# exclusive CPU node. Submit with sbatch, or run the python line directly in
-# an interactive session on an exclusive Perlmutter CPU node.
+# Run the direct-method (T_e) abundance fits on stacked dwarf spectra:
+# EW-binned stacks (STACK_PATH/) and mass-only stacks (STACK_PATH/mstar_only/).
+# UltraNest fits many bootstrap rows per EW bin; mass-only bins have a single row.
+# Submit with sbatch, or run the python line directly on an exclusive CPU node.
 
 cd /global/u1/v/virajvm/DESI2_LOWZ
 source /global/cfs/cdirs/desi/software/desi_environment.sh main
@@ -27,4 +27,5 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 
-python3 desi_dwarfs/code/nebular_stuff/stack_direct_metallicity.py
+python3 desi_dwarfs/code/nebular_stuff/stack_direct_metallicity.py \
+    --line-flux-type FLUX --fix-ne100 --products both

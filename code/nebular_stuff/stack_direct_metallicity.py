@@ -2,55 +2,42 @@
 stack_direct_metallicity.py
 ===========================
 
-Direct-method (T_e) nebular abundances for the M* x H-alpha-EW stacked
-spectra produced by `stack_mstar_haew_5pct.py` and fit with custom
-FastSpecFit (`job_scripts/fastspec/run_stack_fastspec_haew_5pct.sh`).
+Direct-method (T_e) nebular abundances for stacked dwarf spectra from
+`stack_mstar_haew_5pct.py`, fit with custom FastSpecFit
+(`job_scripts/fastspec/run_stack_fastspec_haew_5pct.sh`).
 
-For each stack bin there is one FastSpecFit stack output
-`fastspec_stack_ALL_mstar_{mlo}_{mhi}_{ewtoken}.fits` whose emission-line
-table (hdu=3) has 1 central row (IS_MEAN stack) plus 200 bootstrap rows.
-EW tokens are fixed bins:
-`ew_lt30`, `ew_30_100`, `ew_gt100` (<30, 30-100, >100 Angstrom). Mass bins:
-0.5 dex from log M*=6 to 8, then 0.25 dex to 9.25 (9 mass bins). Stacks are
-produced only when N >= 50 in the (mass, EW) cell.
+Two stack products (select with ``--products``):
 
-This script:
-  1. Globs the per-bin FastSpecFit stack outputs.
-  2. Keeps only bins where the MEAN stack (row 0 ONLY, the total stack)
-     passes the TE line-SNR gate at SNR > 10 with flux > 0.005 (FastSpec
-     units) in ALL relevant lines, via `sfr_and_metallicity.line_snr_mask`.
-     Base lines: HALPHA, HBETA, HGAMMA, OIII_4363, OIII_5007, OII_3726,
-     OII_3729 (7); SII density mode also requires SII_6716, SII_6731 (9).
-     With --fix-ne100 the density doublet is not needed, so the gate is the
-     7 base lines regardless of --density-diagnostic.
-  3. Of the 200 bootstrap rows, keeps those that INDEPENDENTLY pass the
-     SAME gate, and runs the UltraNest direct-method fit
-     (`pn_functions.compute_direct_metallicities`) on row 0 + those passing
-     bootstrap rows only (default density diagnostic: SII). With --fix-ne100
-     the electron density is held fixed at 100 cm^-3 instead of being fit
-     from the density doublet.
-  4. Reports per bin:
-       - central value  = posterior median from the mean-stack fit (row 0), and
-       - uncertainty    = 16/50/84 percentiles of bootstrap-row posterior medians
-         when N_BOOT_FIT >= MIN_N_BOOT_FIT; otherwise posterior interval only
-         with BOOT_ERR_RELIABLE=False. Mean-stack posterior interval stored
-         separately as {PARAM}_MEANFIT_LO/HI (not combined with bootstrap error).
-  5. Writes ONE results row per candidate bin (kept and dropped alike, with
-     a DETECTED_7LINE flag for bins that passed the TE line gate) to a
-     FITS + ECSV table so the M*/EW trends can be plotted later.
+**EW-binned** (``STACK_PATH/``):
+  ``fastspec_stack_ALL_mstar_{mlo}_{mhi}_{ewtoken}.fits`` — 1 mean row +
+  200 bootstrap rows. EW tokens: ``ew_lt30``, ``ew_30_100``, ``ew_gt100``.
+  Stacks produced when N >= 50 in each (mass, EW) cell.
 
-Outputs (written to STACK_PATH):
-  - direct_metallicity_results.fits
-  - direct_metallicity_results.ecsv
-  - plots/oh_av_vs_mstar.png
-  - plots/te_ne_hahb_vs_mstar.png
-  - plots/obs_hahb_vs_mstar.png
-  - plots/doublet_ratios_vs_mstar.png
-  - plots/ne_diagnostic_ratio_vs_density.png
+**Mass-only** (``STACK_PATH/mstar_only/``):
+  ``fastspec_stack_ALL_mstar_{mlo}_{mhi}.fits`` — single mean row, no EW
+  sub-binning, no bootstrap.
+
+Both products share the same detection gate and direct-method fit logic:
+
+  1. Globs per-bin FastSpecFit stack outputs.
+  2. Keeps bins where the MEAN stack (row 0) passes the TE line-SNR gate
+     (SNR > 7.5, flux > 0.005) in all relevant lines via
+     ``sfr_and_metallicity.line_snr_mask``.
+  3. For EW stacks: fits row 0 plus bootstrap rows that pass the gate.
+     For mass-only: fits row 0 only (posterior interval for errors).
+  4. Writes one results row per bin (detected and undetected) to separate
+     FITS + ECSV tables under each product directory.
+
+Outputs:
+  EW-binned (``STACK_PATH/``):
+    direct_metallicity_results.{fits,ecsv}, plots/*.png
+  Mass-only (``STACK_PATH/mstar_only/``):
+    direct_metallicity_results.{fits,ecsv}, plots/*.png
 
 Usage:
-    python stack_direct_metallicity.py --line-flux-type BOXFLUX
-    python stack_direct_metallicity.py --line-flux-type FLUX --density-diagnostic OII
+    python stack_direct_metallicity.py --line-flux-type FLUX --fix-ne100
+    python stack_direct_metallicity.py --line-flux-type BOXFLUX --products ew
+    python stack_direct_metallicity.py --line-flux-type FLUX --products mstar_only
 """
 
 import argparse
@@ -124,6 +111,11 @@ PARAM_MAP = [
 
 OUT_BASENAME = "direct_metallicity_results"
 
+MSTAR_ONLY_SUBDIR = "mstar_only"
+MSTAR_ONLY_PATH = os.path.join(STACK_PATH, MSTAR_ONLY_SUBDIR)
+EW_TOKEN_MSTAR_ONLY = "all"
+MSTAR_ONLY_COLOR = "#2ca02c"
+
 
 # =============================================================================
 # HELPERS
@@ -135,16 +127,26 @@ _FNAME_RE = re.compile(
     r"(?P<ewtoken>ew_\w+)\.fits$"
 )
 
+_FNAME_RE_MSTAR_ONLY = re.compile(
+    r"fastspec_stack_ALL_mstar_"
+    r"(?P<mlo>[-\d.]+)_(?P<mhi>[-\d.]+)\.fits$"
+)
 
-def _input_stack_path(mlo, mhi, token):
+
+def _input_stack_path_ew(mlo, mhi, token, stack_path=STACK_PATH):
     return os.path.join(
-        STACK_PATH, f"stack_ALL_mstar_{mlo:.2f}_{mhi:.2f}_{token}.fits"
+        stack_path, f"stack_ALL_mstar_{mlo:.2f}_{mhi:.2f}_{token}.fits"
     )
 
 
-def read_stackinfo_from_input_stack(mlo, mhi, token):
-    """Read NOBJ, EW_MIN, EW_MAX from the input stack FITS STACKINFO table."""
-    in_path = _input_stack_path(mlo, mhi, token)
+def _input_stack_path_mstar_only(mlo, mhi, stack_path=MSTAR_ONLY_PATH):
+    return os.path.join(
+        stack_path, f"stack_ALL_mstar_{mlo:.2f}_{mhi:.2f}.fits"
+    )
+
+
+def read_stackinfo_from_path(in_path):
+    """Read NOBJ, EW_MIN, EW_MAX from an input stack FITS STACKINFO table."""
     if not os.path.exists(in_path):
         return None
     try:
@@ -164,7 +166,19 @@ def read_stackinfo_from_input_stack(mlo, mhi, token):
     return out
 
 
-def parse_bin_from_filename(path):
+def read_stackinfo_from_input_stack(mlo, mhi, token, stack_path=STACK_PATH):
+    """Read NOBJ, EW_MIN, EW_MAX from the EW-binned input stack FITS."""
+    return read_stackinfo_from_path(_input_stack_path_ew(mlo, mhi, token, stack_path))
+
+
+def read_stackinfo_mstar_only(mlo, mhi, stack_path=MSTAR_ONLY_PATH):
+    """Read NOBJ from the mass-only input stack FITS."""
+    return read_stackinfo_from_path(
+        _input_stack_path_mstar_only(mlo, mhi, stack_path)
+    )
+
+
+def parse_bin_from_filename(path, stack_path=STACK_PATH):
     """Return (mstar_min, mstar_max, ew_token, ew_min, ew_max) or None."""
     m = _FNAME_RE.search(os.path.basename(path))
     if m is None:
@@ -174,15 +188,33 @@ def parse_bin_from_filename(path):
     token = m.group("ewtoken")
     if token not in EW_TOKENS:
         return None
-    info = read_stackinfo_from_input_stack(mlo, mhi, token)
+    info = read_stackinfo_from_input_stack(mlo, mhi, token, stack_path)
     if info is None or "ew_min" not in info or "ew_max" not in info:
         return None
     return mlo, mhi, token, info["ew_min"], info["ew_max"]
 
 
-def read_nobj_from_input_stack(mlo, mhi, token):
-    """Best-effort NOBJ for a bin from the matching input stack FITS."""
-    info = read_stackinfo_from_input_stack(mlo, mhi, token)
+def parse_bin_from_filename_mstar_only(path, stack_path=MSTAR_ONLY_PATH):
+    """Return (mstar_min, mstar_max, ew_token, ew_min, ew_max) or None."""
+    m = _FNAME_RE_MSTAR_ONLY.search(os.path.basename(path))
+    if m is None:
+        return None
+    mlo = float(m.group("mlo"))
+    mhi = float(m.group("mhi"))
+    return mlo, mhi, EW_TOKEN_MSTAR_ONLY, -1.0, -1.0
+
+
+def read_nobj_from_input_stack(mlo, mhi, token, stack_path=STACK_PATH):
+    """Best-effort NOBJ for an EW-binned bin from the matching input stack FITS."""
+    info = read_stackinfo_from_input_stack(mlo, mhi, token, stack_path)
+    if info is None or "nobj" not in info:
+        return -1
+    return info["nobj"]
+
+
+def read_nobj_from_input_stack_mstar_only(mlo, mhi, stack_path=MSTAR_ONLY_PATH):
+    """Best-effort NOBJ for a mass-only bin from the matching input stack FITS."""
+    info = read_stackinfo_mstar_only(mlo, mhi, stack_path)
     if info is None or "nobj" not in info:
         return -1
     return info["nobj"]
@@ -238,26 +270,6 @@ def measure_obs_line_ratio(row, num_line, den_line, line_flux_type):
     else:
         err = np.nan
     return ratio, err
-
-
-def measure_obs_ha_hb(row):
-    """Observed Halpha/Hbeta from boxcar fluxes on the mean stack (row 0)."""
-    if "HALPHA_BOXFLUX" not in row.colnames or "HBETA_BOXFLUX" not in row.colnames:
-        return np.nan, np.nan, np.nan
-    ha = float(row["HALPHA_BOXFLUX"][0])
-    hb = float(row["HBETA_BOXFLUX"][0])
-    ha_ivar = float(row["HALPHA_BOXFLUX_IVAR"][0]) if "HALPHA_BOXFLUX_IVAR" in row.colnames else np.nan
-    hb_ivar = float(row["HBETA_BOXFLUX_IVAR"][0]) if "HBETA_BOXFLUX_IVAR" in row.colnames else np.nan
-    if not (np.isfinite(ha) and np.isfinite(hb) and hb > 0):
-        return np.nan, np.nan, np.nan
-    ratio = ha / hb
-    if np.isfinite(ha_ivar) and ha_ivar > 0 and np.isfinite(hb_ivar) and hb_ivar > 0:
-        ha_err = 1.0 / np.sqrt(ha_ivar)
-        hb_err = 1.0 / np.sqrt(hb_ivar)
-        err = np.abs(ratio) * np.sqrt((ha_err / ha) ** 2 + (hb_err / hb) ** 2)
-    else:
-        err = np.nan
-    return ratio, err, err
 
 
 def intrinsic_ha_hb(ne, te):
@@ -560,6 +572,332 @@ def _plot_vs_mstar_by_ew(tab, ycol, yerr_lo, yerr_hi, ylab, ax, title=None):
         ax.set_title(title, fontsize=10)
 
 
+def _plot_vs_mstar_single(tab, ycol, yerr_lo, yerr_hi, ylab, ax, title=None,
+                          color=MSTAR_ONLY_COLOR, label="mass-only (all EW)"):
+    """Errorbar plot vs log M* midpoint, single series (mass-only stacks)."""
+    mid = _mstar_mid(tab)
+    y = np.asarray(tab[ycol], dtype=float)
+    err_lo = np.asarray(tab[yerr_lo], dtype=float)
+    err_hi = np.asarray(tab[yerr_hi], dtype=float)
+    has_err = np.isfinite(err_lo) & np.isfinite(err_hi)
+
+    if np.any(has_err):
+        ax.errorbar(
+            mid[has_err], y[has_err],
+            yerr=[err_lo[has_err], err_hi[has_err]],
+            fmt="o-", color=color, label=label, capsize=3, lw=1.2,
+        )
+    elif len(tab) > 0:
+        ax.plot(mid, y, "o-", color=color, label=label, lw=1.2)
+
+    ax.set_xlabel(r"log $M_\star$ [$M_\odot$]")
+    ax.set_ylabel(ylab)
+    ax.legend(loc="best", frameon=False, fontsize=7)
+    if title:
+        ax.set_title(title, fontsize=10)
+
+
+def _plot_obs_vs_mstar_single(tab, ycol, yerr_col, ylab, ax, title=None,
+                              color=MSTAR_ONLY_COLOR, label="mass-only (all EW)",
+                              det_col="DETECTED_7LINE",
+                              det_label="TE lines detected",
+                              undet_label="ratio only (TE gate failed)"):
+    """Observed quantity vs log M* for mass-only stacks.
+
+    ``det_col`` selects which detection flag styles solid vs hollow markers;
+    use ``DETECTED_HAHB`` for the Balmer decrement (which needs only Halpha and
+    Hbeta) and ``DETECTED_7LINE`` for TE-fit-related quantities.
+    """
+    finite = np.isfinite(tab[ycol])
+    if not np.any(finite):
+        return False
+
+    plot_tab = tab[finite]
+    mid = _mstar_mid(plot_tab)
+    y = np.asarray(plot_tab[ycol])
+    yerr = np.asarray(plot_tab[yerr_col])
+    det = np.asarray(plot_tab[det_col], dtype=bool)
+    has_err = np.isfinite(yerr) & (yerr > 0)
+    has_undetected = False
+
+    if np.any(det & has_err):
+        m = det & has_err
+        ax.errorbar(
+            mid[m], y[m], yerr=yerr[m],
+            fmt="o-", color=color, label=label, capsize=3, lw=1.2,
+        )
+    elif np.any(det):
+        ax.plot(mid[det], y[det], "o-", color=color, label=label, lw=1.2)
+    else:
+        ax.plot([], [], "o-", color=color, label=label)
+
+    if np.any(~det):
+        has_undetected = True
+        ax.plot(
+            mid[~det], y[~det],
+            marker="o", fillstyle="none", ls="--", lw=1.0,
+            color=color, alpha=0.7,
+        )
+
+    ax.set_xlabel(r"log $M_\star$ [$M_\odot$]")
+    ax.set_ylabel(ylab)
+    handles, labels = ax.get_legend_handles_labels()
+    from matplotlib.lines import Line2D
+    handles.append(Line2D(
+        [], [], color="k", marker="o", ls="-", lw=1.2,
+        label=det_label,
+    ))
+    labels.append(det_label)
+    if has_undetected:
+        handles.append(Line2D(
+            [], [], color="k", marker="o", fillstyle="none", ls="--",
+            lw=1.0, alpha=0.7, label=undet_label,
+        ))
+        labels.append(undet_label)
+    ax.legend(handles, labels, frameon=False, fontsize=7)
+    if title:
+        ax.set_title(title, fontsize=10)
+    return True
+
+
+def _new_result_record(mlo, mhi, token, ew_min, ew_max, nobj,
+                       density_diagnostic, fix_ne):
+    """Initialize a results dict for one stack bin."""
+    rec = {
+        "MSTAR_MIN": mlo, "MSTAR_MAX": mhi,
+        "EW_MIN": ew_min,
+        "EW_MAX": ew_max if np.isfinite(ew_max) else -1.0,
+        "EW_TOKEN": token,
+        "NOBJ": nobj,
+        "DENSITY_DIAGNOSTIC": density_diagnostic,
+        "FIX_NE100": fix_ne,
+        "DETECTED_7LINE": False,
+        "DETECTED_HAHB": False,
+        "MEAN_FIT_SUCCESS": False,
+        "N_BOOT_TOTAL": 0,
+        "N_BOOT_PASS_GATE": 0,
+        "N_BOOT_FIT": 0,
+        "BOOT_ERR_RELIABLE": False,
+        "N_RATIOS": 0,
+        "LOGZ": np.nan,
+        "OBS_HA_HB": np.nan,
+        "OBS_HA_HB_ERR": np.nan,
+        "OBS_OII_DOUBLET": np.nan,
+        "OBS_OII_DOUBLET_ERR": np.nan,
+        "OBS_SII_DOUBLET": np.nan,
+        "OBS_SII_DOUBLET_ERR": np.nan,
+        "HA_HB_INTRINSIC": np.nan,
+        "HA_HB_INTRINSIC_ERR": np.nan,
+        "HA_HB_INTRINSIC_ERR_LO": np.nan,
+        "HA_HB_INTRINSIC_ERR_HI": np.nan,
+    }
+    for _, up in PARAM_MAP:
+        rec[up] = np.nan
+        rec[f"{up}_ERR"] = np.nan
+        rec[f"{up}_ERR_LO"] = np.nan
+        rec[f"{up}_ERR_HI"] = np.nan
+        rec[f"{up}_MEANFIT_LO"] = np.nan
+        rec[f"{up}_MEANFIT_HI"] = np.nan
+    return rec
+
+
+def process_one_bin(fpath, parsed, nobj, args, te_line_names, te_min_lines,
+                    fixed_ne, density_diagnostic, compute_direct_metallicities):
+    """Process one FastSpec stack file; return one results dict."""
+    mlo, mhi, token, ew_min, ew_max = parsed
+
+    ew_hi_str = f"{ew_max:.1f}" if ew_max >= 0 and np.isfinite(ew_max) else "inf"
+    if token == EW_TOKEN_MSTAR_ONLY:
+        print(f"\n--- log M*=[{mlo:.2f},{mhi:.2f}] | mass-only | NOBJ={nobj} ---")
+    else:
+        print(f"\n--- log M*=[{mlo:.2f},{mhi:.2f}] | {token} "
+              f"(EW in ({ew_min:.1f},{ew_hi_str}]) | NOBJ={nobj} ---")
+
+    try:
+        t = Table.read(fpath, hdu=FASTSPEC_HDU)
+    except Exception as e:
+        print(f"    Could not read hdu={FASTSPEC_HDU}: {e}; skipping.")
+        return None
+
+    if len(t) == 0:
+        print("    Empty fastspec table; skipping.")
+        return None
+
+    # Observed Balmer decrement from the mean stack (row 0), in the SAME
+    # line-flux family as the fit/gate (--line-flux-type). FLUX (Gaussian) is
+    # the reliable measurement; this also keeps the observed decrement
+    # consistent with the FLUX-based A_V from compute_direct_metallicities.
+    obs_ha_hb, obs_err = measure_obs_line_ratio(
+        t[[0]], "HALPHA", "HBETA", args.line_flux_type,
+    )
+    obs_oii, obs_oii_err = measure_obs_line_ratio(
+        t[[0]], "OII_3729", "OII_3726", args.line_flux_type,
+    )
+    obs_sii, obs_sii_err = measure_obs_line_ratio(
+        t[[0]], "SII_6716", "SII_6731", args.line_flux_type,
+    )
+
+    gate_mask = line_snr_mask(
+        t, line_names=te_line_names,
+        snr_val=SNR_VAL, min_lines=te_min_lines, min_flux=MIN_FLUX,
+        line_flux_type=args.line_flux_type,
+    )
+    detected = bool(gate_mask[0])
+
+    # Balmer-decrement detection gate (Halpha + Hbeta only). Independent of the
+    # 7-line TE/auroral gate: a metal-rich, high-mass stack can have an
+    # excellent Balmer decrement while failing the OIII 4363 gate. Used to style
+    # the observed Balmer-decrement plot so those bins are not mislabeled.
+    hahb_gate = line_snr_mask(
+        t, line_names=["HALPHA", "HBETA"],
+        snr_val=SNR_VAL, min_lines=2, min_flux=MIN_FLUX,
+        line_flux_type=args.line_flux_type,
+    )
+    detected_hahb = bool(hahb_gate[0])
+
+    rec = _new_result_record(
+        mlo, mhi, token, ew_min, ew_max, nobj,
+        density_diagnostic, args.fix_ne100,
+    )
+    rec["OBS_HA_HB"] = obs_ha_hb
+    rec["OBS_HA_HB_ERR"] = obs_err
+    rec["OBS_OII_DOUBLET"] = obs_oii
+    rec["OBS_OII_DOUBLET_ERR"] = obs_oii_err
+    rec["OBS_SII_DOUBLET"] = obs_sii
+    rec["OBS_SII_DOUBLET_ERR"] = obs_sii_err
+    rec["DETECTED_7LINE"] = detected
+    rec["DETECTED_HAHB"] = detected_hahb
+
+    if not detected:
+        print(f"    Mean stack does NOT detect all {te_min_lines} lines "
+              f"(SNR>{SNR_VAL}, flux>{MIN_FLUX:g}); recording as undetected.")
+        return rec
+
+    n_boot_raw = max(len(t) - 1, 0)
+    boot_pass_idx = np.where(gate_mask[1:])[0] + 1
+    fit_idx = [0] + boot_pass_idx.tolist()
+    fit_tab = t[fit_idx]
+    rec["N_BOOT_TOTAL"] = int(n_boot_raw)
+    rec["N_BOOT_PASS_GATE"] = int(len(boot_pass_idx))
+
+    print(f"    Detected. Fitting 1 mean + "
+          f"{rec['N_BOOT_PASS_GATE']}/{n_boot_raw} gate-passing bootstrap "
+          f"row(s) with UltraNest ...")
+    res = compute_direct_metallicities(
+        fit_tab,
+        args.line_flux_type,
+        n_jobs=N_JOBS,
+        min_num_live_points=MIN_NUM_LIVE_POINTS,
+        sampler_kwargs=SAMPLER_KWARGS,
+        use_informative_priors=USE_INFORMATIVE_PRIORS,
+        density_diagnostic=density_diagnostic,
+        fixed_ne=fixed_ne,
+        verbose=False,
+        verbose_sampler=False,
+    )
+
+    mean_fit = res[0]
+    rec["MEAN_FIT_SUCCESS"] = bool(mean_fit["fit_success"])
+    rec["N_RATIOS"] = int(mean_fit["n_ratios"])
+    rec["LOGZ"] = float(mean_fit["logz"])
+
+    if len(res) > 1:
+        boot = res[1:]
+        ok = np.asarray(boot["fit_success"], dtype=bool) & np.isfinite(
+            np.asarray(boot["twelve_log_OH"], dtype=float)
+        )
+        boot_ok = boot[ok]
+    else:
+        boot_ok = res[:0]
+    rec["N_BOOT_FIT"] = int(len(boot_ok))
+    rec["BOOT_ERR_RELIABLE"] = rec["N_BOOT_FIT"] >= MIN_N_BOOT_FIT
+
+    for lo_name, up in PARAM_MAP:
+        _fill_param_errors(rec, lo_name, up, mean_fit, boot_ok)
+
+    _fill_intrinsic_ha_hb_errors(rec, mean_fit, boot_ok)
+
+    print(f"    -> 12+log(O/H) = {rec['TWELVE_LOG_OH']:.3f} "
+          f"(+{rec['TWELVE_LOG_OH_ERR_HI']:.3f}/-{rec['TWELVE_LOG_OH_ERR_LO']:.3f}), "
+          f"A_V = {rec['AV']:.3f} "
+          f"(+{rec['AV_ERR_HI']:.3f}/-{rec['AV_ERR_LO']:.3f}); "
+          f"N_boot_fit={rec['N_BOOT_FIT']}/{rec['N_BOOT_TOTAL']}, "
+          f"BOOT_ERR_RELIABLE={rec['BOOT_ERR_RELIABLE']}")
+    return rec
+
+
+def _results_col_order():
+    col_order = [
+        "MSTAR_MIN", "MSTAR_MAX", "EW_MIN", "EW_MAX", "EW_TOKEN", "NOBJ",
+        "DENSITY_DIAGNOSTIC", "FIX_NE100", "DETECTED_7LINE", "DETECTED_HAHB",
+        "MEAN_FIT_SUCCESS",
+        "N_BOOT_TOTAL", "N_BOOT_PASS_GATE", "N_BOOT_FIT", "BOOT_ERR_RELIABLE",
+        "N_RATIOS", "LOGZ",
+        "OBS_HA_HB", "OBS_HA_HB_ERR",
+        "OBS_OII_DOUBLET", "OBS_OII_DOUBLET_ERR",
+        "OBS_SII_DOUBLET", "OBS_SII_DOUBLET_ERR",
+        "HA_HB_INTRINSIC", "HA_HB_INTRINSIC_ERR",
+        "HA_HB_INTRINSIC_ERR_LO", "HA_HB_INTRINSIC_ERR_HI",
+    ]
+    for _, up in PARAM_MAP:
+        col_order += [up, f"{up}_ERR", f"{up}_ERR_LO", f"{up}_ERR_HI",
+                      f"{up}_MEANFIT_LO", f"{up}_MEANFIT_HI"]
+    return col_order
+
+
+def run_product(product_label, stack_path, plot_dir, out_basename,
+                parse_fn, read_nobj_fn, args, te_line_names, te_min_lines,
+                fixed_ne, density_diagnostic, compute_direct_metallicities,
+                plot_mode="ew"):
+    """Glob FastSpec stack outputs, fit direct method, write table + plots."""
+    pattern = os.path.join(stack_path, INPUT_GLOB)
+    files = sorted(glob.glob(pattern))
+    files = [f for f in files if "fastspec_fastspec_" not in os.path.basename(f)]
+    print(f"\n[{product_label}] Found {len(files)} FastSpecFit stack outputs "
+          f"in {stack_path}")
+    if len(files) == 0:
+        print(f"    Nothing matches {pattern}; skipping {product_label}.")
+        return 0
+
+    rows = []
+    for fpath in files:
+        parsed = parse_fn(fpath, stack_path)
+        if parsed is None:
+            print(f"  ! Skipping unparsable filename: {os.path.basename(fpath)}")
+            continue
+        mlo, mhi, token, ew_min, ew_max = parsed
+        nobj = read_nobj_fn(mlo, mhi, token, stack_path)
+        rec = process_one_bin(
+            fpath, parsed, nobj, args, te_line_names, te_min_lines,
+            fixed_ne, density_diagnostic, compute_direct_metallicities,
+        )
+        if rec is not None:
+            rows.append(rec)
+
+    if len(rows) == 0:
+        print(f"    [{product_label}] No bins processed; nothing to write.")
+        return 1
+
+    out_tab = Table(rows)
+    out_tab = out_tab[[c for c in _results_col_order() if c in out_tab.colnames]]
+
+    out_fits = os.path.join(stack_path, f"{out_basename}.fits")
+    out_ecsv = os.path.join(stack_path, f"{out_basename}.ecsv")
+    out_tab.write(out_fits, overwrite=True)
+    out_tab.write(out_ecsv, format="ascii.ecsv", overwrite=True)
+
+    n_det = int(np.sum(out_tab["DETECTED_7LINE"]))
+    n_fit = int(np.sum(out_tab["MEAN_FIT_SUCCESS"]))
+    print(f"    [{product_label}] Wrote {len(out_tab)} bin rows "
+          f"({n_det} detected, {n_fit} with successful mean-stack fit):")
+    print(f"    {out_fits}")
+    print(f"    {out_ecsv}")
+
+    make_all_plots(out_tab, plot_dir, plot_mode=plot_mode)
+    print_density_diagnostic_verification(out_tab, density_diagnostic)
+    return 0
+
+
 # =============================================================================
 # MAIN
 # =============================================================================
@@ -567,8 +905,8 @@ def _plot_vs_mstar_by_ew(tab, ycol, yerr_lo, yerr_hi, ylab, ax, title=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description=(
-            "Direct-method nebular abundances for M* x H-alpha-EW stacked "
-            "spectra from FastSpecFit stack outputs."
+            "Direct-method nebular abundances for stacked dwarf spectra "
+            "from FastSpecFit stack outputs (EW-binned and/or mass-only)."
         ),
     )
     parser.add_argument(
@@ -579,6 +917,12 @@ def main(argv=None):
             "FastSpec line-flux family for line detection and direct-method "
             "fits (FLUX Gaussian or BOXFLUX boxcar). Required."
         ),
+    )
+    parser.add_argument(
+        "--products",
+        default="both",
+        choices=("ew", "mstar_only", "both"),
+        help="Which stack products to analyze (default: both).",
     )
     parser.add_argument(
         "--density-diagnostic",
@@ -610,14 +954,9 @@ def main(argv=None):
     import sfr_and_metallicity as sam
     sam.line_flux_type = args.line_flux_type
 
-    plot_dir = os.path.join(STACK_PATH, "plots")
-
     from pn_functions import compute_direct_metallicities
 
-    pattern = os.path.join(STACK_PATH, INPUT_GLOB)
-    files = sorted(glob.glob(pattern))
-    files = [f for f in files if "fastspec_fastspec_" not in os.path.basename(f)]
-    print(f"[1] Found {len(files)} FastSpecFit stack outputs in {STACK_PATH}")
+    print("[0] Direct-method metallicity configuration")
     if fix_ne:
         print(f"    FIX n_e: holding n_e = {FIXED_NE_VALUE:g} cm^-3 fixed "
               f"(density doublet dropped from fit AND gate; "
@@ -627,7 +966,7 @@ def main(argv=None):
               f"({te_min_lines} lines required for detection gate)")
     print(f"    Detection gate: SNR > {SNR_VAL}, flux > {MIN_FLUX:g} in all "
           f"{te_min_lines} lines, on the MEAN stack (row 0) only; bootstrap "
-          f"rows passing the same gate are fit for the error.")
+          f"rows passing the same gate are fit for the error (EW stacks only).")
     print(
         "    NOTE: propagated measurement ivar on row-0 stacks may increase "
         "DETECTED_7LINE pass rate vs the old 1/boot_std^2 ivar (expected)."
@@ -636,194 +975,60 @@ def main(argv=None):
         f"    UltraNest: n_jobs={N_JOBS} parallelizes per-row fits "
         f"(~{N_BOOT_TOTAL + 1} rows/bin when bootstrap stacks are present)."
     )
-    if len(files) == 0:
-        print(f"    Nothing matches {pattern}; exiting.")
-        return 1
+    print(f"    Products: {args.products}")
 
-    rows = []
+    rc = 0
 
-    for fpath in files:
-        parsed = parse_bin_from_filename(fpath)
-        if parsed is None:
-            print(f"  ! Skipping unparsable filename: {os.path.basename(fpath)}")
-            continue
-        mlo, mhi, token, ew_min, ew_max = parsed
-        nobj = read_nobj_from_input_stack(mlo, mhi, token)
-
-        ew_hi_str = f"{ew_max:.1f}" if np.isfinite(ew_max) else "inf"
-        print(f"\n--- log M*=[{mlo:.2f},{mhi:.2f}] | {token} "
-              f"(EW in ({ew_min:.1f},{ew_hi_str}]) | NOBJ={nobj} ---")
-
-        try:
-            t = Table.read(fpath, hdu=FASTSPEC_HDU)
-        except Exception as e:
-            print(f"    Could not read hdu={FASTSPEC_HDU}: {e}; skipping.")
-            continue
-
-        if len(t) == 0:
-            print("    Empty fastspec table; skipping.")
-            continue
-
-        obs_ha_hb, obs_err, _ = measure_obs_ha_hb(t[[0]])
-        # [O II] 3729/3726 (standard convention: decreases with n_e, mirrors
-        # [S II] 6716/6731). Numerator/denominator order matches DENSITY_RATIO_SPECS.
-        obs_oii, obs_oii_err = measure_obs_line_ratio(
-            t[[0]], "OII_3729", "OII_3726", args.line_flux_type,
-        )
-        obs_sii, obs_sii_err = measure_obs_line_ratio(
-            t[[0]], "SII_6716", "SII_6731", args.line_flux_type,
-        )
-
-        # Gate every row (mean + bootstrap) with the same SNR/flux cut. Row 0
-        # is the total/mean stack; rows 1.. are the bootstrap realizations.
-        gate_mask = line_snr_mask(
-            t, line_names=te_line_names,
-            snr_val=SNR_VAL, min_lines=te_min_lines, min_flux=MIN_FLUX,
-            line_flux_type=args.line_flux_type,
-        )
-        detected = bool(gate_mask[0])
-
-        rec = {
-            "MSTAR_MIN": mlo, "MSTAR_MAX": mhi,
-            "EW_MIN": ew_min,
-            "EW_MAX": ew_max if np.isfinite(ew_max) else -1.0,
-            "EW_TOKEN": token,
-            "NOBJ": nobj,
-            "DENSITY_DIAGNOSTIC": density_diagnostic,
-            "FIX_NE100": fix_ne,
-            "DETECTED_7LINE": detected,
-            "MEAN_FIT_SUCCESS": False,
-            "N_BOOT_TOTAL": 0,
-            "N_BOOT_PASS_GATE": 0,
-            "N_BOOT_FIT": 0,
-            "BOOT_ERR_RELIABLE": False,
-            "N_RATIOS": 0,
-            "LOGZ": np.nan,
-            "OBS_HA_HB": obs_ha_hb,
-            "OBS_HA_HB_ERR": obs_err,
-            "OBS_OII_DOUBLET": obs_oii,
-            "OBS_OII_DOUBLET_ERR": obs_oii_err,
-            "OBS_SII_DOUBLET": obs_sii,
-            "OBS_SII_DOUBLET_ERR": obs_sii_err,
-            "HA_HB_INTRINSIC": np.nan,
-            "HA_HB_INTRINSIC_ERR": np.nan,
-            "HA_HB_INTRINSIC_ERR_LO": np.nan,
-            "HA_HB_INTRINSIC_ERR_HI": np.nan,
-        }
-        for _, up in PARAM_MAP:
-            rec[up] = np.nan
-            rec[f"{up}_ERR"] = np.nan
-            rec[f"{up}_ERR_LO"] = np.nan
-            rec[f"{up}_ERR_HI"] = np.nan
-            rec[f"{up}_MEANFIT_LO"] = np.nan
-            rec[f"{up}_MEANFIT_HI"] = np.nan
-
-        if not detected:
-            print(f"    Mean stack does NOT detect all {te_min_lines} lines "
-                  f"(SNR>{SNR_VAL}, flux>{MIN_FLUX:g}); recording as undetected.")
-            rows.append(rec)
-            continue
-
-        # Fit ONLY the mean stack (row 0) plus the bootstrap rows that
-        # independently pass the same line gate -- bootstrap realizations that
-        # fail the gate are dropped before fitting, so no nested-sampling cycles
-        # are spent on rows that wouldn't have been detected.
-        n_boot_raw = max(len(t) - 1, 0)
-        boot_pass_idx = np.where(gate_mask[1:])[0] + 1   # +1: skip mean row 0
-        fit_idx = [0] + boot_pass_idx.tolist()
-        fit_tab = t[fit_idx]
-        rec["N_BOOT_TOTAL"] = int(n_boot_raw)
-        rec["N_BOOT_PASS_GATE"] = int(len(boot_pass_idx))
-
-        print(f"    Detected. Fitting 1 mean + "
-              f"{rec['N_BOOT_PASS_GATE']}/{n_boot_raw} gate-passing bootstrap "
-              f"row(s) with UltraNest ...")
-        res = compute_direct_metallicities(
-            fit_tab,
-            args.line_flux_type,
-            n_jobs=N_JOBS,
-            min_num_live_points=MIN_NUM_LIVE_POINTS,
-            sampler_kwargs=SAMPLER_KWARGS,
-            use_informative_priors=USE_INFORMATIVE_PRIORS,
-            density_diagnostic=density_diagnostic,
+    if args.products in ("ew", "both"):
+        rc = max(rc, run_product(
+            product_label="EW-binned",
+            stack_path=STACK_PATH,
+            plot_dir=os.path.join(STACK_PATH, "plots"),
+            out_basename=OUT_BASENAME,
+            parse_fn=parse_bin_from_filename,
+            read_nobj_fn=read_nobj_from_input_stack,
+            args=args,
+            te_line_names=te_line_names,
+            te_min_lines=te_min_lines,
             fixed_ne=fixed_ne,
-            verbose=False,
-            verbose_sampler=False,
-        )
+            density_diagnostic=density_diagnostic,
+            compute_direct_metallicities=compute_direct_metallicities,
+            plot_mode="ew",
+        ))
 
-        mean_fit = res[0]
-        rec["MEAN_FIT_SUCCESS"] = bool(mean_fit["fit_success"])
-        rec["N_RATIOS"] = int(mean_fit["n_ratios"])
-        rec["LOGZ"] = float(mean_fit["logz"])
+    if args.products in ("mstar_only", "both"):
+        rc = max(rc, run_product(
+            product_label="Mass-only",
+            stack_path=MSTAR_ONLY_PATH,
+            plot_dir=os.path.join(MSTAR_ONLY_PATH, "plots"),
+            out_basename=OUT_BASENAME,
+            parse_fn=parse_bin_from_filename_mstar_only,
+            read_nobj_fn=lambda mlo, mhi, token, stack_path: (
+                read_nobj_from_input_stack_mstar_only(mlo, mhi, stack_path)
+            ),
+            args=args,
+            te_line_names=te_line_names,
+            te_min_lines=te_min_lines,
+            fixed_ne=fixed_ne,
+            density_diagnostic=density_diagnostic,
+            compute_direct_metallicities=compute_direct_metallicities,
+            plot_mode="single",
+        ))
 
-        if len(res) > 1:
-            boot = res[1:]
-            ok = np.asarray(boot["fit_success"], dtype=bool) & np.isfinite(
-                np.asarray(boot["twelve_log_OH"], dtype=float)
-            )
-            boot_ok = boot[ok]
-        else:
-            boot_ok = res[:0]
-        rec["N_BOOT_FIT"] = int(len(boot_ok))
-        rec["BOOT_ERR_RELIABLE"] = rec["N_BOOT_FIT"] >= MIN_N_BOOT_FIT
-
-        for lo_name, up in PARAM_MAP:
-            _fill_param_errors(rec, lo_name, up, mean_fit, boot_ok)
-
-        _fill_intrinsic_ha_hb_errors(rec, mean_fit, boot_ok)
-
-        print(f"    -> 12+log(O/H) = {rec['TWELVE_LOG_OH']:.3f} "
-              f"(+{rec['TWELVE_LOG_OH_ERR_HI']:.3f}/-{rec['TWELVE_LOG_OH_ERR_LO']:.3f}), "
-              f"A_V = {rec['AV']:.3f} "
-              f"(+{rec['AV_ERR_HI']:.3f}/-{rec['AV_ERR_LO']:.3f}); "
-              f"N_boot_fit={rec['N_BOOT_FIT']}/{rec['N_BOOT_TOTAL']}, BOOT_ERR_RELIABLE={rec['BOOT_ERR_RELIABLE']}")
-        rows.append(rec)
-
-    if len(rows) == 0:
-        print("\n[2] No bins processed; nothing to write.")
-        return 1
-
-    out_tab = Table(rows)
-    col_order = [
-        "MSTAR_MIN", "MSTAR_MAX", "EW_MIN", "EW_MAX", "EW_TOKEN", "NOBJ",
-        "DENSITY_DIAGNOSTIC", "FIX_NE100", "DETECTED_7LINE", "MEAN_FIT_SUCCESS",
-        "N_BOOT_TOTAL", "N_BOOT_PASS_GATE", "N_BOOT_FIT", "BOOT_ERR_RELIABLE",
-        "N_RATIOS", "LOGZ",
-        "OBS_HA_HB", "OBS_HA_HB_ERR",
-        "OBS_OII_DOUBLET", "OBS_OII_DOUBLET_ERR",
-        "OBS_SII_DOUBLET", "OBS_SII_DOUBLET_ERR",
-        "HA_HB_INTRINSIC", "HA_HB_INTRINSIC_ERR",
-        "HA_HB_INTRINSIC_ERR_LO", "HA_HB_INTRINSIC_ERR_HI",
-    ]
-    for _, up in PARAM_MAP:
-        col_order += [up, f"{up}_ERR", f"{up}_ERR_LO", f"{up}_ERR_HI",
-                      f"{up}_MEANFIT_LO", f"{up}_MEANFIT_HI"]
-    out_tab = out_tab[[c for c in col_order if c in out_tab.colnames]]
-
-    out_fits = os.path.join(STACK_PATH, f"{OUT_BASENAME}.fits")
-    out_ecsv = os.path.join(STACK_PATH, f"{OUT_BASENAME}.ecsv")
-    out_tab.write(out_fits, overwrite=True)
-    out_tab.write(out_ecsv, format="ascii.ecsv", overwrite=True)
-
-    n_det = int(np.sum(out_tab["DETECTED_7LINE"]))
-    n_fit = int(np.sum(out_tab["MEAN_FIT_SUCCESS"]))
-    print(f"\n[2] Wrote {len(out_tab)} bin rows "
-          f"({n_det} detected, {n_fit} with successful mean-stack fit):")
-    print(f"    {out_fits}")
-    print(f"    {out_ecsv}")
-
-    make_all_plots(out_tab, plot_dir)
-    print_density_diagnostic_verification(out_tab, density_diagnostic)
-
-    print("\n[3] Done.")
-    return 0
+    print("\n[Done]")
+    return rc
 
 
-def _plot_obs_vs_mstar_by_ew(tab, ycol, yerr_col, ylab, ax, title=None):
+def _plot_obs_vs_mstar_by_ew(tab, ycol, yerr_col, ylab, ax, title=None,
+                             det_col="DETECTED_7LINE",
+                             det_label="TE lines detected",
+                             undet_label="ratio only (TE gate failed)"):
     """Observed quantity vs log M* midpoint, one series per EW_TOKEN.
 
-    Solid markers: bin passed the TE line-SNR gate (DETECTED_7LINE).
-    Dashed hollow markers: finite ratio but TE gate failed (not fitted).
+    Solid markers: bin passed the ``det_col`` detection gate.
+    Dashed hollow markers: finite ratio but gate failed (not styled as detected).
+    Use ``DETECTED_HAHB`` for the Balmer decrement and ``DETECTED_7LINE`` for
+    TE-fit-related quantities.
     """
     finite = np.isfinite(tab[ycol])
     if not np.any(finite):
@@ -844,7 +1049,7 @@ def _plot_obs_vs_mstar_by_ew(tab, ycol, yerr_col, ylab, ax, title=None):
         )
         y = np.asarray(sub[ycol])
         yerr = np.asarray(sub[yerr_col])
-        det = np.asarray(sub["DETECTED_7LINE"], dtype=bool)
+        det = np.asarray(sub[det_col], dtype=bool)
         has_err = np.isfinite(yerr) & (yerr > 0)
 
         if np.any(det & has_err):
@@ -876,35 +1081,35 @@ def _plot_obs_vs_mstar_by_ew(tab, ycol, yerr_col, ylab, ax, title=None):
     from matplotlib.lines import Line2D
     handles.append(Line2D(
         [], [], color="k", marker="o", ls="-", lw=1.2,
-        label="TE lines detected",
+        label=det_label,
     ))
-    labels.append("TE lines detected")
+    labels.append(det_label)
     if has_undetected:
         handles.append(Line2D(
             [], [], color="k", marker="o", fillstyle="none", ls="--",
-            lw=1.0, alpha=0.7, label="ratio only (TE gate failed)",
+            lw=1.0, alpha=0.7, label=undet_label,
         ))
-        labels.append("ratio only (TE gate failed)")
+        labels.append(undet_label)
     ax.legend(handles, labels, frameon=False, fontsize=7)
     if title:
         ax.set_title(title, fontsize=10)
     return True
 
 
-def make_all_plots(out_tab, plot_dir):
+def make_all_plots(out_tab, plot_dir, plot_mode="ew"):
     """Write oh_av, te_ne_hahb, obs_hahb, and doublet-ratio vs M* figures."""
     for plot_fn in (
         make_oh_av_plot, make_te_ne_hahb_plot, make_obs_hahb_plot,
         make_doublet_ratios_vs_mstar_plot, make_ne_diagnostic_plot,
     ):
         try:
-            plot_fn(out_tab, plot_dir)
+            plot_fn(out_tab, plot_dir, plot_mode=plot_mode)
         except Exception as e:
             print(f"    ({plot_fn.__name__} skipped: {e})")
 
 
-def make_oh_av_plot(out_tab, plot_dir):
-    """12+log(O/H) and A_V vs M* (bin midpoint), one series per EW bin."""
+def make_oh_av_plot(out_tab, plot_dir, plot_mode="ew"):
+    """12+log(O/H) and A_V vs M* (bin midpoint)."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -916,16 +1121,21 @@ def make_oh_av_plot(out_tab, plot_dir):
         print("    (no successful fits; skipping oh_av_vs_mstar)")
         return
 
+    plot_vs_mstar = (
+        _plot_vs_mstar_single if plot_mode == "single" else _plot_vs_mstar_by_ew
+    )
+    title_suffix = "mass-only stacks" if plot_mode == "single" else "EW-binned stacks"
+
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     for col, ax, ylab in [
         ("TWELVE_LOG_OH", axes[0], "12 + log(O/H)"),
         ("AV", axes[1], r"$A_V$ [mag]"),
     ]:
-        _plot_vs_mstar_by_ew(
+        plot_vs_mstar(
             good, col, f"{col}_ERR_LO", f"{col}_ERR_HI", ylab, ax,
         )
 
-    fig.suptitle("Direct-method stacks: trends vs stellar mass")
+    fig.suptitle(f"Direct-method {title_suffix}: trends vs stellar mass")
     fig.tight_layout(rect=[0, 0, 1, 0.96])
     out_png = os.path.join(plot_dir, "oh_av_vs_mstar.png")
     fig.savefig(out_png, dpi=150)
@@ -933,7 +1143,7 @@ def make_oh_av_plot(out_tab, plot_dir):
     print(f"    Saved {os.path.basename(out_png)}")
 
 
-def make_te_ne_hahb_plot(out_tab, plot_dir):
+def make_te_ne_hahb_plot(out_tab, plot_dir, plot_mode="ew"):
     """n_e, T_e, and intrinsic Halpha/Hbeta vs M* for successful fits."""
     import matplotlib
     matplotlib.use("Agg")
@@ -945,6 +1155,11 @@ def make_te_ne_hahb_plot(out_tab, plot_dir):
     if len(good) == 0:
         print("    (no successful fits; skipping te_ne_hahb_vs_mstar)")
         return
+
+    plot_vs_mstar = (
+        _plot_vs_mstar_single if plot_mode == "single" else _plot_vs_mstar_by_ew
+    )
+    title_suffix = "mass-only stacks" if plot_mode == "single" else "EW-binned stacks"
 
     dens_diag = "SII"
     if "DENSITY_DIAGNOSTIC" in good.colnames and len(good) > 0:
@@ -962,12 +1177,12 @@ def make_te_ne_hahb_plot(out_tab, plot_dir):
         ("TE_OIII", axes[1], r"$T_e$ [K]"),
         ("HA_HB_INTRINSIC", axes[2], r"H$\alpha$/H$\beta$ (intrinsic)"),
     ]:
-        _plot_vs_mstar_by_ew(
+        plot_vs_mstar(
             good, col, f"{col}_ERR_LO", f"{col}_ERR_HI", ylab, ax,
         )
 
     fig.suptitle(
-        f"Direct-method stacks ($n_e$ from {dens_diag}): "
+        f"Direct-method {title_suffix} ($n_e$ from {dens_diag}): "
         r"$n_e$, $T_e$, intrinsic Balmer ratio"
     )
     fig.tight_layout(rect=[0, 0, 1, 0.96])
@@ -977,27 +1192,38 @@ def make_te_ne_hahb_plot(out_tab, plot_dir):
     print(f"    Saved {os.path.basename(out_png)}")
 
 
-def make_obs_hahb_plot(out_tab, plot_dir):
-    """Observed HALPHA_BOXFLUX / HBETA_BOXFLUX vs M* (all finite ratios)."""
+def make_obs_hahb_plot(out_tab, plot_dir, plot_mode="ew"):
+    """Observed Halpha/Hbeta vs M* (all finite ratios), in the --line-flux-type
+    family. Solid = Halpha+Hbeta detected (DETECTED_HAHB); hollow dashed =
+    ratio measured but Hbeta S/N below the gate."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     os.makedirs(plot_dir, exist_ok=True)
 
+    plot_obs = (
+        _plot_obs_vs_mstar_single if plot_mode == "single"
+        else _plot_obs_vs_mstar_by_ew
+    )
+    title_suffix = "mass-only stacks" if plot_mode == "single" else "EW-binned stacks"
+
     fig, ax = plt.subplots(figsize=(10, 5))
-    if not _plot_obs_vs_mstar_by_ew(
+    if not plot_obs(
         out_tab, "OBS_HA_HB", "OBS_HA_HB_ERR",
-        r"H$\alpha$/H$\beta$ (observed boxcar)", ax,
+        r"H$\alpha$/H$\beta$ (observed)", ax,
         title="Observed Balmer decrement (mean stack)",
+        det_col="DETECTED_HAHB",
+        det_label=r"H$\alpha$+H$\beta$ detected",
+        undet_label=r"ratio only (H$\beta$ S/N low)",
     ):
         plt.close(fig)
         print("    (no finite OBS_HA_HB; skipping obs_hahb_vs_mstar)")
         return
 
     fig.suptitle(
-        "Observed Balmer decrement (mean stack); "
-        "dashed = ratio measured but TE lines not all detected",
+        f"Observed Balmer decrement ({title_suffix}); "
+        r"dashed = ratio measured but H$\beta$ S/N below gate",
         fontsize=10,
     )
     fig.tight_layout(rect=[0, 0, 1, 0.96])
@@ -1007,13 +1233,19 @@ def make_obs_hahb_plot(out_tab, plot_dir):
     print(f"    Saved {os.path.basename(out_png)}")
 
 
-def make_doublet_ratios_vs_mstar_plot(out_tab, plot_dir):
+def make_doublet_ratios_vs_mstar_plot(out_tab, plot_dir, plot_mode="ew"):
     """Observed [S II] and [O II] doublet ratios vs M* (all finite ratios)."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     os.makedirs(plot_dir, exist_ok=True)
+
+    plot_obs = (
+        _plot_obs_vs_mstar_single if plot_mode == "single"
+        else _plot_obs_vs_mstar_by_ew
+    )
+    title_suffix = "mass-only stacks" if plot_mode == "single" else "EW-binned stacks"
 
     has_sii = np.isfinite(out_tab["OBS_SII_DOUBLET"])
     has_oii = np.isfinite(out_tab["OBS_OII_DOUBLET"])
@@ -1029,12 +1261,12 @@ def make_doublet_ratios_vs_mstar_plot(out_tab, plot_dir):
          axes[1], r"[O II] 3729/3726 (observed FLUX)"),
     ]
     for ycol, yerr_col, ax, ylab in panels:
-        if not _plot_obs_vs_mstar_by_ew(out_tab, ycol, yerr_col, ylab, ax):
+        if not plot_obs(out_tab, ycol, yerr_col, ylab, ax):
             ax.set_title(f"{ylab} (no finite values)", fontsize=10)
             ax.axis("off")
 
     fig.suptitle(
-        "Density-diagnostic doublet ratios (mean stack); "
+        f"Density-diagnostic doublet ratios ({title_suffix}); "
         "dashed = ratio measured but TE lines not all detected",
         fontsize=10,
     )
@@ -1045,7 +1277,7 @@ def make_doublet_ratios_vs_mstar_plot(out_tab, plot_dir):
     print(f"    Saved {os.path.basename(out_png)}")
 
 
-def make_ne_diagnostic_plot(out_tab, plot_dir):
+def make_ne_diagnostic_plot(out_tab, plot_dir, plot_mode="ew"):
     """Density-diagnostic ratio (y) vs electron density (x).
 
     Two panels ([S II] 6716/6731 and [O II] 3729/3726). Each shows the PyNeb
@@ -1096,23 +1328,37 @@ def make_ne_diagnostic_plot(out_tab, plot_dir):
 
         ew_present = []
         if ycol in sub.colnames:
-            for token in EW_TOKENS:
-                rows = sub[np.asarray(sub["EW_TOKEN"]) == token]
-                drawn = False
-                for row in rows:
+            if plot_mode == "single":
+                for row in sub:
                     val = float(row[ycol]) if np.isfinite(row[ycol]) else np.nan
                     if not np.isfinite(val):
                         continue
-                    color = EW_COLORS.get(token, "0.3")
-                    ax.axhline(val, color=color, lw=1.0, alpha=0.85)
+                    ax.axhline(val, color=MSTAR_ONLY_COLOR, lw=1.0, alpha=0.85)
                     err = (float(row[yerr_col])
                            if yerr_col in row.colnames
                            and np.isfinite(row[yerr_col]) else np.nan)
                     if np.isfinite(err) and err > 0:
-                        ax.axhspan(val - err, val + err, color=color, alpha=0.10)
-                    drawn = True
-                if drawn:
-                    ew_present.append(token)
+                        ax.axhspan(val - err, val + err,
+                                   color=MSTAR_ONLY_COLOR, alpha=0.10)
+                ew_present = ["all"]
+            else:
+                for token in EW_TOKENS:
+                    rows = sub[np.asarray(sub["EW_TOKEN"]) == token]
+                    drawn = False
+                    for row in rows:
+                        val = float(row[ycol]) if np.isfinite(row[ycol]) else np.nan
+                        if not np.isfinite(val):
+                            continue
+                        color = EW_COLORS.get(token, "0.3")
+                        ax.axhline(val, color=color, lw=1.0, alpha=0.85)
+                        err = (float(row[yerr_col])
+                               if yerr_col in row.colnames
+                               and np.isfinite(row[yerr_col]) else np.nan)
+                        if np.isfinite(err) and err > 0:
+                            ax.axhspan(val - err, val + err, color=color, alpha=0.10)
+                        drawn = True
+                    if drawn:
+                        ew_present.append(token)
 
         ax.set_xscale("log")
         ax.set_xlim(den_min, den_max)
@@ -1121,14 +1367,22 @@ def make_ne_diagnostic_plot(out_tab, plot_dir):
         ax.set_title(f"{tag} density diagnostic", fontsize=10)
 
         handles, labels = ax.get_legend_handles_labels()
-        for token in ew_present:
-            handles.append(Line2D([], [], color=EW_COLORS[token], lw=1.0))
-            labels.append(EW_BIN_LABELS.get(token, token))
+        if plot_mode == "single":
+            handles.append(Line2D([], [], color=MSTAR_ONLY_COLOR, lw=1.0))
+            labels.append("mass-only (all EW)")
+        else:
+            for token in ew_present:
+                handles.append(Line2D([], [], color=EW_COLORS[token], lw=1.0))
+                labels.append(EW_BIN_LABELS.get(token, token))
         ax.legend(handles, labels, frameon=False, fontsize=7)
 
+    legend_note = (
+        "mass-only stacks" if plot_mode == "single"
+        else "detected bins, colored by EW"
+    )
     fig.suptitle(
-        "Density-diagnostic ratio vs $n_e$: PyNeb model curves and observed "
-        "stack ratios (detected bins, colored by EW)",
+        f"Density-diagnostic ratio vs $n_e$: PyNeb model curves and observed "
+        f"stack ratios ({legend_note})",
         fontsize=10,
     )
     fig.tight_layout(rect=[0, 0, 1, 0.95])

@@ -2,8 +2,11 @@
 stack_mstar_haew_5pct.py
 ========================
 
+Two stacking products in one run (BGS_BRIGHT | BGS_FAINT | LOWZ combined):
+
+**Product A — M* x H-alpha EW (bootstrap):**
 Bootstrap-stacked spectra in log M_star bins (6 -> 9.25) crossed with three
-fixed H-alpha EW bins (BGS_BRIGHT | BGS_FAINT | LOWZ):
+fixed H-alpha EW bins:
 
 Mass edges: 6, 6.5, 7, 7.5, 8 (0.5 dex); 8.25, 8.5, 8.75, 9, 9.25 (0.25 dex).
 
@@ -11,7 +14,7 @@ Mass edges: 6, 6.5, 7, 7.5, 8 (0.5 dex); 8.25, 8.5, 8.75, 9, 9.25 (0.25 dex).
     2. 30 < EW <= 100 A
     3. EW > 100 A
 
-Detection cuts (applied globally before binning):
+Detection cuts (applied globally before EW binning):
   - HALPHA_EW * sqrt(HALPHA_EW_IVAR) >= 3
   - HALPHA_EW > 1 A
   - HALPHA_BOXFLUX * sqrt(HALPHA_BOXFLUX_IVAR) >= 3
@@ -20,16 +23,25 @@ Per (mass, EW) cell: stack only when N >= 50; otherwise skip (no pooled fallback
 
 Each output stack FITS has 1 central row (IS_MEAN=1) plus 200 bootstrap
 realizations (IS_MEAN=0), following the Scholte et al. recipe (200 samples).
-Row 0 carries propagated measurement ivar (not bootstrap std). Bootstrap std
-is kept as a diagnostic only (pickle + plots).
 
-Outputs (written to STACK_PATH; stale stack_ALL_*.fits, stacks_spec_*.pkl,
-and fastspec_stack_ALL_*.fits removed at the start of each run):
+**Product B — M* only (mean, no bootstrap):**
+Same mass bins, no EW sub-binning. Uses load_catalog cuts only (DWARF_MASKBIT,
+HALPHA_FLUX SNR > 3, HALPHA_FLUX > 1) — not the stricter H-alpha detection
+cuts above. No minimum N per bin. One mean coadd per mass bin.
+
+Outputs (written to STACK_PATH; stale files removed at the start of each run):
+
+  EW-binned (STACK_PATH/):
   - stacks_spec_ALL_mstar_{mlo}_{mhi}_{ewtoken}.pkl
   - stack_ALL_mstar_{mlo}_{mhi}_{ewtoken}.fits   (1 + 200 rows)
   - plots/overlay_mstar_{mlo}_{mhi}.png
   - plots/grid_all_stacks.png
   - plots/ivar_vs_bootstd_{label}.png  (validation, representative bins)
+
+  Mass-only (STACK_PATH/mstar_only/):
+  - stacks_spec_ALL_mstar_{mlo}_{mhi}.pkl
+  - stack_ALL_mstar_{mlo}_{mhi}.fits   (1 row)
+  - plots/overlay_all_mass_bins.png
 
 Usage:
     python stack_mstar_haew_5pct.py
@@ -55,6 +67,7 @@ from stack_explore import (
     load_spectra,
     get_sample_spectra_with_linenorm,
     bootstrap_stack,
+    mean_stack,
     write_stacked_spectra,
 )
 
@@ -89,11 +102,19 @@ N_BOOT_SAVE = 200
 RANDOM_SEED = 42
 
 STACK_PATH = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/stack_files/mstar_haew_5pct/"
+MSTAR_ONLY_SUBDIR = "mstar_only"
+MSTAR_ONLY_PATH = os.path.join(STACK_PATH, MSTAR_ONLY_SUBDIR)
 
 OVERWRITE_STACKS = True
 WAVE_MAX = 6800
 NORM_METHOD = "catalog"
-NORM_COL = "HALPHA_BOXFLUX"
+# Per-galaxy normalization line flux. Gaussian HALPHA_FLUX (not boxcar
+# HALPHA_BOXFLUX): FLUX is the more reliable line-flux measurement, and since
+# every load_catalog galaxy already passes HALPHA_FLUX > 1, normalizing by it
+# drops no galaxies (removes the old hidden HALPHA_BOXFLUX > 0 cut). The
+# normalization constant cancels in all downstream line ratios; only the
+# absolute stack flux scale changes relative to the old boxcar normalization.
+NORM_COL = "HALPHA_FLUX"
 
 LINE_GUIDES = {
     "[OII]": 3727.0,
@@ -206,7 +227,12 @@ def bin_seed_index(mstar_min, mstar_max, ew_token):
     return i_m * len(EW_TOKENS) + j_ew
 
 
-def clean_stack_outputs(stack_path):
+def bin_label_mstar_only(mstar_min, mstar_max):
+    """Filename-safe label for one mass-only bin (no EW token)."""
+    return f"mstar_{mstar_min:.2f}_{mstar_max:.2f}"
+
+
+def clean_stack_outputs(stack_path, mstar_only_path=None):
     """Remove previous stack, pickle, and FastSpec output files before a fresh run."""
     patterns = (
         "stack_ALL_mstar_*.fits",
@@ -219,6 +245,15 @@ def clean_stack_outputs(stack_path):
             os.remove(fpath)
             n_removed += 1
     print(f"    Removed {n_removed} previous stack/.pkl/fastspec files from {stack_path}")
+
+    if mstar_only_path is not None:
+        n_mo = 0
+        for pattern in patterns:
+            for fpath in glob.glob(os.path.join(mstar_only_path, pattern)):
+                os.remove(fpath)
+                n_mo += 1
+        print(f"    Removed {n_mo} previous mass-only stack/.pkl/fastspec files "
+              f"from {mstar_only_path}")
 
 
 def stack_one_bin(sub_cat, spectra_data, wave, token, ew_min, ew_max_fits,
@@ -357,6 +392,106 @@ def write_multi_row_fits(saved, wave_for_fits, label):
           f"1 mean + {n_boot_keep} bootstraps "
           f"-> {os.path.basename(out_fits)}")
 
+
+def stack_one_mass_bin(sub_cat, spectra_data, wave, mstar_min, mstar_max, label):
+    """Mean-stack one mass bin (no bootstrap); return saved dict or None."""
+    n_sub = len(sub_cat)
+    if n_sub == 0:
+        return None
+
+    pkl_path = os.path.join(
+        MSTAR_ONLY_PATH,
+        f"stacks_spec_{COMBINED_TAG}_{label}.pkl",
+    )
+
+    if os.path.exists(pkl_path) and not OVERWRITE_STACKS:
+        print(f"      Loading cached: {os.path.basename(pkl_path)}")
+        with open(pkl_path, "rb") as f:
+            return pickle.load(f)
+
+    out = get_sample_spectra_with_linenorm(
+        sub_cat, spectra_data, line_norm="HALPHA", norm_col=NORM_COL,
+    )
+    fluxes, ivars, halpha_fluxes, tgids_matched = out
+
+    if fluxes is None or len(fluxes) == 0:
+        print("      No matched spectra; skipping.")
+        return None
+
+    n_matched = len(fluxes)
+    print(f"      Mean-stacking: N={n_sub}, matched={n_matched}")
+    stack_flux, stack_ivar, n_valid = mean_stack(
+        fluxes=fluxes,
+        ivars=ivars,
+        wave=wave,
+        norm_method=NORM_METHOD,
+        catalog_line_fluxes=halpha_fluxes,
+        min_n_valid=1,
+    )
+
+    if stack_flux is None:
+        print("      mean_stack returned None; skipping.")
+        return None
+
+    saved = {
+        "stack_spec":   stack_flux,
+        "stack_ivar":   stack_ivar,
+        "samples":      list(SAMPLES),
+        "mstar_min":    float(mstar_min),
+        "mstar_max":    float(mstar_max),
+        "z_min":        Z_MIN_GLOBAL,
+        "z_max":        Z_MAX_GLOBAL,
+        "n_galaxies":   int(n_sub),
+        "n_matched":    int(n_matched),
+        "n_stacked":    int(n_valid),
+        "tgids":        np.asarray(tgids_matched),
+    }
+
+    with open(pkl_path, "wb") as f:
+        pickle.dump(saved, f)
+    print(f"      Saved {os.path.basename(pkl_path)}")
+    return saved
+
+
+def write_single_row_fits(saved, wave_for_fits, label):
+    """Write one mean stack row for FastSpecFit stackfit."""
+    stack_flux = saved["stack_spec"]
+    stack_ivar = saved["stack_ivar"]
+    n_stacked = saved.get("n_stacked", saved["n_matched"])
+    n_cat = saved["n_galaxies"]
+    mstar_min = saved["mstar_min"]
+    mstar_max = saved["mstar_max"]
+
+    all_flux = np.asarray(stack_flux, dtype=np.float32)[None, :]
+    all_ivar = np.asarray(stack_ivar, dtype=np.float32)[None, :]
+
+    out_fits = os.path.join(MSTAR_ONLY_PATH, f"stack_{COMBINED_TAG}_{label}.fits")
+
+    write_stacked_spectra(
+        outfile=out_fits,
+        wave=wave_for_fits,
+        flux=all_flux,
+        ivar=all_ivar,
+        stackids=np.array([0], dtype=np.int64),
+        stack_redshift=np.zeros(1),
+        table_column_dict={
+            "IS_MEAN":   np.array([1], dtype=np.int64),
+            "NOBJ":      np.array([n_stacked], dtype=np.int64),
+            "NCAT":      np.array([n_cat], dtype=np.int64),
+            "MSTAR_MIN": np.array([mstar_min], dtype=np.float32),
+            "MSTAR_MAX": np.array([mstar_max], dtype=np.float32),
+        },
+        table_format_dict={
+            "IS_MEAN":   "K",
+            "NOBJ":      "K",
+            "NCAT":      "K",
+            "MSTAR_MIN": "E",
+            "MSTAR_MAX": "E",
+        },
+    )
+    print(f"    {COMBINED_TAG} | {label}: "
+          f"N_stacked={n_stacked} (catalog N={n_cat}), "
+          f"1 mean row -> {os.path.basename(out_fits)}")
 
 
 
@@ -525,25 +660,68 @@ def make_grid_plot(results, wave, mstar_bins, plot_dir):
     print(f"    Saved {os.path.basename(out_png)}")
 
 
+def make_mass_only_overlay_plot(results, wave, mstar_bins, plot_dir):
+    """Overlay all mass-only stacks in one panel."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    os.makedirs(plot_dir, exist_ok=True)
+    stacks = [(i, saved) for i, saved in results.items() if saved is not None]
+    if not stacks:
+        print("    (no mass-only stacks; skipping overlay_all_mass_bins)")
+        return
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    cmap = plt.cm.viridis(np.linspace(0.15, 0.85, len(stacks)))
+
+    for k, (i, saved) in enumerate(stacks):
+        m_lo = saved["mstar_min"]
+        m_hi = saved["mstar_max"]
+        flux = saved["stack_spec"]
+        ivar = saved["stack_ivar"]
+        n_gal = saved["n_galaxies"]
+        with np.errstate(invalid="ignore"):
+            err = np.where(ivar > 0, 1.0 / np.sqrt(ivar), np.nan)
+        ax.plot(wave, flux, color=cmap[k], lw=1.0,
+                label=f"[{m_lo:.2f}, {m_hi:.2f}]  (N={n_gal})")
+        ax.fill_between(wave, flux - err, flux + err, color=cmap[k], alpha=0.15, lw=0)
+
+    _add_line_guides(ax)
+    ax.set_xlim(wave.min(), wave.max())
+    ax.set_xlabel(r"Rest wavelength [$\AA$]")
+    ax.set_ylabel("Halpha-normalized stacked flux")
+    ax.set_title("Mass-only stacks (all bins, no EW split)")
+    ax.legend(loc="upper left", fontsize=7, frameon=False, ncol=2)
+    fig.tight_layout()
+
+    out_png = os.path.join(plot_dir, "overlay_all_mass_bins.png")
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+    print(f"    Saved {os.path.basename(out_png)}")
+
+
 # =============================================================================
 # MAIN
 # =============================================================================
 
 def main():
     os.makedirs(STACK_PATH, exist_ok=True)
+    os.makedirs(MSTAR_ONLY_PATH, exist_ok=True)
     plot_dir = os.path.join(STACK_PATH, "plots")
+    mass_only_plot_dir = os.path.join(MSTAR_ONLY_PATH, "plots")
 
     print("[0] Cleaning previous stack outputs ...")
-    clean_stack_outputs(STACK_PATH)
+    clean_stack_outputs(STACK_PATH, mstar_only_path=MSTAR_ONLY_PATH)
 
     print("[1] Loading catalog ...")
-    tot_cat = load_catalog()
-    print(f"    Total galaxies after quality cuts: {len(tot_cat)}")
+    tot_cat_full = load_catalog()
+    print(f"    Total galaxies after load_catalog cuts: {len(tot_cat_full)}")
 
-    tot_cat = apply_halpha_detection_cuts(tot_cat)
-    print(f"    After H-alpha detection cuts "
+    tot_cat_ew = apply_halpha_detection_cuts(tot_cat_full)
+    print(f"    After H-alpha detection cuts (EW stacks only) "
           f"(EW SNR>={EW_SNR_MIN:.0f}, EW>{EW_MIN:.0f} A, "
-          f"boxflux SNR>={BOXFLUX_SNR_MIN:.0f}): {len(tot_cat)}")
+          f"boxflux SNR>={BOXFLUX_SNR_MIN:.0f}): {len(tot_cat_ew)}")
 
     print(f"\n    Fixed EW bins (half-open, Angstroms):")
     for token, label in zip(EW_TOKENS, EW_LABELS):
@@ -581,7 +759,7 @@ def main():
         mstar_min, mstar_max = MSTAR_BINS[i], MSTAR_BINS[i + 1]
 
         sub_all = select_sample_mstar_bin(
-            tot_cat, SAMPLES,
+            tot_cat_ew, SAMPLES,
             Z_MIN_GLOBAL, Z_MAX_GLOBAL,
             mstar_min, mstar_max,
         )
@@ -590,7 +768,7 @@ def main():
         ew_counts = []
         for j in range(n_ew):
             sub = select_sample_ew_bin(
-                tot_cat, SAMPLES,
+                tot_cat_ew, SAMPLES,
                 Z_MIN_GLOBAL, Z_MAX_GLOBAL,
                 mstar_min, mstar_max,
                 EW_EDGES[j], EW_EDGES[j + 1],
@@ -615,7 +793,7 @@ def main():
             ew_max = EW_EDGES[j + 1]
             ew_max_fits = float(ew_max) if np.isfinite(ew_max) else -1.0
             sub_cat = select_sample_ew_bin(
-                tot_cat, SAMPLES,
+                tot_cat_ew, SAMPLES,
                 Z_MIN_GLOBAL, Z_MAX_GLOBAL,
                 mstar_min, mstar_max,
                 ew_min, ew_max,
@@ -642,16 +820,55 @@ def main():
         write_multi_row_fits(saved, wave, label)
         n_written += 1
 
-    print(f"\n[5] Wrote {n_written} FITS files to {STACK_PATH}")
+    print(f"\n[5] Wrote {n_written} EW-binned FITS files to {STACK_PATH}")
 
-    print("\n[6] Making comparison plots ...")
+    print(f"\n[3b] Mass-only stacking: {n_mstar} bins, no EW split, no bootstrap")
+    print(f"     Catalog: load_catalog cuts only (N={len(tot_cat_full)})")
+    print(f"     Output dir: {MSTAR_ONLY_PATH}")
+
+    mass_only_results = {}
+
+    for i in range(n_mstar):
+        mstar_min, mstar_max = MSTAR_BINS[i], MSTAR_BINS[i + 1]
+        sub_cat = select_sample_mstar_bin(
+            tot_cat_full, SAMPLES,
+            Z_MIN_GLOBAL, Z_MAX_GLOBAL,
+            mstar_min, mstar_max,
+        )
+        n_sub = len(sub_cat)
+        print(f"\n  --- log M*=[{mstar_min:.2f},{mstar_max:.2f}] --- N={n_sub}")
+        if n_sub == 0:
+            continue
+
+        label = bin_label_mstar_only(mstar_min, mstar_max)
+        saved = stack_one_mass_bin(
+            sub_cat, spectra_data, wave, mstar_min, mstar_max, label,
+        )
+        mass_only_results[i] = saved
+
+    print("\n[4b] Writing mass-only FastSpecFit (stackfit) input FITS files ...")
+
+    n_mo_written = 0
+    for i, saved in mass_only_results.items():
+        if saved is None:
+            continue
+        label = bin_label_mstar_only(saved["mstar_min"], saved["mstar_max"])
+        write_single_row_fits(saved, wave, label)
+        n_mo_written += 1
+
+    print(f"\n[5b] Wrote {n_mo_written} mass-only FITS files to {MSTAR_ONLY_PATH}")
+
+    print("\n[6] Making EW-binned comparison plots ...")
     make_overlay_plots(results, wave, MSTAR_BINS, plot_dir)
     make_grid_plot(results, wave, MSTAR_BINS, plot_dir)
 
-    print("\n[7] ivar vs bootstrap-std diagnostic plots ...")
+    print("\n[7] ivar vs bootstrap-std diagnostic plots (EW stacks) ...")
     make_ivar_diagnostic_plots(results, wave, plot_dir, max_bins=2)
 
-    print(f"\n[8] Done. Plots in {plot_dir}")
+    print("\n[8] Making mass-only overlay plot ...")
+    make_mass_only_overlay_plot(mass_only_results, wave, MSTAR_BINS, mass_only_plot_dir)
+
+    print(f"\n[9] Done. EW plots in {plot_dir}; mass-only plots in {mass_only_plot_dir}")
 
 
 if __name__ == "__main__":

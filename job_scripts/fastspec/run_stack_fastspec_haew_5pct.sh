@@ -1,8 +1,12 @@
 #!/bin/bash
-# Run custom FastSpecFit (stackfit) on the M* x H-alpha-EW fixed-bin
-# stacks produced by code/nebular_stuff/stack_mstar_haew_5pct.py.
+# Run custom FastSpecFit (stackfit) on stacked dwarf spectra from
+# code/nebular_stuff/stack_mstar_haew_5pct.py:
+#
+#   1. EW-binned stacks in STACK_PATH/  (M* x H-alpha EW, bootstrap rows)
+#   2. Mass-only stacks in STACK_PATH/mstar_only/  (M* only, single row)
+#
 # Mass bins: 0.5 dex from log M*=6 to 8; 0.25 dex from 8 to 9.25.
-# EW bins: <30, 30-100, >100 Angstrom (stacked when N>=50).
+# EW bins (<30, 30-100, >100 Angstrom) apply to product 1 only (N>=50).
 #
 # "Custom" = Chabrier 9.9.9 templates + narrow He II lambda4686 via a custom
 # emline-constraints YAML (see CONSTRAINTS setup below).
@@ -25,6 +29,7 @@ fi
 
 # --- paths ------------------------------------------------------------------
 STACK_PATH="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/stack_files/mstar_haew_5pct"
+MSTAR_ONLY_PATH="${STACK_PATH}/mstar_only"
 templates=/global/cfs/cdirs/desi/users/dscholte/data/ohno/templates/9.9.9/ftemplates-chabrier-9.9.9.fits
 
 # Fiducial line list is bundled with fastspecfit/3.4.2 — no custom emlines.ecsv needed.
@@ -78,46 +83,67 @@ export DUST_DIR=/dvs_ro/cfs/cdirs/cosmo/data/dust/v0_1
 export FPHOTO_DIR=/dvs_ro/cfs/cdirs/desi/external/legacysurvey/dr9
 export FTEMPLATES_DIR=/dvs_ro/cfs/cdirs/desi/public/external/templates/fastspecfit
 
-echo "Running custom FastSpecFit (stackfit) on M* x H-alpha-EW fixed-bin stacks (<30, 30-100, >100 A)"
-echo "Stack path    : ${STACK_PATH}"
-echo "Templates     : ${templates}"
-echo "Constraints   : ${constraintsfile}"
-echo "Emlines   : ${emlinesfile}"
+echo "Running custom FastSpecFit (stackfit) on stacked dwarf spectra"
+echo "EW-binned path : ${STACK_PATH}"
+echo "Mass-only path : ${MSTAR_ONLY_PATH}"
+echo "Templates      : ${templates}"
+echo "Constraints    : ${constraintsfile}"
+echo "Emlines        : ${emlinesfile}"
 echo ""
 
-# Remove stale FastSpec outputs so removed/re-pooled bins are not analyzed downstream.
-shopt -s nullglob
-n_old=0
-for f in "${STACK_PATH}"/fastspec_stack_ALL_mstar_*.fits; do
-    rm -f "$f"
-    n_old=$((n_old + 1))
-done
-echo "Removed ${n_old} previous fastspec_stack_ALL_mstar_*.fits files"
-echo ""
+run_stackfit_in_dir() {
+    local dir="$1"
+    local label="$2"
 
-stack_files=("${STACK_PATH}"/stack_ALL_mstar_*.fits)
-if [ ${#stack_files[@]} -eq 0 ]; then
-    echo "ERROR: no stack_ALL_mstar_*.fits files found in ${STACK_PATH}"
-    exit 1
-fi
+    echo "========== ${label}: ${dir} =========="
 
-for f in "${stack_files[@]}"; do
-    basename=$(basename "$f")
-    # Don't re-fit already-produced output files.
-    case "${basename}" in
-        fastspec_*) continue ;;
-    esac
-    outfile="${STACK_PATH}/fastspec_${basename}"
-    echo "Processing: ${basename}"
-    stackfit "$f" -o "$outfile" \
-        --mp ${NCORES} \
-        --templates="${templates}" \
-        --emlinesfile="${emlinesfile}" \
-        --constraintsfile="${constraintsfile}" \
-        --nmonte=100 \
-        --vdisp-nominal 100 --vdisp-bounds 50 200
-    echo "  -> Saved to fastspec_${basename}"
+    if [[ ! -d "${dir}" ]]; then
+        echo "WARNING: directory not found: ${dir}; skipping."
+        echo ""
+        return 0
+    fi
+
+    shopt -s nullglob
+    local n_old=0
+    for f in "${dir}"/fastspec_stack_ALL_mstar_*.fits; do
+        rm -f "$f"
+        n_old=$((n_old + 1))
+    done
+    echo "Removed ${n_old} previous fastspec_stack_ALL_mstar_*.fits files"
+
+    local stack_files=("${dir}"/stack_ALL_mstar_*.fits)
+    if [ ${#stack_files[@]} -eq 0 ]; then
+        echo "WARNING: no stack_ALL_mstar_*.fits files found in ${dir}; skipping."
+        echo ""
+        return 0
+    fi
+
+    local n_fit=0
+    for f in "${stack_files[@]}"; do
+        local basename
+        basename=$(basename "$f")
+        case "${basename}" in
+            fastspec_*) continue ;;
+        esac
+        local outfile="${dir}/fastspec_${basename}"
+        echo "Processing: ${basename}"
+        stackfit "$f" -o "$outfile" \
+            --mp ${NCORES} \
+            --templates="${templates}" \
+            --emlinesfile="${emlinesfile}" \
+            --constraintsfile="${constraintsfile}" \
+            --nmonte=100 \
+            --vdisp-nominal 100 --vdisp-bounds 50 200
+        echo "  -> Saved to fastspec_${basename}"
+        echo ""
+        n_fit=$((n_fit + 1))
+    done
+
+    echo "${label}: fitted ${n_fit} stack file(s) in ${dir}"
     echo ""
-done
+}
+
+run_stackfit_in_dir "${STACK_PATH}" "EW-binned"
+run_stackfit_in_dir "${MSTAR_ONLY_PATH}" "Mass-only"
 
 echo "Done!"
