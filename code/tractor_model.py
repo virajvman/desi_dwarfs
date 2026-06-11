@@ -275,7 +275,7 @@ def get_img_source(i, ra, dec, tgid, zred, file_path, cutouts_dir, brickname, wi
         tractor_source = tractor[np.argmin(seps)]
 
 
-        img_data = cutout_store.read_cutout(cutouts_dir, brickname, tgid)["image"]
+        img_data = cutout_store.read_cutout(cutouts_dir, brickname, tgid, size=int(width))["image"]
 
         if np.min(seps) > 1:
             print(f"FYI, this object has rather large separation of {np.min(seps)} arcsec. Probably due to the LOWZ target catalog issue. RA={ra}, DEC={dec}, PATH={file_path}")
@@ -330,7 +330,7 @@ def get_bkg_sources(i, ra, dec, tgid, zred, file_path, cutouts_dir, brickname, w
             return
             
         else:
-            cutout = cutout_store.read_cutout(cutouts_dir, brickname, tgid)
+            cutout = cutout_store.read_cutout(cutouts_dir, brickname, tgid, size=int(width))
             img_data = cutout["image"]
             wcs_cutout = cutout_store.get_wcs(cutout["header"])
         

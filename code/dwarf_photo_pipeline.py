@@ -461,7 +461,8 @@ def heal_brick_cutouts(brick_dict, cutouts_dir, tombstones=frozenset()):
     missing, n_tomb = [], 0
     for g in brick_dict:
         tgid = int(g["TARGETID"])
-        if tgid in existing:
+        # bigger-size-wins: stored cutout serves any request <= its box_size
+        if existing.get(tgid, -1) >= int(g["image_size"]):
             continue
         if tgid in tombstones:
             n_tomb += 1
@@ -938,8 +939,9 @@ if __name__ == '__main__':
         print("Scanning cutout store for existence check...")
         store_contents = cutout_store.list_existing(cutouts_dir, quarantine_corrupt=False)
         missing_tgids = [
-            int(t) for t, b in zip(shreds_focus["TARGETID"], shreds_focus["BRICKNAME"])
-            if int(t) not in store_contents.get(str(b), ())
+            int(t) for t, b, s in zip(shreds_focus["TARGETID"], shreds_focus["BRICKNAME"],
+                                      shreds_focus["IMAGE_SIZE_PIX"])
+            if store_contents.get(str(b), {}).get(int(t), -1) < int(s)
         ]
         n_have = len(shreds_focus) - len(missing_tgids)
         print(f"Cutout store check: {n_have}/{len(shreds_focus)} objects in store")
@@ -1022,9 +1024,12 @@ if __name__ == '__main__':
             source_cat_f = remove_source_cat_duplicates(source_cat_f)
             
             ##read the cutout from the shard store (read-only; the upfront
-            ##check guarantees existence, so a miss here is a real error)
+            ##check guarantees existence, so a miss here is a real error).
+            ##size=box_size central-crops (with exact WCS correction) if the
+            ##store holds this object at a larger box_size.
             try:
-                cutout_k = cutout_store.read_cutout(cutouts_dir, brick_k, tgid_k)
+                cutout_k = cutout_store.read_cutout(cutouts_dir, brick_k, tgid_k,
+                                                    size=int(box_size))
             except (KeyError, OSError) as exc:
                 raise RuntimeError(
                     f"Cutout for TARGETID {tgid_k} (brick {brick_k}) not readable from "

@@ -55,20 +55,22 @@ def get_binary_mask(maskbits_array, set_bits=(0, 1, 2, 3, 4, 5, 6, 7, 11)):
 
 
 def _read_shard_group(args):
-    """Read a batch of objects from one shard.
+    """Read a batch of objects from one shard, central-cropping to the target
+    size when the stored cutout is larger (bigger-size-wins store policy).
 
     Parameters
     ----------
     args : tuple
-        (shard_path, [(slot, targetid), ...], include_invvar, include_maskbits)
-        where slot is the destination row offset within the current block.
+        (shard_path, [(slot, targetid), ...], target_size, include_invvar,
+        include_maskbits) where slot is the destination row offset within the
+        current block.
 
     Returns
     -------
     list of (slot, dict) with keys 'image', 'invvar', 'maskbits'
     (values are numpy arrays or None on failure).
     """
-    shard, items, include_invvar, include_maskbits = args
+    shard, items, target_size, include_invvar, include_maskbits = args
     import h5py
 
     out = []
@@ -80,11 +82,15 @@ def _read_shard_group(args):
                 if key in f:
                     g = f[key]
                     try:
-                        res["image"] = g["image"][:].astype(np.float32)
-                        if include_invvar and "invvar" in g:
-                            res["invvar"] = g["invvar"][:].astype(np.float32)
-                        if include_maskbits and "mask" in g:
-                            res["maskbits"] = g["mask"][:].astype(np.int32)
+                        image = g["image"][:].astype(np.float32)
+                        invvar = g["invvar"][:].astype(np.float32) if (include_invvar and "invvar" in g) else None
+                        mask = g["mask"][:].astype(np.int32) if (include_maskbits and "mask" in g) else None
+                        if image.shape[-1] != target_size:
+                            image, invvar, mask, _ = cutout_store.crop_cutout(
+                                image, invvar, mask, g.attrs["header"], target_size)
+                        res["image"] = image
+                        res["invvar"] = invvar
+                        res["maskbits"] = mask
                     except Exception as exc:
                         print(f"WARNING: failed reading {tgid} from {shard}: {exc}",
                               flush=True)
@@ -206,8 +212,10 @@ def main():
     # ------------------------------------------------------------------
     print(f"Scanning shard store: {cutouts_dir}")
     store = cutout_store.list_existing(cutouts_dir, quarantine_corrupt=False)
+    # present only if stored at >= the target size (smaller stored cutouts
+    # cannot be served -- re-fetch them at >= sz first)
     exists = np.array(
-        [int(allobjids[k]) in store.get(allbricks[k], ()) for k in range(N)],
+        [store.get(allbricks[k], {}).get(int(allobjids[k]), -1) >= sz for k in range(N)],
         dtype=bool)
     n_found = int(exists.sum())
     n_missing = N - n_found
@@ -311,7 +319,7 @@ def main():
                         by_shard[shard].append((j, int(allobjids[k])))
 
                 read_args = [
-                    (shard, items, include_invvar, include_maskbits)
+                    (shard, items, sz, include_invvar, include_maskbits)
                     for shard, items in by_shard.items()
                 ]
                 read_results = []

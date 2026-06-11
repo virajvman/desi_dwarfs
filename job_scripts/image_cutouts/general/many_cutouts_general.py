@@ -280,7 +280,10 @@ def plan(args, outdir_data, size):
         seen.add(tgid)
         if tgid in tombs:
             continue
-        if tgid in existing.get(allbrick[k], ()):
+        # bigger-size-wins: present only if stored at >= the requested size
+        # (a smaller stored cutout is re-fetched and overwritten)
+        stored_size = existing.get(allbrick[k], {}).get(tgid)
+        if stored_size is not None and stored_size >= int(allsizes[k]):
             continue
         need.append(k)
     need = np.asarray(need, dtype=np.int64)
@@ -454,7 +457,7 @@ def _merge_failures(outdir_data):
         existing = cutout_store.list_existing(outdir_data, quarantine_corrupt=False)
         all_present = set()
         for s in existing.values():
-            all_present |= s
+            all_present.update(s)
         rows = {tg: r for tg, r in rows.items() if tg not in all_present}
 
         with open(manifest, 'w', newline='') as f:

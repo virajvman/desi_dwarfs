@@ -11,15 +11,18 @@
 #SBATCH --output=get_imgs_general.log
 
 # ============================================================
-# GENERAL template -- edit before submitting, or use the
-# preconfigured get_imgs_{clean,shreds,sga}.sbatch instead.
+# GENERAL template for a single ad-hoc catalog -- edit before
+# submitting. For the standard clean+shreds+sga download use
+# get_imgs_all.sbatch instead. Never run two cutout-writing jobs
+# against the store at the same time.
 #
-# Phase 1 writes per-brick HDF5 shards into OUTDIR (incremental:
-# objects already in shards or tombstoned in permanently_failed.csv
-# are skipped).
+# Phase 1 writes per-brick HDF5 shards into OUTDIR (incremental
+# and size-aware: objects already stored at >= the requested size,
+# or tombstoned in permanently_failed.csv, are skipped).
 # ============================================================
 CATALOG_PATH="/pscratch/sd/v/virajvm/agent_ai_data/download_round_2_catalog.fits"
-OUTDIR="/global/cfs/cdirs/desi/users/virajvm/dwarf_cutouts/general"
+# Unified store (must match cutout_store.CUTOUTS_DIR)
+OUTDIR="/global/cfs/cdirs/desi/users/virajvm/dwarf_cutouts/images"
 RA_COL="RA"
 DEC_COL="DEC"
 ID_COL="TARGETID"
@@ -39,7 +42,9 @@ EXTRA_COLS=""       # e.g. "Z,MAG_G,MAG_R,MAG_Z,IS_DWARF"
 H5_NWORKERS=8       # parallel shard-reading workers for consolidation
 # ============================================================
 
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+# NOTE: sbatch copies this script to a spool dir, so BASH_SOURCE
+# does NOT point at the repo -- the script dir must be hardcoded.
+SCRIPT_DIR="/global/homes/v/virajvm/DESI2_LOWZ/desi_dwarfs/job_scripts/image_cutouts/general"
 
 echo "Starting at $(date)"
 

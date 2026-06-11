@@ -407,7 +407,9 @@ def get_inputs(tgid, file_path, cutouts_dir, brickname, verbose=False):
     #load the relevant data
     tractor_model = np.load(file_path + "/tractor_source_model.npy")
 
-    data_arr = cutout_store.read_cutout(cutouts_dir, brickname, tgid)["image"]
+    #crop to the tractor model's size so the two always match
+    data_arr = cutout_store.read_cutout(cutouts_dir, brickname, tgid,
+                                        size=int(tractor_model.shape[1]))["image"]
 
     if np.shape(data_arr) != np.shape(tractor_model):
         print(f"Something wonky happening with the sizes. {tgid}, {np.shape(data_arr)} {np.shape(tractor_model)} ")

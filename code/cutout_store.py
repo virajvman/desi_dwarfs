@@ -34,11 +34,15 @@ import shutil
 
 import numpy as np
 
-# Canonical store locations (CFS, not scratch -- deliberately purge-proof).
+# Canonical store location (CFS, not scratch -- deliberately purge-proof).
+# UNIFIED across sample classes (2026-06 decision): a cutout is a
+# class-independent property of the sky, while clean/shred/sga membership is
+# a mutable catalog property -- so all classes share one store, keyed by
+# (BRICKNAME, TARGETID). Shards are prefixed by the first 3 brickname chars
+# (RA prefix, same convention as Legacy Surveys coadds) to keep directories
+# small: {CUTOUTS_DIR}/{brick[:3]}/{brick}.h5
 CUTOUTS_BASE = "/global/cfs/cdirs/desi/users/virajvm/dwarf_cutouts"
-
-# dwarf_photo_pipeline uses use_sample="shred" while the store dir is "shreds"
-_STORE_NAMES = {"clean": "clean", "shred": "shreds", "shreds": "shreds", "sga": "sga"}
+CUTOUTS_DIR = os.path.join(CUTOUTS_BASE, "images")
 
 # Production viewer. Do NOT use viewer-dev: since imagine d2ba303 (2026-01-26)
 # it sums invvar across overlapping bricks -> exactly 2x inflated INVVAR in
@@ -49,12 +53,11 @@ PRODUCTION_VIEWER = "https://www.legacysurvey.org/viewer"
 FAILED_MANIFEST = "permanently_failed.csv"
 
 
-def get_store_dir(use_sample):
-    """Map a pipeline use_sample flag to its cutout store directory."""
-    if use_sample not in _STORE_NAMES:
-        raise ValueError("Unknown use_sample '{}' (expected one of {})".format(
-            use_sample, sorted(_STORE_NAMES)))
-    return os.path.join(CUTOUTS_BASE, _STORE_NAMES[use_sample])
+def get_store_dir(use_sample=None):
+    """Return the cutout store directory. The store is unified across sample
+    classes; the use_sample argument is accepted (and ignored) so existing
+    call sites keep working."""
+    return CUTOUTS_DIR
 
 
 def load_tombstones(cutouts_dir):
@@ -72,36 +75,47 @@ def load_tombstones(cutouts_dir):
 
 
 def shard_path(cutouts_dir, brickname):
-    return os.path.join(cutouts_dir, "{}.h5".format(brickname))
+    return os.path.join(cutouts_dir, str(brickname)[:3], "{}.h5".format(brickname))
 
 
 def list_shard_targetids(cutouts_dir, brickname):
-    """TARGETIDs present in one brick's shard (empty set if shard absent/unreadable)."""
+    """{TARGETID: box_size} for one brick's shard (empty dict if absent/unreadable)."""
     import h5py
     path = shard_path(cutouts_dir, brickname)
     if not os.path.exists(path):
-        return set()
+        return {}
     try:
         with h5py.File(path, "r") as f:
-            return set(int(k) for k in f.keys())
+            return {int(k): int(f[k].attrs.get("box_size", 0)) for k in f.keys()}
     except (OSError, ValueError):
-        return set()
+        return {}
 
 
-def cutout_exists(cutouts_dir, brickname, targetid):
+def cutout_exists(cutouts_dir, brickname, targetid, size=None):
+    """True if the object is in the store (and, if size is given, stored at
+    box_size >= size so the request can be served, possibly by cropping)."""
     import h5py
     path = shard_path(cutouts_dir, brickname)
     if not os.path.exists(path):
         return False
     try:
         with h5py.File(path, "r") as f:
-            return str(targetid) in f
+            key = str(targetid)
+            if key not in f:
+                return False
+            if size is None:
+                return True
+            return int(f[key].attrs.get("box_size", 0)) >= int(size)
     except OSError:
         return False
 
 
 def list_existing(cutouts_dir, quarantine_corrupt=True):
-    """Return {brickname: set(targetid int)} for every shard in the store.
+    """Return {brickname: {targetid: box_size}} for every shard in the store.
+
+    box_size is what existence policies compare against: an object is
+    "present" for a request of size N iff its stored box_size >= N
+    (bigger-size-wins; smaller requests are served by crop-on-read).
 
     A shard that cannot be opened is treated as absent (its objects will be
     re-fetched); with quarantine_corrupt it is also renamed to *.h5.corrupt
@@ -114,11 +128,12 @@ def list_existing(cutouts_dir, quarantine_corrupt=True):
     if not os.path.isdir(cutouts_dir):
         return existing
 
-    for path in sorted(glob(os.path.join(cutouts_dir, "*.h5"))):
+    for path in sorted(glob(os.path.join(cutouts_dir, "*", "*.h5"))):
         brick = os.path.splitext(os.path.basename(path))[0]
         try:
             with h5py.File(path, "r") as f:
-                existing[brick] = set(int(k) for k in f.keys())
+                existing[brick] = {int(k): int(f[k].attrs.get("box_size", 0))
+                                   for k in f.keys()}
         except (OSError, ValueError) as exc:
             print("WARNING: unreadable shard {} ({}); treating as absent".format(path, exc),
                   flush=True)
@@ -149,8 +164,8 @@ def write_cutouts_batch(cutouts_dir, brickname, records,
     if not records:
         return
 
-    os.makedirs(cutouts_dir, exist_ok=True)
     final = shard_path(cutouts_dir, brickname)
+    os.makedirs(os.path.dirname(final), exist_ok=True)
     tmp = final + ".tmp"
 
     if os.path.exists(tmp):
@@ -184,9 +199,52 @@ def write_cutouts_batch(cutouts_dir, brickname, records,
     os.replace(tmp, final)
 
 
-def read_cutout(cutouts_dir, brickname, targetid):
+def crop_cutout(image, invvar, mask, header_str, size):
+    """Central-crop a cutout to `size` pixels, correcting the WCS (CRPIX)
+    in the returned header string so coordinates stay exact.
+
+    A crop from the store is pixel-identical to a direct download at `size`
+    when stored and requested sizes have the same parity; for mixed parity
+    the window is offset by half a pixel, which the CRPIX correction
+    accounts for exactly.
+    """
+    from astropy.io import fits
+
+    stored = int(image.shape[-1])
+    size = int(size)
+    if stored == size:
+        return image, invvar, mask, header_str
+    if stored < size:
+        raise ValueError("stored cutout is {} px but {} px requested -- "
+                         "re-fetch at the larger size".format(stored, size))
+
+    start = (stored - size) // 2
+    sl = slice(start, start + size)
+    image = image[..., sl, sl]
+    if invvar is not None:
+        invvar = invvar[..., sl, sl]
+    if mask is not None:
+        mask = mask[..., sl, sl]
+
+    hdr = fits.Header.fromstring(header_str)
+    for key in ("CRPIX1", "CRPIX2"):
+        if key in hdr:
+            hdr[key] = hdr[key] - start
+    for key, val in (("NAXIS1", size), ("NAXIS2", size)):
+        if key in hdr:
+            hdr[key] = val
+    return image, invvar, mask, hdr.tostring()
+
+
+def read_cutout(cutouts_dir, brickname, targetid, size=None):
     """Read one object. Returns dict with image, invvar (or None),
-    mask (or None), header (str), and the group attrs."""
+    mask (or None), header (str), and the group attrs.
+
+    If `size` is given and the stored cutout is larger, it is centrally
+    cropped (with the WCS corrected) to exactly `size` pixels; if the stored
+    cutout is smaller, a ValueError is raised (the store never upsamples --
+    re-fetch at the larger size instead).
+    """
     import h5py
 
     path = shard_path(cutouts_dir, brickname)
@@ -204,6 +262,11 @@ def read_cutout(cutouts_dir, brickname, targetid):
         for k in ("ra", "dec", "box_size", "fetch_method", "created"):
             if k in g.attrs:
                 out[k] = g.attrs[k]
+
+    if size is not None:
+        out["image"], out["invvar"], out["mask"], out["header"] = crop_cutout(
+            out["image"], out["invvar"], out["mask"], out["header"], size)
+        out["box_size"] = int(size)
     return out
 
 
