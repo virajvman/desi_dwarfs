@@ -43,7 +43,6 @@ Original author: Dustin Lang (dstndstn)
 """
 
 import os
-import io
 import csv
 import sys
 import time
@@ -61,9 +60,9 @@ if _CODE_DIR not in sys.path:
     sys.path.insert(0, _CODE_DIR)
 
 import cutout_store
-
-FAILED_MANIFEST = 'permanently_failed.csv'
-URL_BASE_DEFAULT = 'https://www.legacysurvey.org/viewer'
+from cutout_store import (FAILED_MANIFEST, PRODUCTION_VIEWER,
+                          parse_cutout_fits, make_cutout_record,
+                          fetch_cutout_url, load_tombstones)
 
 
 def weighted_partition(weights, n):
@@ -129,34 +128,6 @@ def _apply_split_layer_patch():
         print('WARNING: maskbits monkeypatch not applied: {}'.format(exc), flush=True)
 
 
-def _parse_cutout_fits(hdul, want_invvar, want_maskbits):
-    """Extract image/invvar/mask arrays + primary header string from an
-    open HDUList, keying on IMAGETYP with positional fallback."""
-    image = invvar = mask = None
-    for i, hdu in enumerate(hdul):
-        itype = str(hdu.header.get('IMAGETYP', '')).strip().upper()
-        if i == 0 or itype == 'IMAGE':
-            image = np.asarray(hdu.data, dtype=np.float32)
-        elif itype == 'INVVAR':
-            invvar = np.asarray(hdu.data, dtype=np.float32)
-        elif itype == 'MASKBITS':
-            mask = np.asarray(hdu.data)
-        elif itype == '':
-            # no IMAGETYP card: fall back on HDU order (IMAGE, [INVVAR], [MASKBITS])
-            if want_invvar and invvar is None:
-                invvar = np.asarray(hdu.data, dtype=np.float32)
-            elif want_maskbits and mask is None:
-                mask = np.asarray(hdu.data)
-    if image is None:
-        raise RuntimeError('cutout FITS contained no image HDU')
-    if want_invvar and invvar is None:
-        raise RuntimeError('cutout FITS missing INVVAR HDU')
-    if want_maskbits and mask is None:
-        raise RuntimeError('cutout FITS missing MASKBITS HDU')
-    header_str = hdul[0].header.tostring()
-    return image, invvar, mask, header_str
-
-
 def _fetch_container(task):
     """Fetch one cutout via the container (CFS reads); returns a store record."""
     from cutout import cutout
@@ -183,54 +154,24 @@ def _fetch_container(task):
         if not os.path.exists(tmpfn):
             raise RuntimeError('container cutout produced no output file')
         with fits.open(tmpfn, memmap=False) as hdul:
-            image, invvar, mask, header_str = _parse_cutout_fits(
+            image, invvar, mask, header_str = parse_cutout_fits(
                 hdul, task['invvar'], task['maskbits'])
     finally:
         if os.path.exists(tmpfn):
             os.remove(tmpfn)
 
-    return _make_record(task, image, invvar, mask, header_str, 'container')
+    return make_cutout_record(task['targetid'], task['ra'], task['dec'],
+                              task['size'], task['bands'],
+                              image, invvar, mask, header_str, 'container')
 
 
 def _fetch_url(task):
     """One-shot fallback fetch from the production Legacy Surveys viewer."""
-    import urllib.request
-    from astropy.io import fits
-
-    url = ('{base}/cutout.fits?ra={ra}&dec={dec}&width={s}&height={s}'
-           '&layer={layer}&pixscale={pixscale}&bands={bands}').format(
-        base=task['url_base'], ra=task['ra'], dec=task['dec'],
-        s=task['size'], layer=task['layer'], pixscale=task['pixscale'],
-        bands=''.join(task['bands']))
-    if task['invvar']:
-        url += '&invvar'
-    if task['maskbits']:
-        url += '&maskbits'
-
-    with urllib.request.urlopen(url, timeout=task['url_timeout']) as resp:
-        payload = resp.read()
-    with fits.open(io.BytesIO(payload), memmap=False) as hdul:
-        image, invvar, mask, header_str = _parse_cutout_fits(
-            hdul, task['invvar'], task['maskbits'])
-
-    return _make_record(task, image, invvar, mask, header_str, 'url')
-
-
-def _make_record(task, image, invvar, mask, header_str, fetch_method):
-    expected = (len(task['bands']), task['size'], task['size'])
-    if image.shape != expected:
-        raise RuntimeError('image shape {} != expected {}'.format(image.shape, expected))
-    return {
-        'targetid': task['targetid'],
-        'ra': task['ra'],
-        'dec': task['dec'],
-        'box_size': task['size'],
-        'image': image,
-        'invvar': invvar,
-        'mask': mask,
-        'header': header_str,
-        'fetch_method': fetch_method,
-    }
+    return fetch_cutout_url(
+        task['ra'], task['dec'], task['size'], task['targetid'],
+        layer=task['layer'], pixscale=task['pixscale'], bands=task['bands'],
+        invvar=task['invvar'], maskbits=task['maskbits'],
+        url_base=task['url_base'], timeout=task['url_timeout'])
 
 
 def _fetch_one_safe(task):
@@ -284,19 +225,6 @@ def _fetch_one_safe(task):
 # Planning
 # ----------------------------------------------------------------------
 
-def _load_tombstones(outdir):
-    path = os.path.join(outdir, FAILED_MANIFEST)
-    tombs = set()
-    if os.path.exists(path):
-        with open(path, newline='') as f:
-            for row in csv.DictReader(f):
-                try:
-                    tombs.add(int(row['targetid']))
-                except (KeyError, ValueError):
-                    continue
-    return tombs
-
-
 def plan(args, outdir_data, size):
     """Rank-0 planning: decide what needs fetching and partition by brick.
 
@@ -330,7 +258,7 @@ def plan(args, outdir_data, size):
 
     tombs = set()
     if not args.retry_failed:
-        tombs = _load_tombstones(outdir_data)
+        tombs = load_tombstones(outdir_data)
         if tombs:
             print('Excluding {} tombstoned objects from {} '
                   '(--retry-failed to re-attempt)'.format(len(tombs), FAILED_MANIFEST),
@@ -590,7 +518,7 @@ def main():
                         help='Fall back to the production viewer for objects the '
                              'container cannot fetch (default).')
     parser.add_argument('--no-url-fallback', dest='url_fallback', action='store_false')
-    parser.add_argument('--url-base', type=str, default=URL_BASE_DEFAULT,
+    parser.add_argument('--url-base', type=str, default=PRODUCTION_VIEWER,
                         help='Viewer base URL for the fallback (use production, not '
                              'viewer-dev: dev serves 2x invvar in brick overlaps).')
     parser.add_argument('--url-timeout', type=int, default=120)

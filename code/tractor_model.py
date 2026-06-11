@@ -28,6 +28,7 @@ from astropy.wcs import WCS
 import time
 import sys
 import argparse
+import cutout_store
 
 def simple_progress_bar(iteration, total, length=30):
     if total == 0:
@@ -258,24 +259,24 @@ def save_rgb_single_panel(data_arr, file_path, image_name=None):
     return
 
 
-def get_img_source(i, ra, dec, tgid, zred, file_path, img_path, width, pixscale=0.262, testing=True):
+def get_img_source(i, ra, dec, tgid, zred, file_path, cutouts_dir, brickname, width, pixscale=0.262, testing=True):
     '''
     Getting the model of the targeted DESI source
     '''
-    
+
     if os.path.exists(f"{file_path}/tractor_source_model.npy"):
         return
     else:
         tractor = load_tractor(file_path)
-        
+
         seps = compute_separations(ra, dec, tractor.get("ra"), tractor.get("dec"))
-    
+
         #this is not a reliable way to get the source because there can be floating point errors? So maybe 0.1 arcsecs
         tractor_source = tractor[np.argmin(seps)]
 
 
-        img_data = fits.open(img_path)[0].data
-        
+        img_data = cutout_store.read_cutout(cutouts_dir, brickname, tgid)["image"]
+
         if np.min(seps) > 1:
             print(f"FYI, this object has rather large separation of {np.min(seps)} arcsec. Probably due to the LOWZ target catalog issue. RA={ra}, DEC={dec}, PATH={file_path}")
 
@@ -301,15 +302,13 @@ def get_img_source(i, ra, dec, tgid, zred, file_path, img_path, width, pixscale=
             wcs = make_custom_wcs(ra, dec, width, pixscale)
             mod = build_model_image(tractor_source, wcs, ave_psfsize_dict)
             np.save(f"{file_path}/tractor_source_model.npy", mod)
-        
-            img_data = fits.open(img_path)[0].data
 
             # save_rgb_tripanel(mod, img_data, file_path, tgid, testing,use_center_only=False)
             
     return
 
 
-def get_bkg_sources(i, ra, dec, tgid, zred, file_path, img_path, width, pixscale=0.262, testing=True):
+def get_bkg_sources(i, ra, dec, tgid, zred, file_path, cutouts_dir, brickname, width, pixscale=0.262, testing=True):
     '''
     Getting the tractor model of the background
     '''
@@ -330,9 +329,10 @@ def get_bkg_sources(i, ra, dec, tgid, zred, file_path, img_path, width, pixscale
             print(f"Main segment map does not exist: {tgid}")
             return
             
-        else: 
-            img_data = fits.open(img_path)[0].data
-            wcs_cutout = WCS(fits.getheader(img_path))
+        else:
+            cutout = cutout_store.read_cutout(cutouts_dir, brickname, tgid)
+            img_data = cutout["image"]
+            wcs_cutout = cutout_store.get_wcs(cutout["header"])
         
             xpix, ypix, _ = wcs_cutout.all_world2pix(tractor.get("ra"), tractor.get("dec"), 0, 1)
         
@@ -362,7 +362,7 @@ def get_bkg_sources(i, ra, dec, tgid, zred, file_path, img_path, width, pixscale
         return
 
 
-def get_blended_remove_sources(i, ra, dec, tgid, zred, file_path, img_path, width,pixscale=0.262, testing=True):
+def get_blended_remove_sources(i, ra, dec, tgid, zred, file_path, cutouts_dir, brickname, width,pixscale=0.262, testing=True):
     '''
     Getting the model of the sources that lie on the main segment (blended sources) but that are deemed to be not be part of the parent galaxy
     '''
@@ -414,10 +414,8 @@ def get_blended_remove_sources(i, ra, dec, tgid, zred, file_path, img_path, widt
     
                 
                 mod = build_model_image(tractor_blend_re, wcs, ave_psfsize_dict, mean_psf=True)
-                
+
                 np.save(f"{file_path}/tractor_blend_remove_model.npy", mod)
-            
-                img_data = fits.open(img_path)[0].data
             else:
                 #there were no sources to subtract and so we can save an empty array!
                 np.save(f"{file_path}/tractor_blend_remove_model.npy", np.zeros((3, width, width))  )
@@ -502,7 +500,7 @@ def get_matched_subset(cat, tractor, tgid):
     
 
 
-def get_main_blob_sources(i, ra, dec, tgid, zred, file_path, img_path, width, pixscale=0.262,testing=False):
+def get_main_blob_sources(i, ra, dec, tgid, zred, file_path, cutouts_dir, brickname, width, pixscale=0.262,testing=False):
     '''
     Function that gets all the tractor sources for things on the main blob. This will contain sources that we also removed via a color cut. But we will do that step in the cog function. Here for the simple photo purposes as well, we will save all the non-stars sources on the segment! 
     
@@ -640,7 +638,7 @@ def filter_existing_sources(dwarf_cat, output_files, overwrite):
 
 
 def worker(args):
-    i, dwarf_cat, func = args
+    i, dwarf_cat, func, cutouts_dir = args
     func(
         i,
         dwarf_cat["RA"][i],
@@ -648,7 +646,8 @@ def worker(args):
         dwarf_cat["TARGETID"][i],
         dwarf_cat["Z"][i],
         dwarf_cat["FILE_PATH"][i],
-        dwarf_cat["IMAGE_PATH"][i],
+        cutouts_dir,
+        dwarf_cat["BRICKNAME"][i],
         dwarf_cat["IMAGE_SIZE_PIX"][i],
         testing=False
     )
@@ -735,7 +734,11 @@ if __name__ == '__main__':
     overwrite_photometry = args.overwrite_photometry
     
     print(f"Reading the sample = {use_sample}")
-    
+
+    #per-brick HDF5 cutout shard store (read-only here)
+    cutouts_dir = cutout_store.get_store_dir(use_sample)
+    print(f"Cutout store: {cutouts_dir}")
+
     if use_sample == "sga":
         dwarf_cat = Table.read("/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_SGA_matched_dwarfs_REPROCESS_V2.fits")
     if use_sample == "clean":
@@ -792,7 +795,7 @@ if __name__ == '__main__':
         if total_filtered > 0:
             pool = mp.Pool(62)
             completed = 0
-            for _ in pool.imap_unordered(worker, [(i, dwarf_cat_filtered, get_img_source ) for i in range(total_filtered)], chunksize = 500 ):
+            for _ in pool.imap_unordered(worker, [(i, dwarf_cat_filtered, get_img_source, cutouts_dir ) for i in range(total_filtered)], chunksize = 500 ):
                 completed += 1
                 if completed % 1000 == 0 or completed == total_filtered:
                     simple_progress_bar(completed, total_filtered-1)
@@ -807,7 +810,7 @@ if __name__ == '__main__':
         if total_filtered > 0:
             pool = mp.Pool(62)
             completed = 0
-            for _ in pool.imap_unordered(worker, [(i, dwarf_cat_filtered, get_bkg_sources ) for i in range(total_filtered)], chunksize = 500 ):
+            for _ in pool.imap_unordered(worker, [(i, dwarf_cat_filtered, get_bkg_sources, cutouts_dir ) for i in range(total_filtered)], chunksize = 500 ):
                 completed += 1
                 if completed % 1000 == 0 or completed == total_filtered:
                     simple_progress_bar(completed, total_filtered-1)
@@ -821,7 +824,7 @@ if __name__ == '__main__':
         if total_filtered > 0:
             pool = mp.Pool(62)
             completed = 0
-            for _ in pool.imap_unordered(worker, [(i, dwarf_cat_filtered, get_blended_remove_sources) for i in range(total_filtered)], chunksize = 500 ):
+            for _ in pool.imap_unordered(worker, [(i, dwarf_cat_filtered, get_blended_remove_sources, cutouts_dir) for i in range(total_filtered)], chunksize = 500 ):
                 completed += 1
                 if completed % 1000 == 0 or completed == total_filtered:
                     simple_progress_bar(completed, total_filtered-1)
@@ -836,7 +839,7 @@ if __name__ == '__main__':
         if total_filtered > 0:
             pool = mp.Pool(62)
             completed = 0
-            for _ in pool.imap_unordered(worker, [(i, dwarf_cat_filtered, get_main_blob_sources) for i in range(total_filtered)], chunksize = 500 ):
+            for _ in pool.imap_unordered(worker, [(i, dwarf_cat_filtered, get_main_blob_sources, cutouts_dir) for i in range(total_filtered)], chunksize = 500 ):
                 completed += 1
                 if completed % 1000 == 0 or completed == total_filtered:
                     simple_progress_bar(completed, total_filtered-1)

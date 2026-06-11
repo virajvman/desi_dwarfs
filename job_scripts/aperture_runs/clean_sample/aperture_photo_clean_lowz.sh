@@ -23,6 +23,9 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 
+# HDF5 cutout shard store: readers need file locking disabled on CFS/Lustre
+export HDF5_USE_FILE_LOCKING=FALSE
+
 # ------------------------------
 # Configurable flags
 # ------------------------------
@@ -58,10 +61,10 @@ fi
 if [ "$RUN_SHIFTER" = true ]; then
     shifterimg pull docker:legacysurvey/legacypipe:DR10.3.4
     
-    srun --cpu-bind=cores shifter --image docker:legacysurvey/legacypipe:DR10.3.4 \
+    srun --cpu-bind=cores shifter --env=PYTHONUSERBASE=$HOME/.local-legacypipe --image docker:legacysurvey/legacypipe:DR10.3.4 \
         python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -img_source -use_sample clean "${TRACTOR_PHOTO_ARGS[@]}"
     
-    srun --cpu-bind=cores shifter --image docker:legacysurvey/legacypipe:DR10.3.4 \
+    srun --cpu-bind=cores shifter --env=PYTHONUSERBASE=$HOME/.local-legacypipe --image docker:legacysurvey/legacypipe:DR10.3.4 \
         python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -parent_galaxy -bkg_source -blend_remove_source -use_sample clean "${TRACTOR_PHOTO_ARGS[@]}"
 fi
 

@@ -19,7 +19,7 @@
 # are skipped).
 # ============================================================
 CATALOG_PATH="/pscratch/sd/v/virajvm/agent_ai_data/download_round_2_catalog.fits"
-OUTDIR="$PSCRATCH/dwarf_cutouts/general"
+OUTDIR="/global/cfs/cdirs/desi/users/virajvm/dwarf_cutouts/general"
 RA_COL="RA"
 DEC_COL="DEC"
 ID_COL="TARGETID"

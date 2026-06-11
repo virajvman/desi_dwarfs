@@ -3,6 +3,9 @@ set -e
 cd /global/u1/v/virajvm/DESI2_LOWZ
 source /global/cfs/cdirs/desi/software/desi_environment.sh main
 
+# HDF5 cutout shard store: readers need file locking disabled on CFS/Lustre
+export HDF5_USE_FILE_LOCKING=FALSE
+
 # ------------------------------
 # Configurable flags
 # ------------------------------
@@ -46,9 +49,9 @@ fi
 if [ "$RUN_SHIFTER" = true ]; then
     shifterimg pull docker:legacysurvey/legacypipe:DR10.3.4
     
-    shifter --image docker:legacysurvey/legacypipe:DR10.3.4 python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -img_source -use_sample $SAMPLE_TYPE "${TRACTOR_PHOTO_ARGS[@]}"
+    shifter --env=PYTHONUSERBASE=$HOME/.local-legacypipe --image docker:legacysurvey/legacypipe:DR10.3.4 python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -img_source -use_sample $SAMPLE_TYPE "${TRACTOR_PHOTO_ARGS[@]}"
     
-    shifter --image docker:legacysurvey/legacypipe:DR10.3.4 python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -parent_galaxy -bkg_source -blend_remove_source -use_sample $SAMPLE_TYPE -tgids $TGID "${TRACTOR_PHOTO_ARGS[@]}"
+    shifter --env=PYTHONUSERBASE=$HOME/.local-legacypipe --image docker:legacysurvey/legacypipe:DR10.3.4 python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -parent_galaxy -bkg_source -blend_remove_source -use_sample $SAMPLE_TYPE -tgids $TGID "${TRACTOR_PHOTO_ARGS[@]}"
 
 fi
 

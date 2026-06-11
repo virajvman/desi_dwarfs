@@ -17,7 +17,7 @@
 # Reruns are incremental.
 # ============================================================
 CATALOG_PATH="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_sga_matched_dwarfs.fits"
-OUTDIR="$PSCRATCH/dwarf_cutouts/sga"
+OUTDIR="/global/cfs/cdirs/desi/users/virajvm/dwarf_cutouts/sga"
 RA_COL="RA"
 DEC_COL="DEC"
 ID_COL="TARGETID"

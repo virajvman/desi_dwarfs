@@ -22,7 +22,8 @@ from astropy.table import Column
 from aperture_photo import run_aperture_pipe
 from aperture_cogs import run_cog_pipe
 # from get_sga_distances import get_sga_info
-from desi_lowz_funcs import save_subimage, fetch_psf, generate_random_string, add_paths_to_catalog, save_cutouts, get_stellar_mass
+from desi_lowz_funcs import save_subimage, fetch_psf, generate_random_string, add_paths_to_catalog, get_stellar_mass
+import cutout_store
 from desiutil import brick
 import fitsio
 from easyquery import Query, QueryMaker
@@ -234,11 +235,9 @@ def get_relevant_files_aper(input_dict):
     box_size = input_dict["image_size"]
     
     top_path_k = f"{top_folder}/{wcat}/{sweep_folder}/{brick_i}/{samp_k}_tgid_{tgid_k}"
-    
+
     check_path_existence(all_paths=[top_path_k])
     #inside this folder, we will save all the relevant files and info!!
-    image_path =  top_folder + f"_cutouts/image_tgid_{tgid_k}_ra_{ra_k:.3f}_dec_{dec_k:.3f}.fits"
-
 
     ##for now, we will only do this for objects that do not already have a source catalog file!!
     if os.path.exists(top_path_k + "/source_cat_f.fits"):
@@ -254,33 +253,10 @@ def get_relevant_files_aper(input_dict):
         return_sources_wneigh_bricks(top_path_k, ra_k, dec_k, objid_k, brickid_k, box_size, more_bricks, more_wcats, more_sweeps,use_pz = False)
 
 
-    if os.path.exists(image_path):
-        pass
-    else:
-        print(f"IMAGE PATH DOES NOT EXIST: {image_path}")
-
-        # file_search = glob.glob(image_path)
-        # print(file_search)
-        # print("---")
-        # #if this image path does not exist, does it exist in the other folder?
-        # if "all_deshreds" in image_path:
-        #     image_path_other = image_path.replace("all_deshreds","all_good")
-        # if "all_good" in image_path:
-        #     image_path_other = image_path.replace("all_good","all_deshreds")
-        # if "all_sga" in image_path:
-        #     image_path_other = image_path.replace("all_sga","all_good")
-            
-        # if os.path.exists(image_path_other):
-        #     shutil.copy(image_path_other, image_path)
-        # else:
-            #we need to obtain the cutout data!
-
-        #as we are multi-threading the processing for each galaxy, and sessions are not thread safe
-        #we will be creating a session per image and then closing it right away!
-        with requests.Session() as session:
-            save_cutouts(ra_k, dec_k, image_path, session, size=box_size)
-        
     ##done saving all the relevant, useful files!
+    ##NOTE: image cutouts are no longer fetched per-galaxy here -- the brick's
+    ##process heals missing cutouts into the HDF5 shard store in one batch
+    ##(see process_bricks_parallel), keeping a single writer per shard.
     return
 
 
@@ -472,16 +448,71 @@ def create_brick_jobs(brick_i, shreds_focus_w, wcat, top_folder):
     return brick_dicts
     
 
-def process_bricks_parallel(brick_dict):
+def heal_brick_cutouts(brick_dict, cutouts_dir, tombstones=frozenset()):
+    '''
+    Ensure every galaxy in this brick has a cutout in the brick's HDF5 shard.
+    Threads fetch missing cutouts into memory (production viewer URL); the
+    shard is then written ONCE by this process -- single writer per shard.
+    NOTE: do not run two -make_cats jobs writing the same store concurrently.
+    '''
+    brick_i = brick_dict[0]["brick_i"]
+    existing = cutout_store.list_shard_targetids(cutouts_dir, brick_i)
+
+    missing, n_tomb = [], 0
+    for g in brick_dict:
+        tgid = int(g["TARGETID"])
+        if tgid in existing:
+            continue
+        if tgid in tombstones:
+            n_tomb += 1
+            continue
+        missing.append(g)
+
+    if n_tomb > 0:
+        skipped = [int(g["TARGETID"]) for g in brick_dict if int(g["TARGETID"]) in tombstones]
+        print(f"Brick {brick_i}: skipping {n_tomb} tombstoned objects "
+              f"(permanently unfetchable), e.g. {skipped[:5]}", flush=True)
+    if not missing:
+        return
+
+    def fetch_one(g):
+        return cutout_store.fetch_cutout_url(
+            g["RA"], g["DEC"], int(g["image_size"]), int(g["TARGETID"]))
+
+    records = []
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(fetch_one, g): g for g in missing}
+        for future in as_completed(futures):
+            g = futures[future]
+            try:
+                records.append(future.result())
+            except Exception as exc:
+                print(f"WARNING: cutout fetch failed for TARGETID {g['TARGETID']} "
+                      f"in brick {brick_i}: {exc!r}", flush=True)
+
+    if records:
+        cutout_store.write_cutouts_batch(cutouts_dir, brick_i, records)
+        print(f"Brick {brick_i}: healed {len(records)}/{len(missing)} missing cutouts "
+              f"into shard", flush=True)
+
+
+def process_bricks_parallel(brick_dict, cutouts_dir=None, tombstones=frozenset()):
     '''
     This function takes in a single list of dictionaries (brick_dict) corresponding to all galaxies in that brick!!
     '''
+    if len(brick_dict) == 0:
+        return
+
     with ThreadPoolExecutor(max_workers=8) as executor:
         #if there are a lot of galaxies then only we use tqdm!
         if len(brick_dict) > 50:
              list(tqdm(executor.map(get_relevant_files_aper, brick_dict), total=len(brick_dict), desc=f"Galaxies in brick {brick_dict[0]['brick_i']}" ) )
         else:
             list(executor.map(get_relevant_files_aper, brick_dict))
+
+    #heal any missing image cutouts for this brick (single shard write)
+    if cutouts_dir is not None:
+        heal_brick_cutouts(brick_dict, cutouts_dir, tombstones=tombstones)
 
 
 
@@ -640,35 +671,37 @@ if __name__ == '__main__':
     clean_cat_2 = Table.read(clean_file_2)
     sga_cat = Table.read(sga_file)
 
-    ##we need to be careful here in how we are defining the top folder!! 
-    if "IMAGE_PATH" in shreds_cat.colnames and "FILE_PATH" in shreds_cat.colnames:
-        print("image_path and file_path columns already exist in shreds catalog!")        
+    ##we need to be careful here in how we are defining the top folder!!
+    ##NOTE: IMAGE_PATH is no longer used -- cutouts are keyed by (BRICKNAME,
+    ##TARGETID) in the HDF5 shard store. Only FILE_PATH is required now.
+    if "FILE_PATH" in shreds_cat.colnames:
+        print("file_path column already exists in shreds catalog!")
     else:
-        print("Adding image_path and file_path to shreds catalog!")
+        print("Adding file_path to shreds catalog!")
         add_paths_to_catalog(org_file = shreds_file, out_file = shreds_file,top_folder="/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds")
 
     ##
-    
-    if "IMAGE_PATH" in clean_cat.colnames and "FILE_PATH" in clean_cat.colnames:
-        print("image_path and file_path columns already exist in clean catalog!")
+
+    if "FILE_PATH" in clean_cat.colnames:
+        print("file_path column already exists in clean catalog!")
     else:
-        print("Adding image_path and file_path to clean catalog!")
+        print("Adding file_path to clean catalog!")
         add_paths_to_catalog(org_file = clean_file, out_file = clean_file,top_folder="/pscratch/sd/v/virajvm/redo_photometry_plots/all_good")
 
     ###
-    
-    if "IMAGE_PATH" in clean_cat_2.colnames and "FILE_PATH" in clean_cat_2.colnames:
-        print("image_path and file_path columns already exist in clean TOTAL catalog!")
+
+    if "FILE_PATH" in clean_cat_2.colnames:
+        print("file_path column already exists in clean TOTAL catalog!")
     else:
-        print("Adding image_path and file_path to clean TOTAL catalog!")
+        print("Adding file_path to clean TOTAL catalog!")
         add_paths_to_catalog(org_file = clean_file_2, out_file = clean_file_2,top_folder="/pscratch/sd/v/virajvm/redo_photometry_plots/all_good")
 
     ##
-        
-    if "IMAGE_PATH" in sga_cat.colnames and "FILE_PATH" in sga_cat.colnames:
-        print("image_path and file_path columns already exist in sga catalog!")
+
+    if "FILE_PATH" in sga_cat.colnames:
+        print("file_path column already exists in sga catalog!")
     else:
-        print("Adding image_path and file_path to sga catalog!")
+        print("Adding file_path to sga catalog!")
         add_paths_to_catalog(org_file = sga_file, out_file = sga_file,top_folder="/pscratch/sd/v/virajvm/redo_photometry_plots/all_sga")
 
 
@@ -707,9 +740,6 @@ if __name__ == '__main__':
     #let us check that the number of sources is unique
     print(f"Total number of objects in catalog = {len(shreds_all)}")
     print(f"Total number of UNIQUE objects in catalog = {len(np.unique(shreds_all['TARGETID'].data)) }")
-    
-    ##let us do a quick tally on how many of the image paths are blank! that is, they need new image paths!
-    print("In this catalog, " + str(len(shreds_all[shreds_all['IMAGE_PATH'] == ""])) + " objects do not have image paths!")
     
     ## filtering for the sample now 
     if sample_list:
@@ -779,11 +809,20 @@ if __name__ == '__main__':
             print("No new objects to process. Exiting.")
             sys.exit(0)
 
-    if make_cats == True:    
+    if make_cats == True:
         print_stage("Generating relevant files for doing aperture photometry")
         print(f"Using catalog being used: {use_sample}")
-    
+
         print("Number of objects whose photometry will be redone = ", len(shreds_focus) )
+
+        #the HDF5 cutout shard store for this sample class (-make_cats is the
+        #only stage that WRITES to it; everything downstream is read-only)
+        cutouts_dir = cutout_store.get_store_dir(use_sample)
+        os.makedirs(cutouts_dir, exist_ok=True)
+        tombstones = frozenset(cutout_store.load_tombstones(cutouts_dir))
+        print(f"Cutout store: {cutouts_dir} ({len(tombstones)} tombstoned objects will be skipped)")
+        process_bricks_fixed = partial(process_bricks_parallel,
+                                       cutouts_dir=cutouts_dir, tombstones=tombstones)
     
         print(f"Number of objects in south: {len(shreds_focus[shreds_focus['is_south'] == 1])}" )
         print(f"Number of objects in north: {len(shreds_focus[shreds_focus['is_south'] == 0])}" )
@@ -837,8 +876,8 @@ if __name__ == '__main__':
                 ##all_brick_jobs is the list we will be sending to different cores. One item is this list corresponds to list of all galaxies in a single brick!
             
                 ##each brick will be processed on a core, and within each brick, the galaxies will be multi-threading!
-                with mp.Pool(processes=ncores) as pool: 
-                    results = list(tqdm(pool.imap(process_bricks_parallel, all_brick_jobs), total=len(all_brick_jobs), desc="Bricks"))
+                with mp.Pool(processes=ncores) as pool:
+                    results = list(tqdm(pool.imap(process_bricks_fixed, all_brick_jobs), total=len(all_brick_jobs), desc="Bricks"))
 
 
     ##################
@@ -875,10 +914,42 @@ if __name__ == '__main__':
         if use_sample == "sga":
             top_folder = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_sga"
             save_sample_path = "/pscratch/sd/v/virajvm/redo_photometry_plots/all_redo_figures/%s/"%sample_str
-        
+
             check_path_existence(all_paths=[save_sample_path])
-            
-                    
+
+        ##################
+        ##Upfront cutout-store check: these stages are strictly READ-ONLY on
+        ##the shard store. Tombstoned objects are dropped (they can never have
+        ##photometry); any other missing cutout aborts the run before any work
+        ##starts -- run -make_cats (or the bulk cutout job) to populate.
+        ##################
+        cutouts_dir = cutout_store.get_store_dir(use_sample)
+        print(f"Cutout store: {cutouts_dir}")
+
+        store_tombs = cutout_store.load_tombstones(cutouts_dir)
+        if len(store_tombs) > 0:
+            tomb_mask = np.isin(shreds_focus["TARGETID"].data, list(store_tombs))
+            if tomb_mask.sum() > 0:
+                tomb_tgids = shreds_focus["TARGETID"].data[tomb_mask]
+                print(f"EXCLUDING {tomb_mask.sum()} objects with no obtainable cutout "
+                      f"(tombstoned in {cutout_store.FAILED_MANIFEST}), e.g. {list(tomb_tgids[:5])}")
+                shreds_focus = shreds_focus[~tomb_mask]
+
+        print("Scanning cutout store for existence check...")
+        store_contents = cutout_store.list_existing(cutouts_dir, quarantine_corrupt=False)
+        missing_tgids = [
+            int(t) for t, b in zip(shreds_focus["TARGETID"], shreds_focus["BRICKNAME"])
+            if int(t) not in store_contents.get(str(b), ())
+        ]
+        n_have = len(shreds_focus) - len(missing_tgids)
+        print(f"Cutout store check: {n_have}/{len(shreds_focus)} objects in store")
+        if len(missing_tgids) > 0:
+            print(f"ERROR: {len(missing_tgids)} objects have no cutout in {cutouts_dir}.")
+            print(f"First missing TARGETIDs: {missing_tgids[:20]}")
+            print("Run this pipeline with -make_cats (or the bulk cutout job in "
+                  "job_scripts/image_cutouts/general/) first, then retry.")
+            sys.exit(1)
+
         def produce_input_dicts(k):
             '''
             Function that produces the input dictionaries that will be fed to the aperture photometry function
@@ -922,12 +993,9 @@ if __name__ == '__main__':
             sweep_folder = sweep_k.replace("-pz.fits","")
     
     
-            if use_sample == "shred":
-                img_path_k = f"/pscratch/sd/v/virajvm/redo_photometry_plots/all_deshreds_cutouts/image_tgid_{tgid_k}_ra_{ra_k:.3f}_dec_{dec_k:.3f}.fits" 
-            if use_sample == "clean":
-                img_path_k = f"/pscratch/sd/v/virajvm/redo_photometry_plots/all_good_cutouts/image_tgid_{tgid_k}_ra_{ra_k:.3f}_dec_{dec_k:.3f}.fits"
-            if use_sample == "sga":
-                img_path_k = f"/pscratch/sd/v/virajvm/redo_photometry_plots/all_sga_cutouts/image_tgid_{tgid_k}_ra_{ra_k:.3f}_dec_{dec_k:.3f}.fits"
+            #informational only (kept in the output dict); cutouts are read
+            #from the per-brick HDF5 shard below
+            img_path_k = cutout_store.shard_path(cutouts_dir, brick_k)
 
             save_path_k = top_folder + "/%s/"%wcat_k + sweep_folder + "/" + brick_k + "/%s_tgid_%d"%(sample_str_i, tgid_k)
     
@@ -953,31 +1021,23 @@ if __name__ == '__main__':
             #removing any potentially duplicated sources due to overlapping bricks!
             source_cat_f = remove_source_cat_duplicates(source_cat_f)
             
-            ##read the relevant image files!! 
-            if os.path.exists(img_path_k):
-                img_data = fits.open(img_path_k)
-                data_arr = img_data[0].data
-                invvar_arr = img_data[1].data
-                mask_arr = img_data[2].data
-                wcs = WCS(fits.getheader( img_path_k ))
-            else:
-                #in case image is not downloaded, we download it!
-                print("Image is being downloaded as did not exist!")
-                
-                with requests.Session() as session:
-                    save_cutouts(ra_k,dec_k,img_path_k,session,size=box_size)
-                    
-                img_data = fits.open(img_path_k)
-                data_arr = img_data[0].data
-                invvar_arr = img_data[1].data
-                mask_arr = img_data[2].data
-                wcs = WCS(fits.getheader( img_path_k ))
-    
+            ##read the cutout from the shard store (read-only; the upfront
+            ##check guarantees existence, so a miss here is a real error)
+            try:
+                cutout_k = cutout_store.read_cutout(cutouts_dir, brick_k, tgid_k)
+            except (KeyError, OSError) as exc:
+                raise RuntimeError(
+                    f"Cutout for TARGETID {tgid_k} (brick {brick_k}) not readable from "
+                    f"{cutouts_dir} -- run -make_cats or the bulk cutout job first."
+                ) from exc
+
+            data_arr = cutout_k["image"]
+            invvar_arr = cutout_k["invvar"]
+            mask_arr = cutout_k["mask"]
+            wcs = cutout_store.get_wcs(cutout_k["header"])
+
             if np.shape(data_arr[0])[0] != box_size:
-                raise ValueError(f"Issue with image size here={img_path_k}. Size should be {box_size}, but is {np.shape(data_arr[0])[0]}")
-        
-                # import shutil
-                # shutil.copy(img_path_k, save_path_k + "/")
+                raise ValueError(f"Issue with image size here={img_path_k}, TARGETID={tgid_k}. Size should be {box_size}, but is {np.shape(data_arr[0])[0]}")
     
             temp_dict = {"tgid":tgid_k, "ra":ra_k, "dec":dec_k, "redshift":redshift_k, "save_path":save_path_k, "img_path":img_path_k, "wcs": wcs , "image_data": data_arr, "mask_data": mask_arr, "invvar_data": invvar_arr, "source_cat": source_cat_f, "index":k , "org_mags": [ shreds_focus["MAG_G"][k], shreds_focus["MAG_R"][k], shreds_focus["MAG_Z"][k] ] , "overwrite": overwrite_bool, "image_size" :  box_size,
                         "bright_star_info": (bstar_ra, bstar_dec, bstar_radius, bstar_fdist, bstar_mag), "sga_info": (sga_dist, sga_ndist), 
@@ -1491,7 +1551,7 @@ if __name__ == '__main__':
 
     if get_cnn_inputs and tgids_list is None and run_cog:
         print("Getting the PCNN shred classifier input files")
-        get_pcnn_data_inputs(sample_str, sample_cat_path = final_save_name)
+        get_pcnn_data_inputs(sample_str, sample_cat_path = final_save_name, use_sample = use_sample)
 
     if tgids_list is None and run_aper:
         print("Saving aperture photometry imgs")

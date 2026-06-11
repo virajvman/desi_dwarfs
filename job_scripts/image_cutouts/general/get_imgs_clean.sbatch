@@ -17,7 +17,7 @@
 # you can feed this any catalog of clean-sample objects.
 # ============================================================
 CATALOG_PATH="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v5.fits"
-OUTDIR="$PSCRATCH/dwarf_cutouts/clean"
+OUTDIR="/global/cfs/cdirs/desi/users/virajvm/dwarf_cutouts/clean"
 RA_COL="RA"
 DEC_COL="DEC"
 ID_COL="TARGETID"

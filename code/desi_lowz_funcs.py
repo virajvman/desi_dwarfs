@@ -2018,34 +2018,17 @@ def parallel_run(target_list, n_processes=None):
 def add_paths_to_catalog(org_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v3.fits", out_file = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_clean_catalog_v3_logm9.fits",top_folder=None):
     
     '''
-    In this function, we add the image path and file path to the catalog for ease!
+    In this function, we add the file path (per-galaxy output folder) to the catalog for ease!
 
     top_folder is the main directory that contains the good objects or shred objects!
+
+    NOTE: this used to also add an IMAGE_PATH column pointing at per-object
+    FITS cutouts. Cutouts now live in per-brick HDF5 shards keyed by
+    (BRICKNAME, TARGETID) -- see code/cutout_store.py -- so IMAGE_PATH is no
+    longer written or used.
     '''
 
     dwarf_cat = Table.read(org_file)
-
-    print("Adding image paths!")
-    target_list = []
-    all_tgids  = dwarf_cat["TARGETID"].data
-    all_ras  = dwarf_cat["RA"].data
-    all_decs  = dwarf_cat["DEC"].data
-    all_sizes  = dwarf_cat["IMAGE_SIZE_PIX"].data
-    
-    for i in trange(len(dwarf_cat)):
-        target_list.append( ( top_folder, all_tgids[i], all_ras[i], all_decs[i], all_sizes[i] )  )
-
-    all_image_paths = parallel_run(target_list, n_processes=8)
-
-    print(len(all_image_paths), len(target_list), len(dwarf_cat))
-
-    #filling in Nones with blank filler values
-    all_image_paths[all_image_paths == None] = ""
-
-    #converting to same dtype!
-    all_image_paths = all_image_paths.astype(str)
-
-    dwarf_cat["IMAGE_PATH"] = all_image_paths
 
     ##ADD THE FILE PATHS!!
     print("Adding file paths!")
@@ -2111,7 +2094,9 @@ def decompose_maskbits_pow2(num):
     
 
 def save_cutouts(ra,dec,img_path,session, size=350, timeout = 120):
-    url_prefix = 'https://www.legacysurvey.org/viewer-dev/'
+    # production viewer, NOT viewer-dev: dev serves 2x invvar in brick-overlap
+    # strips (imagine d2ba303), and production serves maskbits now anyway
+    url_prefix = 'https://www.legacysurvey.org/viewer/'
     
     url = url_prefix + f'cutout.fits?ra={ra}&dec={dec}&size=%s&'%size
 

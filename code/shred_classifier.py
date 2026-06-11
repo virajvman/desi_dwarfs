@@ -17,6 +17,7 @@ from tqdm import trange
 from astropy.table import Table
 import numpy as np
 from desi_lowz_funcs import print_maxabs_diff, match_c_to_catalog, sdss_rgb
+import cutout_store
 import os
 from astropy.io import fits
 from sklearn.metrics import accuracy_score, f1_score
@@ -385,12 +386,13 @@ def evaluate(model, val_loader, device='cuda'):
     return avg_loss, acc, auc  # we still return val loss to keep existing training loop working
 
 
-def get_inputs(tgid, file_path, image_path, verbose=False):
+def get_inputs(tgid, file_path, cutouts_dir, brickname, verbose=False):
     '''
     Given the input file, it reads the relevant files to get the relevant data
 
     file_path is the path to the galaxy folder to read the tractor model
-    image_path is the path to the full fits file image
+    cutouts_dir/brickname locate the image in the per-brick HDF5 shard store
+    (see code/cutout_store.py)
 
     we are going to be saving 96x96 images, and later cropping it ot 64x64 in the dataset creation state
 
@@ -405,8 +407,7 @@ def get_inputs(tgid, file_path, image_path, verbose=False):
     #load the relevant data
     tractor_model = np.load(file_path + "/tractor_source_model.npy")
 
-    img_data = fits.open(image_path)
-    data_arr = img_data[0].data
+    data_arr = cutout_store.read_cutout(cutouts_dir, brickname, tgid)["image"]
 
     if np.shape(data_arr) != np.shape(tractor_model):
         print(f"Something wonky happening with the sizes. {tgid}, {np.shape(data_arr)} {np.shape(tractor_model)} ")
@@ -537,7 +538,7 @@ def plot_image_grid_split_channels(images, probs, true_labs, indices, rows=5, co
     plt.close()
 
 
-def get_pcnn_data_inputs(sample_name, sample_cat_path = None):
+def get_pcnn_data_inputs(sample_name, sample_cat_path = None, use_sample = "shred"):
     '''
     In this function, we create the .npy files that we will input into CNN 
     '''
@@ -551,12 +552,14 @@ def get_pcnn_data_inputs(sample_name, sample_cat_path = None):
 
     if not os.path.exists(data_file_path) or not os.path.exists(metadata_file_path):
         print("Generating the PCNN input files!")
-        
+
+        cutouts_dir = cutout_store.get_store_dir(use_sample)
+
         #now for this data_label, let us get all the input images!
         all_shred_images_unnorm = []
-        
+
         for i in range(len(shred_cat)):
-            shred_image_i = get_inputs(shred_cat["TARGETID"][i], shred_cat["FILE_PATH"][i],  shred_cat["IMAGE_PATH"][i],verbose=False)
+            shred_image_i = get_inputs(shred_cat["TARGETID"][i], shred_cat["FILE_PATH"][i], cutouts_dir, shred_cat["BRICKNAME"][i],verbose=False)
 
             if i % 2000 == 0:
                 print(f"{i}/{len(shred_cat)} Done")
@@ -829,9 +832,10 @@ if __name__ == '__main__':
                 #now for this data_label, let us get all the input images!
                 all_shred_images_unnorm = []
                 
+                cutouts_dir = cutout_store.get_store_dir("sga" if sample_i == "SGA" else "shred")
                 for i in trange(len(shred_cat)):
-                    shred_image_i = get_inputs(shred_cat["TARGETID"][i], shred_cat["FILE_PATH"][i],  shred_cat["IMAGE_PATH"][i],verbose=False)      
-                    
+                    shred_image_i = get_inputs(shred_cat["TARGETID"][i], shred_cat["FILE_PATH"][i], cutouts_dir, shred_cat["BRICKNAME"][i],verbose=False)
+
                     all_shred_images_unnorm.append(shred_image_i)
             
                 all_shred_images_unnorm = np.array(all_shred_images_unnorm)

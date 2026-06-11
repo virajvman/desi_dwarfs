@@ -16,7 +16,7 @@
 # reruns are incremental.
 # ============================================================
 CATALOG_PATH="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_y1_dwarf_shreds_catalog_v4.fits"
-OUTDIR="$PSCRATCH/dwarf_cutouts/shreds"
+OUTDIR="/global/cfs/cdirs/desi/users/virajvm/dwarf_cutouts/shreds"
 RA_COL="RA"
 DEC_COL="DEC"
 ID_COL="TARGETID"
