@@ -708,7 +708,16 @@ def argument_parser():
         action='store_true',
         help="If set, do not restrict to TARGETIDs missing from the photometry catalog.",
     )
-    
+    result.add_argument(
+        '-ncores',
+        dest='ncores',
+        type=int,
+        default=128,
+        help="Number of worker processes for the tractor model pools. Default 128 = one "
+             "worker per physical core on a Perlmutter CPU node; workers stay single-threaded "
+             "via the OMP_NUM_THREADS=1 etc. exports in the job script.",
+    )
+
     return result
 
 
@@ -732,7 +741,8 @@ if __name__ == '__main__':
     end_name = args.end_name
     photometry_catalog_override = args.photometry_catalog
     overwrite_photometry = args.overwrite_photometry
-    
+    ncores = args.ncores
+
     print(f"Reading the sample = {use_sample}")
 
     #per-brick HDF5 cutout shard store (read-only here)
@@ -793,7 +803,7 @@ if __name__ == '__main__':
         dwarf_cat_filtered = filter_existing_sources(dwarf_cat, ["tractor_source_model.npy"], overwrite)
         total_filtered = len(dwarf_cat_filtered)
         if total_filtered > 0:
-            pool = mp.Pool(62)
+            pool = mp.Pool(ncores)
             completed = 0
             for _ in pool.imap_unordered(worker, [(i, dwarf_cat_filtered, get_img_source, cutouts_dir ) for i in range(total_filtered)], chunksize = 500 ):
                 completed += 1
@@ -808,7 +818,7 @@ if __name__ == '__main__':
         dwarf_cat_filtered = filter_existing_sources(dwarf_cat, ["tractor_background_model.npy"], overwrite)
         total_filtered = len(dwarf_cat_filtered)
         if total_filtered > 0:
-            pool = mp.Pool(62)
+            pool = mp.Pool(ncores)
             completed = 0
             for _ in pool.imap_unordered(worker, [(i, dwarf_cat_filtered, get_bkg_sources, cutouts_dir ) for i in range(total_filtered)], chunksize = 500 ):
                 completed += 1
@@ -822,7 +832,7 @@ if __name__ == '__main__':
         dwarf_cat_filtered = filter_existing_sources(dwarf_cat, ["tractor_blend_remove_model.npy"], overwrite)
         total_filtered = len(dwarf_cat_filtered)
         if total_filtered > 0:
-            pool = mp.Pool(62)
+            pool = mp.Pool(ncores)
             completed = 0
             for _ in pool.imap_unordered(worker, [(i, dwarf_cat_filtered, get_blended_remove_sources, cutouts_dir) for i in range(total_filtered)], chunksize = 500 ):
                 completed += 1
@@ -837,7 +847,7 @@ if __name__ == '__main__':
         dwarf_cat_filtered = filter_existing_sources(dwarf_cat, ["tractor_parent_sources_model.npy", "tractor_main_segment_model.npy"], overwrite)
         total_filtered = len(dwarf_cat_filtered)
         if total_filtered > 0:
-            pool = mp.Pool(62)
+            pool = mp.Pool(ncores)
             completed = 0
             for _ in pool.imap_unordered(worker, [(i, dwarf_cat_filtered, get_main_blob_sources, cutouts_dir) for i in range(total_filtered)], chunksize = 500 ):
                 completed += 1

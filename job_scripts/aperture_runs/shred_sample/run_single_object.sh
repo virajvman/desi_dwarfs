@@ -26,7 +26,8 @@ TGID=39628516139993581
 # With -tgids, tractor_model.py skips photometry-catalog incremental filtering.
 END_NAME=""
 OVERWRITE_PHOTOMETRY=false
-TRACTOR_PHOTO_ARGS=(-end_name "$END_NAME")
+# single-object debug: keep tractor serial (no SBATCH header here, so avoid a 128-proc pool)
+TRACTOR_PHOTO_ARGS=(-end_name "$END_NAME" -ncores 1)
 if [ "$OVERWRITE_PHOTOMETRY" = true ]; then
     TRACTOR_PHOTO_ARGS+=(-overwrite_photometry)
 fi

@@ -7,8 +7,8 @@
 #SBATCH --mail-type=ALL
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=64
-#SBATCH --mem=32GB
+#SBATCH --cpus-per-task=256
+#SBATCH --mem=0
 #SBATCH --time=02:00:00
 #SBATCH --output=get_all_imgs.log
 

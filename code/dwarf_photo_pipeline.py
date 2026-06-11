@@ -566,7 +566,52 @@ def filter_saveimgs_paths(results, flag):
             
     return final_cog_saveimgs
 
-    
+
+def _hydrate_cutout(input_dict):
+    '''
+    Load the per-object cutout (image/invvar/mask + WCS) from the HDF5 shard
+    store, using the lightweight (cutouts_dir, brick, tgid, box_size) keys that
+    produce_input_dicts stashed in the dict. Called *inside* each photometry
+    worker so the multi-MB arrays are read locally (cheap and parallel across
+    workers) rather than being pickled worker->parent->worker. The big arrays
+    therefore never sit in the parent's memory for the whole chunk. Mutates and
+    returns input_dict.
+    '''
+    cutouts_dir = input_dict["cutouts_dir"]
+    brick_k = input_dict["brick"]
+    tgid_k = input_dict["tgid"]
+    box_size = int(input_dict["image_size"])
+
+    try:
+        cutout_k = cutout_store.read_cutout(cutouts_dir, brick_k, tgid_k, size=box_size)
+    except (KeyError, OSError) as exc:
+        raise RuntimeError(
+            f"Cutout for TARGETID {tgid_k} (brick {brick_k}) not readable from "
+            f"{cutouts_dir} -- run -make_cats or the bulk cutout job first."
+        ) from exc
+
+    data_arr = cutout_k["image"]
+    if np.shape(data_arr[0])[0] != box_size:
+        raise ValueError(f"Issue with image size for TARGETID={tgid_k} (brick {brick_k}). "
+                         f"Size should be {box_size}, but is {np.shape(data_arr[0])[0]}")
+
+    input_dict["image_data"] = data_arr
+    input_dict["invvar_data"] = cutout_k["invvar"]
+    input_dict["mask_data"] = cutout_k["mask"]
+    input_dict["wcs"] = cutout_store.get_wcs(cutout_k["header"])
+    return input_dict
+
+
+def hydrate_run_aperture_pipe(input_dict):
+    '''Worker entry point: read this object's cutout from HDF5, then run aperture photometry.'''
+    return run_aperture_pipe(_hydrate_cutout(input_dict))
+
+
+def hydrate_run_cog_pipe(input_dict):
+    '''Worker entry point: read this object's cutout from HDF5, then run the COG pipeline.'''
+    return run_cog_pipe(_hydrate_cutout(input_dict))
+
+
 if __name__ == '__main__':
     import warnings
     from astropy.units import UnitsWarning
@@ -1023,28 +1068,14 @@ if __name__ == '__main__':
             #removing any potentially duplicated sources due to overlapping bricks!
             source_cat_f = remove_source_cat_duplicates(source_cat_f)
             
-            ##read the cutout from the shard store (read-only; the upfront
-            ##check guarantees existence, so a miss here is a real error).
-            ##size=box_size central-crops (with exact WCS correction) if the
-            ##store holds this object at a larger box_size.
-            try:
-                cutout_k = cutout_store.read_cutout(cutouts_dir, brick_k, tgid_k,
-                                                    size=int(box_size))
-            except (KeyError, OSError) as exc:
-                raise RuntimeError(
-                    f"Cutout for TARGETID {tgid_k} (brick {brick_k}) not readable from "
-                    f"{cutouts_dir} -- run -make_cats or the bulk cutout job first."
-                ) from exc
-
-            data_arr = cutout_k["image"]
-            invvar_arr = cutout_k["invvar"]
-            mask_arr = cutout_k["mask"]
-            wcs = cutout_store.get_wcs(cutout_k["header"])
-
-            if np.shape(data_arr[0])[0] != box_size:
-                raise ValueError(f"Issue with image size here={img_path_k}, TARGETID={tgid_k}. Size should be {box_size}, but is {np.shape(data_arr[0])[0]}")
+            ##NOTE: the multi-MB cutout (image/invvar/mask + WCS) is intentionally
+            ##NOT loaded here. We only stash the (cutouts_dir, brick, tgid, box_size)
+            ##keys in the dict below; each photometry worker reads its own cutout
+            ##from the HDF5 shard via _hydrate_cutout (see hydrate_run_aperture_pipe /
+            ##hydrate_run_cog_pipe). This keeps the big arrays off the
+            ##worker->parent->worker pickle path and out of the parent's memory.
     
-            temp_dict = {"tgid":tgid_k, "ra":ra_k, "dec":dec_k, "redshift":redshift_k, "save_path":save_path_k, "img_path":img_path_k, "wcs": wcs , "image_data": data_arr, "mask_data": mask_arr, "invvar_data": invvar_arr, "source_cat": source_cat_f, "index":k , "org_mags": [ shreds_focus["MAG_G"][k], shreds_focus["MAG_R"][k], shreds_focus["MAG_Z"][k] ] , "overwrite": overwrite_bool, "image_size" :  box_size,
+            temp_dict = {"tgid":tgid_k, "ra":ra_k, "dec":dec_k, "redshift":redshift_k, "save_path":save_path_k, "img_path":img_path_k, "cutouts_dir": cutouts_dir, "brick": brick_k, "source_cat": source_cat_f, "index":k , "org_mags": [ shreds_focus["MAG_G"][k], shreds_focus["MAG_R"][k], shreds_focus["MAG_Z"][k] ] , "overwrite": overwrite_bool, "image_size" :  box_size,
                         "bright_star_info": (bstar_ra, bstar_dec, bstar_radius, bstar_fdist, bstar_mag), "sga_info": (sga_dist, sga_ndist), 
                         "pcnn_val": pcnn_val_k,  "npixels_min": npixels_min, "threshold_rms_scale": threshold_rms_scale, "run_simple_photo": run_simple_photo}
     
@@ -1107,11 +1138,11 @@ if __name__ == '__main__':
             if run_aper == True:
                 if run_parr:
                     with mp.Pool(processes= ncores ) as pool:
-                        results = list(tqdm(pool.imap(run_aperture_pipe, all_inputs), total = len(all_inputs), disable=not use_tqdm  ))
+                        results = list(tqdm(pool.imap(hydrate_run_aperture_pipe, all_inputs), total = len(all_inputs), disable=not use_tqdm  ))
                 else:
                     results = []
                     for i in trange(len(all_inputs)):
-                        results.append( run_aperture_pipe(all_inputs[i]) )
+                        results.append( hydrate_run_aperture_pipe(all_inputs[i]) )
         
                 ### saving the results of the photometry pipeline
                 
@@ -1230,11 +1261,11 @@ if __name__ == '__main__':
                     
                 if run_parr:
                     with mp.Pool(processes= ncores ) as pool:
-                        results = list(tqdm(pool.imap(run_cog_pipe, all_inputs), total = len(all_inputs), disable=not use_tqdm  ))
+                        results = list(tqdm(pool.imap(hydrate_run_cog_pipe, all_inputs), total = len(all_inputs), disable=not use_tqdm  ))
                 else:
                     results = []
                     for i in trange(len(all_inputs)):
-                        results.append( run_cog_pipe(all_inputs[i]) )
+                        results.append( hydrate_run_cog_pipe(all_inputs[i]) )
         
                 ### saving the results of the photometry pipeline
 

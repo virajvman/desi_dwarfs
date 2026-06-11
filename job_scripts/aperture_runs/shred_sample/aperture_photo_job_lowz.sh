@@ -7,8 +7,8 @@
 #SBATCH --mail-type=ALL
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=64
-#SBATCH --mem=192GB
+#SBATCH --cpus-per-task=256
+#SBATCH --mem=0
 #SBATCH --time=01:00:00
 #SBATCH --job-name=lowz_shred
 #SBATCH --output=aperture_shred_lowz.log
@@ -44,7 +44,7 @@ if [ "$OVERWRITE_PHOTOMETRY" = true ]; then
 fi
 
 # Command-line args
-BASE_ARGS="-sample $SAMPLE -min 0 -max 100000 -run_parr -ncores 64 -overwrite -nchunks 5 -no_cnn_cut -use_sample shred"
+BASE_ARGS="-sample $SAMPLE -min 0 -max 100000 -run_parr -ncores 128 -overwrite -nchunks 5 -no_cnn_cut -use_sample shred"
 
 # ------------------------------
 # Run steps

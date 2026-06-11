@@ -7,8 +7,8 @@
 #SBATCH --mail-type=ALL
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=64
-#SBATCH --mem=128GB
+#SBATCH --cpus-per-task=256
+#SBATCH --mem=0
 #SBATCH --time=08:00:00
 #SBATCH --job-name=bgsb_clean
 #SBATCH --output=aperture_clean_bgsb.log
@@ -44,7 +44,7 @@ if [ "$OVERWRITE_PHOTOMETRY" = true ]; then
 fi
 
 # Command-line args
-BASE_ARGS="-sample $SAMPLE -min 0 -max 50000 -run_parr -ncores 62 -overwrite -nchunks 50 -no_cnn_cut -use_sample clean"
+BASE_ARGS="-sample $SAMPLE -min 0 -max 50000 -run_parr -ncores 128 -overwrite -nchunks 50 -no_cnn_cut -use_sample clean"
 
 # ------------------------------
 # Run steps
