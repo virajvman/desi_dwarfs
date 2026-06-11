@@ -28,7 +28,7 @@ mp=4      # multiprocessing workers per MPI rank
 
 # Extra flags forwarded to many_cutouts_general.py,
 # e.g. "--retry-failed --timeout 180 --layer ls-dr10"
-EXTRA_ARGS=""
+EXTRA_ARGS="--size-col IMAGE_SIZE_PIX"
 # ============================================================
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"

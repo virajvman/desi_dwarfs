@@ -96,7 +96,7 @@ EW_COLORS = {
 _TE_LINE_NAMES_BASE = ["HALPHA", "HBETA", "HGAMMA",
                        "OIII_4363", "OIII_5007",
                        "OII_3726", "OII_3729"]
-SNR_VAL = 10
+SNR_VAL = 7.5
 MIN_FLUX = 0.005
 
 # Bootstrap reliability gate for direct-method errors (survivor bias on OIII_4363).

@@ -16,7 +16,7 @@
 # many_cutouts_sga.py, invvar is now INCLUDED (2026-06 decision).
 # Reruns are incremental.
 # ============================================================
-CATALOG_PATH="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_sga_matched_dwarfs.fits"
+CATALOG_PATH="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_desi_SGA_matched_dwarfs_REPROCESS_V2.fits"
 OUTDIR="/global/cfs/cdirs/desi/users/virajvm/dwarf_cutouts/sga"
 RA_COL="RA"
 DEC_COL="DEC"
