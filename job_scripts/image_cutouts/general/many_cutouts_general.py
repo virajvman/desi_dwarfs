@@ -62,7 +62,9 @@ if _CODE_DIR not in sys.path:
 import cutout_store
 from cutout_store import (FAILED_MANIFEST, PRODUCTION_VIEWER,
                           parse_cutout_fits, make_cutout_record,
-                          fetch_cutout_url, load_tombstones)
+                          fetch_cutout_url, load_tombstones,
+                          load_manifest, build_manifest, append_manifest_delta,
+                          merge_manifest_deltas, cutout_satisfies_request)
 
 
 def weighted_partition(weights, n):
@@ -162,7 +164,8 @@ def _fetch_container(task):
 
     return make_cutout_record(task['targetid'], task['ra'], task['dec'],
                               task['size'], task['bands'],
-                              image, invvar, mask, header_str, 'container')
+                              image, invvar, mask, header_str, 'container',
+                              layer=task['layer'])
 
 
 def _fetch_url(task):
@@ -264,11 +267,12 @@ def plan(args, outdir_data, size):
                   '(--retry-failed to re-attempt)'.format(len(tombs), FAILED_MANIFEST),
                   flush=True)
 
-    print('Scanning existing shards in {} ...'.format(outdir_data), flush=True)
+    print('Loading cutout manifest from {} ...'.format(outdir_data), flush=True)
     t0 = time.time()
-    existing = cutout_store.list_existing(outdir_data)
+    existing = cutout_store.load_manifest(outdir_data, nproc=args.manifest_nproc,
+                                          bootstrap=not args.rebuild_manifest)
     n_existing = sum(len(v) for v in existing.values())
-    print('  {} objects already in {} shards ({:.1f}s)'.format(
+    print('  {} objects in manifest covering {} bricks ({:.1f}s)'.format(
         n_existing, len(existing), time.time() - t0), flush=True)
 
     seen = set()
@@ -280,10 +284,10 @@ def plan(args, outdir_data, size):
         seen.add(tgid)
         if tgid in tombs:
             continue
-        # bigger-size-wins: present only if stored at >= the requested size
-        # (a smaller stored cutout is re-fetched and overwritten)
-        stored_size = existing.get(allbrick[k], {}).get(tgid)
-        if stored_size is not None and stored_size >= int(allsizes[k]):
+        row = existing.get(allbrick[k], {}).get(tgid)
+        if cutout_satisfies_request(row, allsizes[k],
+                                    require_invvar=args.invvar,
+                                    require_mask=args.maskbits):
             continue
         need.append(k)
     need = np.asarray(need, dtype=np.int64)
@@ -315,6 +319,9 @@ def do_cutouts(args, comm=None, outdir_data='.'):
     t0 = time.time()
     if rank == 0:
         os.makedirs(outdir_data, exist_ok=True)
+        if args.rebuild_manifest:
+            print('Rebuilding cutout manifest from shards ...', flush=True)
+            cutout_store.build_manifest(outdir_data, nproc=args.manifest_nproc)
         (brick_names, brick_rows, ra, dec, tgid,
          sizes, brick_weights) = plan(args, outdir_data, size)
         groups = weighted_partition(brick_weights, size)
@@ -336,6 +343,11 @@ def do_cutouts(args, comm=None, outdir_data='.'):
             print('Nothing to do.', flush=True)
         if comm is not None:
             comm.barrier()
+        # Still fold in (and clear) any deltas orphaned by a previously crashed
+        # run -- otherwise they linger unmerged until that catalog is re-run.
+        if rank == 0 and not args.dry_run:
+            merge_manifest_deltas(outdir_data)
+            _merge_failures(outdir_data)
         return
 
     my_bricks = groups[rank]
@@ -380,7 +392,8 @@ def do_cutouts(args, comm=None, outdir_data='.'):
         if settled[bname] == expected[bname]:
             recs = buffers.pop(bname, [])
             if recs:
-                cutout_store.write_cutouts_batch(outdir_data, bname, recs)
+                manifest_rows = cutout_store.write_cutouts_batch(outdir_data, bname, recs)
+                append_manifest_delta(outdir_data, 'rank{}'.format(rank), manifest_rows)
                 n_written += 1
         if n_done % 100 == 0 or n_done == total:
             print('Rank {}: {}/{} done, {} failed, {} shards written, {:.0f}s'.format(
@@ -405,7 +418,8 @@ def do_cutouts(args, comm=None, outdir_data='.'):
         if recs:
             print('Rank {}: WARNING flushing incomplete brick {}'.format(rank, bname),
                   flush=True)
-            cutout_store.write_cutouts_batch(outdir_data, bname, recs)
+            manifest_rows = cutout_store.write_cutouts_batch(outdir_data, bname, recs)
+            append_manifest_delta(outdir_data, 'rank{}'.format(rank), manifest_rows)
 
     if failed:
         rank_manifest = os.path.join(outdir_data, 'failed_rank{}.csv'.format(rank))
@@ -423,6 +437,7 @@ def do_cutouts(args, comm=None, outdir_data='.'):
         comm.barrier()
 
     if rank == 0 and not args.dry_run:
+        merge_manifest_deltas(outdir_data)
         _merge_failures(outdir_data)
         print('All ranks done at {}'.format(time.asctime()), flush=True)
 
@@ -433,11 +448,11 @@ def _merge_failures(outdir_data):
     from glob import glob
 
     rank_files = sorted(glob(os.path.join(outdir_data, 'failed_rank*.csv')))
-    manifest = os.path.join(outdir_data, FAILED_MANIFEST)
+    failed_path = os.path.join(outdir_data, FAILED_MANIFEST)
 
     rows = {}
-    if os.path.exists(manifest):
-        with open(manifest, newline='') as f:
+    if os.path.exists(failed_path):
+        with open(failed_path, newline='') as f:
             for row in csv.DictReader(f):
                 rows[int(row['targetid'])] = row
 
@@ -453,14 +468,13 @@ def _merge_failures(outdir_data):
                     n_new += 1
 
     if rows:
-        # drop tombstones for anything that now exists in the store
-        existing = cutout_store.list_existing(outdir_data, quarantine_corrupt=False)
+        store_index = cutout_store.load_manifest(outdir_data, bootstrap=False)
         all_present = set()
-        for s in existing.values():
-            all_present.update(s)
+        for brick_rows in store_index.values():
+            all_present.update(brick_rows)
         rows = {tg: r for tg, r in rows.items() if tg not in all_present}
 
-        with open(manifest, 'w', newline='') as f:
+        with open(failed_path, 'w', newline='') as f:
             w = csv.DictWriter(f, fieldnames=['targetid', 'ra', 'dec', 'brickname',
                                               'reason', 'timestamp'])
             w.writeheader()
@@ -528,6 +542,12 @@ def main():
     parser.add_argument('--retry-failed', action='store_true',
                         help='Re-attempt objects listed in {} (e.g. after a container '
                              'fix).'.format(FAILED_MANIFEST))
+    parser.add_argument('--rebuild-manifest', action='store_true',
+                        help='Rebuild cutout_manifest.csv from shards before planning '
+                             '(rank 0 only; use if manifest drift is suspected).')
+    parser.add_argument('--manifest-nproc', type=int, default=None,
+                        help='Worker processes for manifest rebuild/bootstrap scan '
+                             '(default: SLURM_CPUS_PER_TASK or cpu_count).')
 
     parser.add_argument('--mp', type=int, default=1,
                         help='Multiprocessing workers per MPI rank.')
@@ -538,6 +558,10 @@ def main():
 
     outdir_data = os.path.expandvars(args.outdir_data)
     args.catalog_path = os.path.expandvars(args.catalog_path)
+
+    if args.manifest_nproc is None:
+        args.manifest_nproc = int(os.environ.get(
+            'SLURM_CPUS_PER_TASK', os.cpu_count() or 1))
 
     if args.nompi:
         comm = None

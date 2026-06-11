@@ -456,13 +456,14 @@ def heal_brick_cutouts(brick_dict, cutouts_dir, tombstones=frozenset()):
     NOTE: do not run two -make_cats jobs writing the same store concurrently.
     '''
     brick_i = brick_dict[0]["brick_i"]
-    existing = cutout_store.list_shard_targetids(cutouts_dir, brick_i)
+    existing = cutout_store.list_shard_manifest(cutouts_dir, brick_i)
 
     missing, n_tomb = [], 0
     for g in brick_dict:
         tgid = int(g["TARGETID"])
-        # bigger-size-wins: stored cutout serves any request <= its box_size
-        if existing.get(tgid, -1) >= int(g["image_size"]):
+        row = existing.get(tgid)
+        if cutout_store.cutout_satisfies_request(
+                row, g["image_size"], require_invvar=True, require_mask=True):
             continue
         if tgid in tombstones:
             n_tomb += 1
@@ -492,7 +493,9 @@ def heal_brick_cutouts(brick_dict, cutouts_dir, tombstones=frozenset()):
                       f"in brick {brick_i}: {exc!r}", flush=True)
 
     if records:
-        cutout_store.write_cutouts_batch(cutouts_dir, brick_i, records)
+        manifest_rows = cutout_store.write_cutouts_batch(cutouts_dir, brick_i, records)
+        cutout_store.append_manifest_delta(
+            cutouts_dir, "make_cats_{}".format(os.getpid()), manifest_rows)
         print(f"Brick {brick_i}: healed {len(records)}/{len(missing)} missing cutouts "
               f"into shard", flush=True)
 
@@ -925,6 +928,8 @@ if __name__ == '__main__':
                 with mp.Pool(processes=ncores) as pool:
                     results = list(tqdm(pool.imap(process_bricks_fixed, all_brick_jobs), total=len(all_brick_jobs), desc="Bricks"))
 
+        cutout_store.merge_manifest_deltas(cutouts_dir)
+
 
     ##################
     ##PART 3: Preparing inputs for the aperture and cog photometry functions
@@ -981,13 +986,36 @@ if __name__ == '__main__':
                       f"(tombstoned in {cutout_store.FAILED_MANIFEST}), e.g. {list(tomb_tgids[:5])}")
                 shreds_focus = shreds_focus[~tomb_mask]
 
-        print("Scanning cutout store for existence check...")
-        store_contents = cutout_store.list_existing(cutouts_dir, quarantine_corrupt=False)
-        missing_tgids = [
-            int(t) for t, b, s in zip(shreds_focus["TARGETID"], shreds_focus["BRICKNAME"],
-                                      shreds_focus["IMAGE_SIZE_PIX"])
-            if store_contents.get(str(b), {}).get(int(t), -1) < int(s)
-        ]
+        print("Checking cutout store manifest for existence...")
+        store_contents = cutout_store.load_manifest(cutouts_dir)
+        shard_exists = {}
+        shard_index = {}   # brick -> {targetid: row} read straight from the shard;
+                           # ground-truth fallback for manifest under-reports
+        missing_tgids = []
+        for t, b, s in zip(shreds_focus["TARGETID"], shreds_focus["BRICKNAME"],
+                           shreds_focus["IMAGE_SIZE_PIX"]):
+            brick_k = str(b)
+            if brick_k not in shard_exists:
+                shard_exists[brick_k] = os.path.exists(
+                    cutout_store.shard_path(cutouts_dir, brick_k))
+            if not shard_exists[brick_k]:
+                missing_tgids.append(int(t))
+                continue
+            row = store_contents.get(brick_k, {}).get(int(t))
+            if cutout_store.cutout_satisfies_request(
+                    row, s, require_invvar=True, require_mask=True):
+                continue
+            # The shard file exists but the manifest row is missing/stale (e.g.
+            # a writer was killed between the shard write and the merge). Shards
+            # are ground truth -- read the one shard directly before aborting,
+            # rather than failing on a cache that merely under-reports.
+            if brick_k not in shard_index:
+                shard_index[brick_k] = cutout_store.list_shard_manifest(
+                    cutouts_dir, brick_k)
+            row = shard_index[brick_k].get(int(t))
+            if not cutout_store.cutout_satisfies_request(
+                    row, s, require_invvar=True, require_mask=True):
+                missing_tgids.append(int(t))
         n_have = len(shreds_focus) - len(missing_tgids)
         print(f"Cutout store check: {n_have}/{len(shreds_focus)} objects in store")
         if len(missing_tgids) > 0:
