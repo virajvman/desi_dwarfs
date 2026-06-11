@@ -9,7 +9,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=128
 #SBATCH --mem=256GB
-#SBATCH --time=01:00:00
+#SBATCH --time=02:00:00
 #SBATCH --job-name=run_stacking_analysis
 #SBATCH --output=run_stacking_analysis.log
 
@@ -34,11 +34,11 @@ source /global/cfs/cdirs/desi/software/desi_environment.sh main
 
 cd /global/u1/v/virajvm/DESI2_LOWZ/desi_dwarfs
 
-# echo "=== [1/3] Bootstrap stacking (stack_mstar_haew_5pct.py) ==="
-# python3 code/nebular_stuff/stack_mstar_haew_5pct.py
+echo "=== [1/3] Bootstrap stacking (stack_mstar_haew_5pct.py) ==="
+python3 code/nebular_stuff/stack_mstar_haew_5pct.py
 
-# echo "=== [2/3] FastSpecFit on stacks ==="
-# bash job_scripts/fastspec/run_stack_fastspec_haew_5pct.sh
+echo "=== [2/3] FastSpecFit on stacks ==="
+bash job_scripts/fastspec/run_stack_fastspec_haew_5pct.sh
 
 echo "=== [3/3] Direct-method metallicity (n_e fixed at 100 cm^-3) ==="
 export OMP_NUM_THREADS=1
