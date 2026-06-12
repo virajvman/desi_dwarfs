@@ -433,7 +433,8 @@ def _fit_row_ultranest(r, r_err, mask,
                        verbose_sampler=False,
                        sampler_kwargs=None,
                        density_diagnostic='OII',
-                       fixed_ne=None):
+                       fixed_ne=None,
+                       return_samples=False):
     """Nested sampling with UltraNest. Returns posterior 16/50/84 percentiles.
     Matches the inference approach of Scholte+2026.
 
@@ -546,7 +547,7 @@ def _fit_row_ultranest(r, r_err, mask,
     chi2_av_ml = _balmer_chi2(ml_point, r, r_err, mask)
     av_ml = float(ml_point[i_av])
 
-    return {
+    out = {
         'theta': theta_med,
         'theta_lo': theta_lo,
         'theta_hi': theta_hi,
@@ -564,6 +565,13 @@ def _fit_row_ultranest(r, r_err, mask,
         'logz': float(result.get('logz', np.nan)),
         'logzerr': float(result.get('logzerr', np.nan)),
     }
+    if return_samples:
+        # Equal-weight posterior samples (columns in PARAM_NAMES order) plus the
+        # derived 12+log(O/H) per sample, for corner / diagnostic plots. Not
+        # added in catalog runs so the per-row result dict stays small.
+        out['samples'] = samples
+        out['twelve_log_OH_samples'] = twelve_logOH_samples
+    return out
 
 
 # ---------------------------------------------------------------------------

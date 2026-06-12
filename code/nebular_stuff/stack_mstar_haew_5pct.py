@@ -29,6 +29,12 @@ Same mass bins, no EW sub-binning. Uses load_catalog cuts only (DWARF_MASKBIT,
 HALPHA_FLUX SNR > 3, HALPHA_FLUX > 1) — not the stricter H-alpha detection
 cuts above. No minimum N per bin. One mean coadd per mass bin.
 
+**Product C — M* viz stacks (mean, FITS only, visualization):**
+Integer-centered 0.5-dex bins (+/-0.25 dex around log M* = 7, 8, 9), same broad
+load_catalog sample and mean coadd as Product B, but kept on the FULL red
+wavelength grid (lambda < WAVE_MAX_VIZ = 9800 A; Products A/B trim to 6800).
+Written to its own folder; NOT run through FastSpecFit or direct metallicity.
+
 Outputs (written to STACK_PATH; stale files removed at the start of each run):
 
   EW-binned (STACK_PATH/):
@@ -42,6 +48,9 @@ Outputs (written to STACK_PATH; stale files removed at the start of each run):
   - stacks_spec_ALL_mstar_{mlo}_{mhi}.pkl
   - stack_ALL_mstar_{mlo}_{mhi}.fits   (1 row)
   - plots/overlay_all_mass_bins.png
+
+  Mass viz (STACK_PATH/mstar_viz/):
+  - stack_ALL_mstar_{mlo}_{mhi}.fits   (1 row, full lambda grid; FITS only)
 
 Usage:
     python stack_mstar_haew_5pct.py
@@ -104,6 +113,19 @@ RANDOM_SEED = 42
 STACK_PATH = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/stack_files/mstar_haew_5pct/"
 MSTAR_ONLY_SUBDIR = "mstar_only"
 MSTAR_ONLY_PATH = os.path.join(STACK_PATH, MSTAR_ONLY_SUBDIR)
+
+# Visualization-only product: integer-centered 0.5-dex mass bins (+/-0.25 dex
+# around log M* = 7, 8, 9). Same broad load_catalog sample + HALPHA_FLUX mean
+# coadd as mstar_only, written to its OWN folder so the FastSpecFit (stage 2)
+# and direct-metallicity (stage 3) steps never pick them up. FITS only (no
+# pickle, no plot); these are for the user's own visualization.
+MSTAR_VIZ_SUBDIR = "mstar_viz"
+MSTAR_VIZ_PATH = os.path.join(STACK_PATH, MSTAR_VIZ_SUBDIR)
+MSTAR_VIZ_CENTERS = [7.0, 8.0, 9.0]
+MSTAR_VIZ_HALFWIDTH = 0.25
+# Viz stacks keep the full red wavelength range (the science products trim to
+# WAVE_MAX=6800). The de-redshift grid runs 3600->9800 A, so this keeps it all.
+WAVE_MAX_VIZ = 9800
 
 OVERWRITE_STACKS = True
 WAVE_MAX = 6800
@@ -232,28 +254,25 @@ def bin_label_mstar_only(mstar_min, mstar_max):
     return f"mstar_{mstar_min:.2f}_{mstar_max:.2f}"
 
 
-def clean_stack_outputs(stack_path, mstar_only_path=None):
-    """Remove previous stack, pickle, and FastSpec output files before a fresh run."""
+def clean_stack_outputs(stack_path, extra_paths=()):
+    """Remove previous stack, pickle, and FastSpec output files before a fresh run.
+
+    Cleans ``stack_path`` plus any directories in ``extra_paths`` (e.g. the
+    mstar_only/ and mstar_viz/ subfolders). Missing directories are skipped
+    (glob on a nonexistent dir yields nothing).
+    """
     patterns = (
         "stack_ALL_mstar_*.fits",
         "stacks_spec_ALL_mstar_*.pkl",
         "fastspec_stack_ALL_mstar_*.fits",
     )
-    n_removed = 0
-    for pattern in patterns:
-        for fpath in glob.glob(os.path.join(stack_path, pattern)):
-            os.remove(fpath)
-            n_removed += 1
-    print(f"    Removed {n_removed} previous stack/.pkl/fastspec files from {stack_path}")
-
-    if mstar_only_path is not None:
-        n_mo = 0
+    for path in (stack_path, *extra_paths):
+        n_removed = 0
         for pattern in patterns:
-            for fpath in glob.glob(os.path.join(mstar_only_path, pattern)):
+            for fpath in glob.glob(os.path.join(path, pattern)):
                 os.remove(fpath)
-                n_mo += 1
-        print(f"    Removed {n_mo} previous mass-only stack/.pkl/fastspec files "
-              f"from {mstar_only_path}")
+                n_removed += 1
+        print(f"    Removed {n_removed} previous stack/.pkl/fastspec files from {path}")
 
 
 def stack_one_bin(sub_cat, spectra_data, wave, token, ew_min, ew_max_fits,
@@ -393,18 +412,23 @@ def write_multi_row_fits(saved, wave_for_fits, label):
           f"-> {os.path.basename(out_fits)}")
 
 
-def stack_one_mass_bin(sub_cat, spectra_data, wave, mstar_min, mstar_max, label):
-    """Mean-stack one mass bin (no bootstrap); return saved dict or None."""
+def stack_one_mass_bin(sub_cat, spectra_data, wave, mstar_min, mstar_max, label,
+                       out_dir=MSTAR_ONLY_PATH, write_pkl=True):
+    """Mean-stack one mass bin (no bootstrap); return saved dict or None.
+
+    ``out_dir`` is where the pickle is written; ``write_pkl=False`` skips the
+    pickle entirely (used by the FITS-only mstar_viz product).
+    """
     n_sub = len(sub_cat)
     if n_sub == 0:
         return None
 
     pkl_path = os.path.join(
-        MSTAR_ONLY_PATH,
+        out_dir,
         f"stacks_spec_{COMBINED_TAG}_{label}.pkl",
     )
 
-    if os.path.exists(pkl_path) and not OVERWRITE_STACKS:
+    if write_pkl and os.path.exists(pkl_path) and not OVERWRITE_STACKS:
         print(f"      Loading cached: {os.path.basename(pkl_path)}")
         with open(pkl_path, "rb") as f:
             return pickle.load(f)
@@ -447,14 +471,15 @@ def stack_one_mass_bin(sub_cat, spectra_data, wave, mstar_min, mstar_max, label)
         "tgids":        np.asarray(tgids_matched),
     }
 
-    with open(pkl_path, "wb") as f:
-        pickle.dump(saved, f)
-    print(f"      Saved {os.path.basename(pkl_path)}")
+    if write_pkl:
+        with open(pkl_path, "wb") as f:
+            pickle.dump(saved, f)
+        print(f"      Saved {os.path.basename(pkl_path)}")
     return saved
 
 
-def write_single_row_fits(saved, wave_for_fits, label):
-    """Write one mean stack row for FastSpecFit stackfit."""
+def write_single_row_fits(saved, wave_for_fits, label, out_dir=MSTAR_ONLY_PATH):
+    """Write one mean stack row to a FastSpecFit-compatible FITS in ``out_dir``."""
     stack_flux = saved["stack_spec"]
     stack_ivar = saved["stack_ivar"]
     n_stacked = saved.get("n_stacked", saved["n_matched"])
@@ -465,7 +490,7 @@ def write_single_row_fits(saved, wave_for_fits, label):
     all_flux = np.asarray(stack_flux, dtype=np.float32)[None, :]
     all_ivar = np.asarray(stack_ivar, dtype=np.float32)[None, :]
 
-    out_fits = os.path.join(MSTAR_ONLY_PATH, f"stack_{COMBINED_TAG}_{label}.fits")
+    out_fits = os.path.join(out_dir, f"stack_{COMBINED_TAG}_{label}.fits")
 
     write_stacked_spectra(
         outfile=out_fits,
@@ -701,6 +726,49 @@ def make_mass_only_overlay_plot(results, wave, mstar_bins, plot_dir):
     print(f"    Saved {os.path.basename(out_png)}")
 
 
+def run_mass_viz_stacks(tot_cat_full, spectra_data, wave_viz):
+    """FITS-only mean stacks in integer-centered 0.5-dex mass bins (viz only).
+
+    Bins: (center +/- MSTAR_VIZ_HALFWIDTH] for each center in MSTAR_VIZ_CENTERS
+    (half-open, low-exclusive, like the rest of the pipeline). Same broad
+    load_catalog sample and HALPHA_FLUX mean coadd as the mstar_only product,
+    but written to MSTAR_VIZ_PATH on the FULL (untrimmed) wavelength grid. No
+    pickle, no plot, and never globbed by the FastSpecFit / direct-metallicity
+    stages (separate folder).
+    """
+    print(f"\n[2c] Mass viz stacks: {len(MSTAR_VIZ_CENTERS)} integer-centered "
+          f"+/-{MSTAR_VIZ_HALFWIDTH:.2f} dex bins, mean coadd, FITS only")
+    print(f"     lambda in [{wave_viz.min():.1f}, {wave_viz.max():.1f}] A "
+          f"({len(wave_viz)} pixels); output dir: {MSTAR_VIZ_PATH}")
+
+    n_written = 0
+    for center in MSTAR_VIZ_CENTERS:
+        mstar_min = center - MSTAR_VIZ_HALFWIDTH
+        mstar_max = center + MSTAR_VIZ_HALFWIDTH
+        sub_cat = select_sample_mstar_bin(
+            tot_cat_full, SAMPLES,
+            Z_MIN_GLOBAL, Z_MAX_GLOBAL,
+            mstar_min, mstar_max,
+        )
+        n_sub = len(sub_cat)
+        print(f"\n  --- center log M*={center:.2f} -> "
+              f"({mstar_min:.2f}, {mstar_max:.2f}] --- N={n_sub}")
+        if n_sub == 0:
+            continue
+
+        label = bin_label_mstar_only(mstar_min, mstar_max)
+        saved = stack_one_mass_bin(
+            sub_cat, spectra_data, wave_viz, mstar_min, mstar_max, label,
+            out_dir=MSTAR_VIZ_PATH, write_pkl=False,
+        )
+        if saved is None:
+            continue
+        write_single_row_fits(saved, wave_viz, label, out_dir=MSTAR_VIZ_PATH)
+        n_written += 1
+
+    print(f"\n[2c] Wrote {n_written} mass-viz FITS files to {MSTAR_VIZ_PATH}")
+
+
 # =============================================================================
 # MAIN
 # =============================================================================
@@ -708,11 +776,12 @@ def make_mass_only_overlay_plot(results, wave, mstar_bins, plot_dir):
 def main():
     os.makedirs(STACK_PATH, exist_ok=True)
     os.makedirs(MSTAR_ONLY_PATH, exist_ok=True)
+    os.makedirs(MSTAR_VIZ_PATH, exist_ok=True)
     plot_dir = os.path.join(STACK_PATH, "plots")
     mass_only_plot_dir = os.path.join(MSTAR_ONLY_PATH, "plots")
 
     print("[0] Cleaning previous stack outputs ...")
-    clean_stack_outputs(STACK_PATH, mstar_only_path=MSTAR_ONLY_PATH)
+    clean_stack_outputs(STACK_PATH, extra_paths=[MSTAR_ONLY_PATH, MSTAR_VIZ_PATH])
 
     print("[1] Loading catalog ...")
     tot_cat_full = load_catalog()
@@ -734,6 +803,23 @@ def main():
         "desi_y1_dwarf_combine_deredshift_hires_noinvvar.h5"
     )
     print(f"    Total spectra loaded: {len(spectra_data['targetid'])}")
+
+    # Mass viz stacks need the full red range (lambda < WAVE_MAX_VIZ), so build
+    # them BEFORE the in-place WAVE_MAX trim below. The de-redshift grid already
+    # ends below WAVE_MAX_VIZ, so the full loaded arrays are used directly (no
+    # copy); only slice if a future grid extends past WAVE_MAX_VIZ.
+    viz_mask = spectra_data["wave_rest"] < WAVE_MAX_VIZ
+    if viz_mask.all():
+        run_mass_viz_stacks(tot_cat_full, spectra_data, spectra_data["wave_rest"])
+    else:
+        viz_spec = {
+            "targetid":  spectra_data["targetid"],
+            "wave_rest": spectra_data["wave_rest"][viz_mask],
+            "flux":      spectra_data["flux"][:, viz_mask],
+            "flux_ivar": spectra_data["flux_ivar"][:, viz_mask],
+        }
+        run_mass_viz_stacks(tot_cat_full, viz_spec, viz_spec["wave_rest"])
+        del viz_spec
 
     wave_mask = spectra_data["wave_rest"] < WAVE_MAX
     spectra_data["wave_rest"] = spectra_data["wave_rest"][wave_mask]

@@ -15,8 +15,11 @@
 
 # Full stack pipeline (3 stages), as a single batch job so it runs on a
 # scheduled compute node instead of an interactive Jupyter node.
-# Products: EW-binned (M* x H-alpha EW) + mass-only (M* only, mstar_only/).
+# Products: EW-binned (M* x H-alpha EW) + mass-only (M* only, mstar_only/)
+#           + mass viz (integer-centered 0.5-dex bins, mstar_viz/, FITS only).
 # Mass: 0.5 dex (6-8), 0.25 dex (8-9.25). EW: <30, 30-100, >100 A (EW product only).
+# Stage 1 also writes the mstar_viz/ stacks (full lambda grid to 9800 A); stages
+# 2-3 deliberately ignore mstar_viz/ (visualization only, no fastspec/metallicity).
 #
 # Submit:   sbatch job_scripts/fastspec/run_stacking_analysis.sh
 # Monitor:  squeue --me   |   tail -f run_stacking_analysis.log

@@ -12,5 +12,9 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 
-python3 desi_dwarfs/code/add_nebular_props.py --line-flux-type FLUX --use-informative-priors --overwrite-te-cache \
+# Single-stage joint 5-parameter fit (Plan A). Do NOT pass
+# --use-informative-priors: with the 7-line SNR>5 te_mask the data constrain
+# the full 5D posterior, and Plan A keeps the ne-Te-Av covariance that Plan B's
+# independent-marginal feedback discards.
+python3 desi_dwarfs/code/add_nebular_props.py --line-flux-type FLUX --overwrite-te-cache \
     /pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits 2>&1 | tee add_nebular_props_interactive.log

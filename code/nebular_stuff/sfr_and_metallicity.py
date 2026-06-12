@@ -551,6 +551,23 @@ def stellar_mass_msz(logmstar):
         Stellar mass in Msun
     Returns:
         linear metallicity relative to solar
+
+    TODO (SFR calibration metallicity): this is the *stellar* MZR (Kirby+13),
+    and it treats [Fe/H] as log(Z/Z_sun). But the Halpha->SFR conversion
+    C(Z*) (sfr_log_cz_BPASS) is parametrized by the metallicity of the YOUNG
+    IONIZING population, i.e. the current GAS-phase metallicity. Stellar Z is
+    mass-weighted/old and systematically lower than the gas, and [Fe/H] != [Z/H]
+    for alpha-enhanced dwarfs -- both bias C(Z*) and hence the inferred SFR.
+    PLAN: replace this with our own measured gas-phase O/H vs stellar-mass
+    relation (fit to the strong-line Z_GAS_R23_N2 / PG16 measurements), still
+    returned as a function of logmstar so calc_SFR_Halpha's interface is
+    unchanged. Convert the fitted 12+log(O/H)(M*) to linear Z/Z_sun via solar
+    12+log(O/H)=8.69 and Z_sun=0.02 before returning, and make sure the
+    resulting Z/Z_sun range stays inside the sfr_log_cz_BPASS calibration
+    window [10**_LOG_ZMET_MIN, 10**_LOG_ZMET_MAX]. The gas-MZR scatter is
+    expected to be sub-dominant to the other SFR systematics, so a mean
+    relation in M* is adequate. Not yet implemented -- the gas MZR fit is
+    still to be derived.
     '''
     z_value = -1.69 + 0.30 * (logmstar - 6)
     return 10**z_value
@@ -568,6 +585,24 @@ def sfr_log_cz_BPASS(linear_zmet):
      zem4    0.00010       -2.301      41.754
 
     coeffs = np.polyfit( np.log10(Z_star[Z_star < 0.2]), log_C_Z_star[Z_star < 0.2], 2)
+
+    NOTE on validity range: the fit is INTENTIONALLY restricted to the low-Z
+    subset (Z/Z_sun < 0.2, i.e. zem4 + z001-z003), because that is the only
+    metallicity range we sample. Our stellar-mass range logM* in [5, 9.25],
+    mapped through stellar_mass_msz (Kirby+13), gives log(Z/Z_sun) in
+    [-1.99, -0.715], over which this quadratic reproduces BPASS C(Z*) to
+    <0.01 dex. It is NOT valid at higher Z and extrapolates high there:
+    ~+0.03 dex at z006 (log Z/Zsun=-0.52), ~+0.06 at z010, ~+0.10 at solar.
+    The clip ceiling _LOG_ZMET_MAX = -0.6 sits just above our sampled range
+    and never actually engages for the current sample.
+
+    TODO (refit on gas-MZR swap): when stellar_mass_msz is replaced by the
+    measured GAS-phase O/H vs M* relation (see its TODO / Q1), gas O/H runs
+    HIGHER than stellar Z at fixed mass, so the massive end (logM* ~ 9) will
+    push toward -- or past -- the divergent region above. At that point REFIT
+    this quadratic over the actual log(Z/Z_sun) range sampled (or replace it
+    with a direct interpolation of the BPASS Table-2 points to remove any
+    extrapolation risk) and re-check _LOG_ZMET_MAX.
 
     log10(linear_zmet) is clipped to [_LOG_ZMET_MIN, _LOG_ZMET_MAX] before evaluation;
     values outside the fit range receive log C at the nearest boundary.
@@ -653,15 +688,18 @@ def calc_SFR_Halpha(
     through the Kirby+13 mass-metallicity relation (stellar_mass_msz), and
     sfr_log_cz_BPASS returns log10(C_Hα / [erg/s per (M_sun/yr)]).
 
-    Implements Eq. 2 of Bauer et al. (2013, MNRAS 434, 209):
+    Implements Eq. 2 of Bauer et al. (2013, MNRAS 434, 209), in the REST frame
+    (the published equation's observed-frame (1+z) is dropped here because both
+    Mr and EW are rest-frame in this pipeline -- see the term2 comment below):
 
         L(Hα) [W] = (EW + EWc) * 10^(-0.4*(Mr - 34.10))
-                    * 3e18 / (6564.61 * (1+z))^2
+                    * 3e18 / (6564.61)^2
                     * (BD / 2.86)^2.36
 
     where c = 2.99792458e18 is the speed of light in Å/s (for the L_ν → L_λ
-    conversion via c/λ^2), and 34.10 is the AB absolute-magnitude zeropoint that gives
-    L_ν in [W/Hz]. L(Hα) comes out in Watts; it is multiplied by 1e7 to
+    conversion via c/λ_rest^2 at the rest Hα wavelength), and 34.10 is the AB
+    absolute-magnitude zeropoint that gives L_ν in [W/Hz]. L(Hα) comes out in
+    Watts; it is multiplied by 1e7 to
     convert to erg/s, then divided by the per-object calibration constant
     C_Hα = 10^(sfr_log_cz_BPASS(stellar_mass_msz(logmstar))) [erg/s per
     (M_sun/yr)] to get the SFR.
@@ -778,10 +816,22 @@ def calc_SFR_Halpha(
 
     # Bauer+13 Eq. 2, three multiplicative terms, in SI (gives L in Watts):
     #   term1: EW × continuum luminosity L_ν from Mr  [W/Hz × Å]
-    #   term2: c/λ_obs^2 (c in Å/s), converts L_ν → L_λ  [Hz/Å]
+    #   term2: c/λ_rest^2 (c in Å/s), converts L_ν → L_λ  [Hz/Å]
     #   term3: Balmer-decrement dust correction  [dimensionless]
+    #
+    # REST-FRAME, no (1+z): both inputs here are rest-frame -- Mr is k-corrected
+    # to z=0 (rest-frame absolute AB mag; verified via the Chilingarian r_kcorr
+    # on the low-SNR branch and delta_kcorr = z0 - obs on the high-SNR branch),
+    # and EW_Halpha is rest-frame (FastSpecFit divides flux/continuum by (1+z);
+    # see emlines.py "ew = flux/cont/(1+redshift) # rest frame [A]"). So the
+    # continuum L_λ is converted at the REST Halpha wavelength, with NO observed-
+    # frame (1+z). This intentionally DEVIATES from Bauer+13 Eq. 2 as published
+    # (which carries an observed-frame (1+z), appropriate only if Mr/EW are
+    # observed-frame). Keeping the published (1+z) here would underestimate
+    # L(Halpha) -- and hence the SFR -- by (1+z)^2, a one-directional bias that
+    # grows with redshift (~0.04 dex at z=0.05, ~0.16 at z=0.2, ~0.35 at z=0.5).
     term1 = EW_total * 10.0 ** (-0.4 * (Mr - _AB_MAG_ZPT))
-    term2 = _C_ANGSTROM_PER_S / (_HALPHA_REST_A * (1.0 + spec_z)) ** 2
+    term2 = _C_ANGSTROM_PER_S / (_HALPHA_REST_A) ** 2
     term3 = (BD / _BALMER_INTRINSIC) ** _DUST_EXPONENT
 
     L_Halpha = term1 * term2 * term3  # [W]
@@ -791,6 +841,9 @@ def calc_SFR_Halpha(
     # metallicity (relative to solar) is set by the stellar mass via the
     # Kirby+13 mass-metallicity relation, and sfr_log_cz_BPASS returns
     # log10(C_Hα / [erg/s per (M_sun/yr)]) (BPASS, Korhonen Cuestas 2025).
+    # TODO: stellar_mass_msz is the *stellar* MZR; C(Z*) wants the GAS-phase
+    # (young-population) metallicity. Swap in our measured gas-phase O/H vs M*
+    # relation here once derived -- see the TODO on stellar_mass_msz.
     linear_zmet = stellar_mass_msz(np.asarray(logmstar, dtype=float))
     C_Halpha = 10.0 ** sfr_log_cz_BPASS(linear_zmet)  # [erg/s per (M_sun/yr)]
 
@@ -805,7 +858,10 @@ def calc_SFR_Halpha(
         term1_Mr_frac = 0.4 * np.log(10.0) * Mr_err
         term1_frac = np.hypot(term1_EW_frac, term1_Mr_frac)
 
-        term2_frac = 2.0 * np.asarray(spec_z_err) / (1.0 + spec_z)
+        # L(Halpha) no longer depends on redshift (rest-frame Mr + rest-frame
+        # EW, continuum converted at rest lambda), so spec_z / spec_z_err carry
+        # no error contribution. Kept in the signature for API stability.
+        term2_frac = 0.0
         term3_frac = _DUST_EXPONENT * (np.asarray(BD_err) / BD)
 
         L_frac_err = np.sqrt(term1_frac**2 + term2_frac**2 + term3_frac**2)
