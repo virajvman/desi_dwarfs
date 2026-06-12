@@ -2236,6 +2236,21 @@ if __name__ == '__main__':
         f"Unknown fastspec_source={fastspec_source!r}; expected one of {{'default','custom'}}"
     )
 
+    # FastSpec line-flux family used by the nebular SNR gating that runs INSIDE
+    # this script (flag_weird_spectra -> line_snr_mask, via add_wrong_redrock_maskbit
+    # in the process_post_hdu block). Those functions read the module-level
+    # sfr_and_metallicity.line_flux_type global, which only the *entry script*
+    # sets (build_spec_derived_hdu does this for the nebular stage at
+    # sfr_and_metallicity.py:1321). consolidate is its own entry point, so we set
+    # it here too -- otherwise line_snr_mask raises "line_flux_type ... got None".
+    # MUST match the --line-flux-type passed to add_nebular_props.py (stage 2).
+    nebular_line_flux_type = "FLUX"
+    assert nebular_line_flux_type in ("FLUX", "BOXFLUX"), (
+        f"Unknown nebular_line_flux_type={nebular_line_flux_type!r}; expected 'FLUX' or 'BOXFLUX'"
+    )
+    import sfr_and_metallicity  # importable: shred_photometry_maskbits put nebular_stuff/ on sys.path
+    sfr_and_metallicity.line_flux_type = nebular_line_flux_type
+
     main_cat_outpath = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits"
 
     if process_shreds:
