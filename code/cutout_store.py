@@ -16,6 +16,10 @@ Layout (one file per Legacy Surveys brick):
             fetch_method  'container' or 'url'
             layer         Legacy Surveys layer (default ls-dr9)
             created       UTC timestamp string
+            psfsize_{g,r,z}  optional per-band coadd PSF FWHM (arcsec) sampled at
+                          the cutout center; written only for objects fetched with
+                          --save-psf, NaN where the map has no coverage. Absent on
+                          older/source-centered cutouts -- treat as not-a-column.
 
 A rebuildable CSV manifest (cutout_manifest.csv) caches shard contents for
 fast existence checks; shards remain ground truth.
@@ -444,6 +448,13 @@ def write_cutouts_batch(cutouts_dir, brickname, records,
             g.attrs["fetch_method"] = rec.get("fetch_method", "container")
             g.attrs["layer"] = str(rec.get("layer", DEFAULT_LAYER))
             g.attrs["created"] = created
+            # Optional per-band PSF size (arcsec FWHM) sampled at the cutout
+            # center. Not a required field: absent unless the fetch was run
+            # with --save-psf, and it never gates existence checks.
+            psf = rec.get("psfsize")
+            if psf:
+                for band, val in psf.items():
+                    g.attrs["psfsize_{}".format(band)] = float(val)
             manifest_rows.append(_manifest_row_from_record(brickname, rec, created))
 
     os.replace(tmp, final)
@@ -512,6 +523,10 @@ def read_cutout(cutouts_dir, brickname, targetid, size=None):
         }
         for k in ("ra", "dec", "box_size", "fetch_method", "created", "layer"):
             if k in g.attrs:
+                out[k] = g.attrs[k]
+        # Optional psfsize_{band} attrs (present only for --save-psf cutouts).
+        for k in g.attrs.keys():
+            if k.startswith("psfsize_"):
                 out[k] = g.attrs[k]
 
     if size is not None:

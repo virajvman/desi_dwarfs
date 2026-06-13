@@ -85,6 +85,116 @@ def weighted_partition(weights, n):
 
 
 # ----------------------------------------------------------------------
+# PSF-size sampling (optional, --save-psf; intended for random cutouts)
+# ----------------------------------------------------------------------
+
+# ls-dr9 north/south boundary: bricks above this Dec are rendered from the
+# north (MzLS/BASS) coadd, below from south (DECaLS). Sampling the psfsize map
+# from the matching region keeps the PSF consistent with the saved image.
+PSFSIZE_DEC_SPLIT = 32.375
+
+
+def _psfsize_map_path(survey_dir, region, brick, band):
+    """Path to a per-brick psfsize coadd map (whether or not it exists)."""
+    return os.path.join(survey_dir, region, 'coadd', brick[:3], brick,
+                        'legacysurvey-{}-psfsize-{}.fits.fz'.format(brick, band))
+
+
+def _sample_psfsize_map(path, recs):
+    """Sample one band's psfsize map at each record's center RA/Dec.
+
+    Returns a list (parallel to `recs`) of FWHM values in arcsec, with NaN
+    where the map is missing, the position is off-map, or there is no coverage
+    (pixel == 0). Reads the WCS from the lazily-loaded header (no decompress)
+    and reads each needed pixel with the smallest possible tile decompression
+    via fitsio, falling back to a single full astropy read if fitsio is absent.
+    Never raises -- any failure yields NaN so the image is still written.
+    """
+    from astropy.io import fits
+    from astropy.wcs import WCS
+
+    n = len(recs)
+    nan = float('nan')
+    if not os.path.exists(path):
+        print('WARNING: psfsize map missing, storing NaN for all objects: {}'.format(path),
+              flush=True)
+        return [nan] * n
+
+    # WCS + image dims from the header alone (does not decompress the data).
+    try:
+        with fits.open(path, memmap=False) as hdul:
+            hdu = hdul[1] if len(hdul) > 1 else hdul[0]
+            hdr = hdu.header
+            wcs = WCS(hdr)
+            nx = int(hdr['NAXIS1'])
+            ny = int(hdr['NAXIS2'])
+    except Exception as exc:
+        print('WARNING: failed reading psfsize header {} ({}); storing NaN'.format(path, exc),
+              flush=True)
+        return [nan] * n
+
+    # Nearest integer pixel for each object (None if off-map or unprojectable).
+    pix_xy = []
+    for rec in recs:
+        try:
+            x, y = wcs.all_world2pix(float(rec['ra']), float(rec['dec']), 0)
+            xi = int(round(float(x)))
+            yi = int(round(float(y)))
+            pix_xy.append((xi, yi) if (0 <= xi < nx and 0 <= yi < ny) else None)
+        except Exception:
+            pix_xy.append(None)
+
+    out = [nan] * n
+    try:
+        import fitsio
+        with fitsio.FITS(path) as F:
+            ext = F[1] if len(F) > 1 else F[0]
+            for i, xy in enumerate(pix_xy):
+                if xy is None:
+                    continue
+                xi, yi = xy
+                pix = float(ext[yi:yi + 1, xi:xi + 1][0, 0])
+                out[i] = pix if pix > 0 else nan
+    except ImportError:
+        # No fitsio in this environment: one full decompress via astropy.
+        with fits.open(path, memmap=False) as hdul:
+            data = (hdul[1] if len(hdul) > 1 else hdul[0]).data
+            for i, xy in enumerate(pix_xy):
+                if xy is None:
+                    continue
+                xi, yi = xy
+                pix = float(data[yi, xi])
+                out[i] = pix if pix > 0 else nan
+    except Exception as exc:
+        print('WARNING: failed reading psfsize data {} ({}); storing NaN'.format(path, exc),
+              flush=True)
+        return [nan] * n
+    return out
+
+
+def attach_psfsize(recs, brickname, survey_dir, bands):
+    """Attach psfsize_{band} (arcsec FWHM, NaN where unavailable) to each record
+    in `recs` by sampling the per-brick coadd maps at the cutout centers.
+
+    Called at brick-flush time (single writer process), so each band's map is
+    opened exactly once per brick. Region (north/south) is resolved once from
+    the brick's representative Dec; all objects in a brick share it.
+    """
+    if not recs:
+        return
+    dec0 = float(np.median([float(rec['dec']) for rec in recs]))
+    region = 'north' if dec0 > PSFSIZE_DEC_SPLIT else 'south'
+
+    for rec in recs:
+        rec.setdefault('psfsize', {})
+    for band in bands:
+        path = _psfsize_map_path(survey_dir, region, brickname, band)
+        vals = _sample_psfsize_map(path, recs)
+        for rec, val in zip(recs, vals):
+            rec['psfsize'][band] = val
+
+
+# ----------------------------------------------------------------------
 # Worker-side fetching
 # ----------------------------------------------------------------------
 
@@ -392,6 +502,8 @@ def do_cutouts(args, comm=None, outdir_data='.'):
         if settled[bname] == expected[bname]:
             recs = buffers.pop(bname, [])
             if recs:
+                if args.save_psf:
+                    attach_psfsize(recs, bname, args.psfsize_survey_dir, bands)
                 manifest_rows = cutout_store.write_cutouts_batch(outdir_data, bname, recs)
                 append_manifest_delta(outdir_data, 'rank{}'.format(rank), manifest_rows)
                 n_written += 1
@@ -418,6 +530,8 @@ def do_cutouts(args, comm=None, outdir_data='.'):
         if recs:
             print('Rank {}: WARNING flushing incomplete brick {}'.format(rank, bname),
                   flush=True)
+            if args.save_psf:
+                attach_psfsize(recs, bname, args.psfsize_survey_dir, bands)
             manifest_rows = cutout_store.write_cutouts_batch(outdir_data, bname, recs)
             append_manifest_delta(outdir_data, 'rank{}'.format(rank), manifest_rows)
 
@@ -524,6 +638,18 @@ def main():
     parser.add_argument('--maskbits', dest='maskbits', action='store_true', default=True,
                         help='Include maskbits maps (default).')
     parser.add_argument('--no-maskbits', dest='maskbits', action='store_false')
+
+    parser.add_argument('--save-psf', dest='save_psf', action='store_true', default=False,
+                        help='Sample the per-brick PSF-size coadd map at each cutout '
+                             'center and store psfsize_{g,r,z} attrs (arcsec FWHM, NaN '
+                             'where unavailable). Off by default; intended for random '
+                             'cutouts (source-centered runs already carry PSFSIZE_* from '
+                             'the Tractor catalog). Does not gate existence checks.')
+    parser.add_argument('--psfsize-survey-dir', dest='psfsize_survey_dir', type=str,
+                        default='/global/cfs/cdirs/cosmo/data/legacysurvey/dr9',
+                        help='Base Legacy Surveys directory; "{north,south}/coadd/..." '
+                             'is appended per brick (region by the +32.375 deg split). '
+                             'Only used with --save-psf.')
 
     parser.add_argument('--timeout', type=int, default=120,
                         help='Per-cutout container timeout in seconds.')
