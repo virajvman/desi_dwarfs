@@ -1,4 +1,13 @@
 #!/bin/bash -l
+#
+# Resume behavior: this production run does NOT pass --overwrite. mpi-fastspecfit
+# skips existing per-healpix output files (not per-TARGETID). A healpix whose
+# fastspec-<survey>-<program>-<healpix>.fits already exists is skipped entirely,
+# even if some TARGETIDs from --samplefile are missing from the merged catalog.
+#
+# To fit only new/missing objects (~8k) and vstack onto the existing merged
+# catalog, use run_incremental_fastspec_job.sh instead.
+#
 #SBATCH --job-name=fastspec_dwarfs_400k
 #SBATCH --account=desi
 #SBATCH --constraint=cpu
