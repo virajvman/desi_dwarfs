@@ -6,7 +6,7 @@ Direct-method (T_e) nebular abundances for stacked dwarf spectra from
 `stack_mstar_haew_5pct.py`, fit with custom FastSpecFit
 (`job_scripts/fastspec/run_stack_fastspec_haew_5pct.sh`).
 
-Two stack products (select with ``--products``):
+Stack products (select with ``--products``):
 
 **EW-binned** (``STACK_PATH/``):
   ``fastspec_stack_ALL_mstar_{mlo}_{mhi}_{ewtoken}.fits`` — 1 mean row +
@@ -16,6 +16,15 @@ Two stack products (select with ``--products``):
 **Mass-only** (``STACK_PATH/mstar_only/``):
   ``fastspec_stack_ALL_mstar_{mlo}_{mhi}.fits`` — single mean row, no EW
   sub-binning, no bootstrap.
+
+**ELG vs non-ELG** (``ELG_NOELG_PATH = .../stack_files/mstar/``, ``--products
+  elg_noelg``):
+  ``fastspec_stack_mstar_{elg,noelg}_{mlo}_{mhi}.fits`` — 1 mean row + 200
+  bootstrap rows (same Scholte error model as the EW product), produced by
+  ``code/stacking_analysis/stack_mstar_elg_vs_noelg.py``. Mass-only bins split
+  by ELG / non-ELG membership; the sample is carried in the EW_TOKEN slot
+  (EW_MIN=EW_MAX=-1). ``both`` does NOT include this product; request it
+  explicitly.
 
 Both products share the same detection gate and direct-method fit logic:
 
@@ -38,6 +47,7 @@ Usage:
     python stack_direct_metallicity.py --line-flux-type FLUX --fix-ne100
     python stack_direct_metallicity.py --line-flux-type BOXFLUX --products ew
     python stack_direct_metallicity.py --line-flux-type FLUX --products mstar_only
+    python stack_direct_metallicity.py --line-flux-type FLUX --fix-ne100 --products elg_noelg
 """
 
 import argparse
@@ -115,6 +125,18 @@ MSTAR_ONLY_SUBDIR = "mstar_only"
 MSTAR_ONLY_PATH = os.path.join(STACK_PATH, MSTAR_ONLY_SUBDIR)
 EW_TOKEN_MSTAR_ONLY = "all"
 MSTAR_ONLY_COLOR = "#2ca02c"
+
+# ELG vs non-ELG product (code/stacking_analysis/stack_mstar_elg_vs_noelg.py).
+# Mass-only bins split by ELG / non-ELG membership; each stack FITS has 1 mean
+# row + 200 bootstrap rows (same Scholte error model as the EW product), in a
+# SEPARATE folder with its own filename stem (stack_mstar_{elg,noelg}_*). The
+# sample is carried in the EW_TOKEN slot with EW_MIN=EW_MAX=-1, exactly as the
+# mstar_only product uses token="all".
+ELG_NOELG_PATH = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/stack_files/mstar/"
+ELG_NOELG_GLOB = "fastspec_stack_mstar_*.fits"
+ELG_NOELG_TOKENS = ["elg", "noelg"]
+ELG_NOELG_LABELS = {"elg": "ELG", "noelg": "non-ELG"}
+ELG_NOELG_COLORS = {"elg": "#d62728", "noelg": "#1f77b4"}
 
 
 # =============================================================================
@@ -215,6 +237,52 @@ def read_nobj_from_input_stack(mlo, mhi, token, stack_path=STACK_PATH):
 def read_nobj_from_input_stack_mstar_only(mlo, mhi, stack_path=MSTAR_ONLY_PATH):
     """Best-effort NOBJ for a mass-only bin from the matching input stack FITS."""
     info = read_stackinfo_mstar_only(mlo, mhi, stack_path)
+    if info is None or "nobj" not in info:
+        return -1
+    return info["nobj"]
+
+
+_FNAME_RE_ELG_NOELG = re.compile(
+    r"fastspec_stack_mstar_"
+    r"(?P<sample>elg|noelg)_"
+    r"(?P<mlo>[-\d.]+)_(?P<mhi>[-\d.]+)\.fits$"
+)
+
+
+def _input_stack_path_elg_noelg(mlo, mhi, token, stack_path=ELG_NOELG_PATH):
+    return os.path.join(
+        stack_path, f"stack_mstar_{token}_{mlo:.2f}_{mhi:.2f}.fits"
+    )
+
+
+def read_stackinfo_elg_noelg(mlo, mhi, token, stack_path=ELG_NOELG_PATH):
+    """Read NOBJ from the elg/noelg input stack FITS."""
+    return read_stackinfo_from_path(
+        _input_stack_path_elg_noelg(mlo, mhi, token, stack_path)
+    )
+
+
+def parse_bin_from_filename_elg_noelg(path, stack_path=ELG_NOELG_PATH):
+    """Return (mstar_min, mstar_max, sample_token, -1, -1) or None.
+
+    The ELG/non-ELG product is mass-only (no EW): the sample ('elg'/'noelg') is
+    carried in the EW_TOKEN slot with EW_MIN=EW_MAX=-1, exactly as the mstar_only
+    product uses token='all'.
+    """
+    m = _FNAME_RE_ELG_NOELG.search(os.path.basename(path))
+    if m is None:
+        return None
+    mlo = float(m.group("mlo"))
+    mhi = float(m.group("mhi"))
+    token = m.group("sample")
+    if token not in ELG_NOELG_TOKENS:
+        return None
+    return mlo, mhi, token, -1.0, -1.0
+
+
+def read_nobj_from_input_stack_elg_noelg(mlo, mhi, token, stack_path=ELG_NOELG_PATH):
+    """Best-effort NOBJ for an elg/noelg bin from the matching input stack FITS."""
+    info = read_stackinfo_elg_noelg(mlo, mhi, token, stack_path)
     if info is None or "nobj" not in info:
         return -1
     return info["nobj"]
@@ -572,6 +640,175 @@ def _plot_vs_mstar_by_ew(tab, ycol, yerr_lo, yerr_hi, ylab, ax, title=None):
         ax.set_title(title, fontsize=10)
 
 
+def _plot_vs_mstar_by_sample(tab, ycol, yerr_lo, yerr_hi, ylab, ax, title=None):
+    """Errorbar plot vs log M* midpoint, one series per sample (ELG / non-ELG).
+
+    Mirrors ``_plot_vs_mstar_by_ew`` but groups by the sample carried in the
+    EW_TOKEN slot. Solid: bootstrap errors reliable; dotted triangles: detected
+    but bootstrap survivor fraction too low.
+    """
+    mid = _mstar_mid(tab)
+    has_unreliable = False
+    for token in ELG_NOELG_TOKENS:
+        sel = np.asarray(tab["EW_TOKEN"]) == token
+        if not np.any(sel):
+            continue
+        sub = tab[sel]
+        color = ELG_NOELG_COLORS.get(token, "0.3")
+        label = ELG_NOELG_LABELS.get(token, token)
+        mid_sub = mid[sel]
+        y = np.asarray(sub[ycol], dtype=float)
+        err_lo = np.asarray(sub[yerr_lo], dtype=float)
+        err_hi = np.asarray(sub[yerr_hi], dtype=float)
+        if "BOOT_ERR_RELIABLE" in sub.colnames:
+            reliable = np.asarray(sub["BOOT_ERR_RELIABLE"], dtype=bool)
+        else:
+            reliable = np.ones(len(sub), dtype=bool)
+
+        has_err = np.isfinite(err_lo) & np.isfinite(err_hi)
+        rel = reliable & has_err
+        unrel = (~reliable) & has_err
+
+        if np.any(rel):
+            ax.errorbar(
+                mid_sub[rel], y[rel],
+                yerr=[err_lo[rel], err_hi[rel]],
+                fmt="o-", color=color, label=label, capsize=3, lw=1.2,
+            )
+        elif np.any(reliable):
+            ax.plot(mid_sub[reliable], y[reliable], "o-",
+                    color=color, label=label, lw=1.2)
+        else:
+            ax.plot([], [], "o-", color=color, label=label)
+
+        if np.any(unrel):
+            has_unreliable = True
+            ax.errorbar(
+                mid_sub[unrel], y[unrel],
+                yerr=[err_lo[unrel], err_hi[unrel]],
+                fmt="^:", color=color, capsize=3, lw=1.0, alpha=0.75,
+            )
+
+    ax.set_xlabel(r"log $M_\star$ [$M_\odot$]")
+    ax.set_ylabel(ylab)
+    handles, labels = ax.get_legend_handles_labels()
+    from matplotlib.lines import Line2D
+    handles.append(Line2D(
+        [], [], color="k", marker="o", ls="-", lw=1.2,
+        label="bootstrap error reliable",
+    ))
+    labels.append("bootstrap error reliable")
+    if has_unreliable:
+        handles.append(Line2D(
+            [], [], color="k", marker="^", ls=":", lw=1.0, alpha=0.75,
+            label="low bootstrap survivor fraction",
+        ))
+        labels.append("low bootstrap survivor fraction")
+    ax.legend(handles, labels, frameon=False, fontsize=7)
+    if title:
+        ax.set_title(title, fontsize=10)
+
+
+def _plot_obs_vs_mstar_by_sample(tab, ycol, yerr_col, ylab, ax, title=None,
+                                 det_col="DETECTED_7LINE",
+                                 det_label="TE lines detected",
+                                 undet_label="ratio only (TE gate failed)"):
+    """Observed quantity vs log M* midpoint, one series per sample (ELG / non-ELG).
+
+    Mirrors ``_plot_obs_vs_mstar_by_ew`` but groups by the sample carried in the
+    EW_TOKEN slot. Solid markers: bin passed ``det_col``; dashed hollow markers:
+    finite ratio but gate failed.
+    """
+    finite = np.isfinite(tab[ycol])
+    if not np.any(finite):
+        return False
+
+    plot_tab = tab[finite]
+    has_undetected = False
+    for token in ELG_NOELG_TOKENS:
+        sel = np.asarray(plot_tab["EW_TOKEN"]) == token
+        if not np.any(sel):
+            continue
+        sub = plot_tab[sel]
+        mid_sub = _mstar_mid(sub)
+        color = ELG_NOELG_COLORS.get(token, "0.3")
+        label = ELG_NOELG_LABELS.get(token, token)
+        y = np.asarray(sub[ycol])
+        yerr = np.asarray(sub[yerr_col])
+        det = np.asarray(sub[det_col], dtype=bool)
+        has_err = np.isfinite(yerr) & (yerr > 0)
+
+        if np.any(det & has_err):
+            m = det & has_err
+            ax.errorbar(
+                mid_sub[m], y[m], yerr=yerr[m],
+                fmt="o-", color=color, label=label, capsize=3, lw=1.2,
+            )
+        elif np.any(det):
+            ax.plot(mid_sub[det], y[det], "o-", color=color, label=label, lw=1.2)
+        else:
+            ax.plot([], [], "o-", color=color, label=label)
+
+        if np.any(~det):
+            has_undetected = True
+            ax.plot(
+                mid_sub[~det], y[~det],
+                marker="o", fillstyle="none", ls="--", lw=1.0,
+                color=color, alpha=0.7,
+            )
+
+    ax.set_xlabel(r"log $M_\star$ [$M_\odot$]")
+    ax.set_ylabel(ylab)
+    handles, labels = ax.get_legend_handles_labels()
+    from matplotlib.lines import Line2D
+    handles.append(Line2D(
+        [], [], color="k", marker="o", ls="-", lw=1.2, label=det_label,
+    ))
+    labels.append(det_label)
+    if has_undetected:
+        handles.append(Line2D(
+            [], [], color="k", marker="o", fillstyle="none", ls="--",
+            lw=1.0, alpha=0.7, label=undet_label,
+        ))
+        labels.append(undet_label)
+    ax.legend(handles, labels, frameon=False, fontsize=7)
+    if title:
+        ax.set_title(title, fontsize=10)
+
+
+def _vs_mstar_plotter(plot_mode):
+    """Per-axes errorbar plotter for the given plot mode."""
+    if plot_mode == "single":
+        return _plot_vs_mstar_single
+    if plot_mode == "elg_noelg":
+        return _plot_vs_mstar_by_sample
+    return _plot_vs_mstar_by_ew
+
+
+def _obs_vs_mstar_plotter(plot_mode):
+    """Per-axes observed-quantity plotter for the given plot mode."""
+    if plot_mode == "single":
+        return _plot_obs_vs_mstar_single
+    if plot_mode == "elg_noelg":
+        return _plot_obs_vs_mstar_by_sample
+    return _plot_obs_vs_mstar_by_ew
+
+
+def _plot_title_suffix(plot_mode):
+    """Figure-title suffix naming the product being plotted."""
+    return {
+        "single": "mass-only stacks",
+        "elg_noelg": "ELG vs non-ELG stacks",
+    }.get(plot_mode, "EW-binned stacks")
+
+
+def _group_plot_keys(plot_mode):
+    """(tokens, colors, labels) for grouped overlays keyed by the EW_TOKEN slot."""
+    if plot_mode == "elg_noelg":
+        return ELG_NOELG_TOKENS, ELG_NOELG_COLORS, ELG_NOELG_LABELS
+    return EW_TOKENS, EW_COLORS, EW_BIN_LABELS
+
+
 def _plot_vs_mstar_single(tab, ycol, yerr_lo, yerr_hi, ylab, ax, title=None,
                           color=MSTAR_ONLY_COLOR, label="mass-only (all EW)"):
     """Errorbar plot vs log M* midpoint, single series (mass-only stacks)."""
@@ -709,6 +946,9 @@ def process_one_bin(fpath, parsed, nobj, args, te_line_names, te_min_lines,
     ew_hi_str = f"{ew_max:.1f}" if ew_max >= 0 and np.isfinite(ew_max) else "inf"
     if token == EW_TOKEN_MSTAR_ONLY:
         print(f"\n--- log M*=[{mlo:.2f},{mhi:.2f}] | mass-only | NOBJ={nobj} ---")
+    elif token in ELG_NOELG_TOKENS:
+        print(f"\n--- log M*=[{mlo:.2f},{mhi:.2f}] | "
+              f"{ELG_NOELG_LABELS.get(token, token)} | NOBJ={nobj} ---")
     else:
         print(f"\n--- log M*=[{mlo:.2f},{mhi:.2f}] | {token} "
               f"(EW in ({ew_min:.1f},{ew_hi_str}]) | NOBJ={nobj} ---")
@@ -848,9 +1088,9 @@ def _results_col_order():
 def run_product(product_label, stack_path, plot_dir, out_basename,
                 parse_fn, read_nobj_fn, args, te_line_names, te_min_lines,
                 fixed_ne, density_diagnostic, compute_direct_metallicities,
-                plot_mode="ew"):
+                plot_mode="ew", input_glob=INPUT_GLOB):
     """Glob FastSpec stack outputs, fit direct method, write table + plots."""
-    pattern = os.path.join(stack_path, INPUT_GLOB)
+    pattern = os.path.join(stack_path, input_glob)
     files = sorted(glob.glob(pattern))
     files = [f for f in files if "fastspec_fastspec_" not in os.path.basename(f)]
     print(f"\n[{product_label}] Found {len(files)} FastSpecFit stack outputs "
@@ -921,8 +1161,12 @@ def main(argv=None):
     parser.add_argument(
         "--products",
         default="both",
-        choices=("ew", "mstar_only", "both"),
-        help="Which stack products to analyze (default: both).",
+        choices=("ew", "mstar_only", "elg_noelg", "both"),
+        help=(
+            "Which stack products to analyze. 'both' = ew + mstar_only "
+            "(haew_5pct folder); 'elg_noelg' = the separate ELG vs non-ELG "
+            "product in the mstar/ folder (default: both)."
+        ),
     )
     parser.add_argument(
         "--density-diagnostic",
@@ -1013,6 +1257,24 @@ def main(argv=None):
             density_diagnostic=density_diagnostic,
             compute_direct_metallicities=compute_direct_metallicities,
             plot_mode="single",
+        ))
+
+    if args.products == "elg_noelg":
+        rc = max(rc, run_product(
+            product_label="ELG vs non-ELG",
+            stack_path=ELG_NOELG_PATH,
+            plot_dir=os.path.join(ELG_NOELG_PATH, "plots"),
+            out_basename=OUT_BASENAME,
+            parse_fn=parse_bin_from_filename_elg_noelg,
+            read_nobj_fn=read_nobj_from_input_stack_elg_noelg,
+            args=args,
+            te_line_names=te_line_names,
+            te_min_lines=te_min_lines,
+            fixed_ne=fixed_ne,
+            density_diagnostic=density_diagnostic,
+            compute_direct_metallicities=compute_direct_metallicities,
+            plot_mode="elg_noelg",
+            input_glob=ELG_NOELG_GLOB,
         ))
 
     print("\n[Done]")
@@ -1121,10 +1383,8 @@ def make_oh_av_plot(out_tab, plot_dir, plot_mode="ew"):
         print("    (no successful fits; skipping oh_av_vs_mstar)")
         return
 
-    plot_vs_mstar = (
-        _plot_vs_mstar_single if plot_mode == "single" else _plot_vs_mstar_by_ew
-    )
-    title_suffix = "mass-only stacks" if plot_mode == "single" else "EW-binned stacks"
+    plot_vs_mstar = _vs_mstar_plotter(plot_mode)
+    title_suffix = _plot_title_suffix(plot_mode)
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     for col, ax, ylab in [
@@ -1156,10 +1416,8 @@ def make_te_ne_hahb_plot(out_tab, plot_dir, plot_mode="ew"):
         print("    (no successful fits; skipping te_ne_hahb_vs_mstar)")
         return
 
-    plot_vs_mstar = (
-        _plot_vs_mstar_single if plot_mode == "single" else _plot_vs_mstar_by_ew
-    )
-    title_suffix = "mass-only stacks" if plot_mode == "single" else "EW-binned stacks"
+    plot_vs_mstar = _vs_mstar_plotter(plot_mode)
+    title_suffix = _plot_title_suffix(plot_mode)
 
     dens_diag = "SII"
     if "DENSITY_DIAGNOSTIC" in good.colnames and len(good) > 0:
@@ -1202,11 +1460,8 @@ def make_obs_hahb_plot(out_tab, plot_dir, plot_mode="ew"):
 
     os.makedirs(plot_dir, exist_ok=True)
 
-    plot_obs = (
-        _plot_obs_vs_mstar_single if plot_mode == "single"
-        else _plot_obs_vs_mstar_by_ew
-    )
-    title_suffix = "mass-only stacks" if plot_mode == "single" else "EW-binned stacks"
+    plot_obs = _obs_vs_mstar_plotter(plot_mode)
+    title_suffix = _plot_title_suffix(plot_mode)
 
     fig, ax = plt.subplots(figsize=(10, 5))
     if not plot_obs(
@@ -1241,11 +1496,8 @@ def make_doublet_ratios_vs_mstar_plot(out_tab, plot_dir, plot_mode="ew"):
 
     os.makedirs(plot_dir, exist_ok=True)
 
-    plot_obs = (
-        _plot_obs_vs_mstar_single if plot_mode == "single"
-        else _plot_obs_vs_mstar_by_ew
-    )
-    title_suffix = "mass-only stacks" if plot_mode == "single" else "EW-binned stacks"
+    plot_obs = _obs_vs_mstar_plotter(plot_mode)
+    title_suffix = _plot_title_suffix(plot_mode)
 
     has_sii = np.isfinite(out_tab["OBS_SII_DOUBLET"])
     has_oii = np.isfinite(out_tab["OBS_OII_DOUBLET"])
@@ -1342,14 +1594,15 @@ def make_ne_diagnostic_plot(out_tab, plot_dir, plot_mode="ew"):
                                    color=MSTAR_ONLY_COLOR, alpha=0.10)
                 ew_present = ["all"]
             else:
-                for token in EW_TOKENS:
+                group_tokens, group_colors, _group_labels = _group_plot_keys(plot_mode)
+                for token in group_tokens:
                     rows = sub[np.asarray(sub["EW_TOKEN"]) == token]
                     drawn = False
                     for row in rows:
                         val = float(row[ycol]) if np.isfinite(row[ycol]) else np.nan
                         if not np.isfinite(val):
                             continue
-                        color = EW_COLORS.get(token, "0.3")
+                        color = group_colors.get(token, "0.3")
                         ax.axhline(val, color=color, lw=1.0, alpha=0.85)
                         err = (float(row[yerr_col])
                                if yerr_col in row.colnames
@@ -1371,15 +1624,16 @@ def make_ne_diagnostic_plot(out_tab, plot_dir, plot_mode="ew"):
             handles.append(Line2D([], [], color=MSTAR_ONLY_COLOR, lw=1.0))
             labels.append("mass-only (all EW)")
         else:
+            _gt, group_colors, group_labels = _group_plot_keys(plot_mode)
             for token in ew_present:
-                handles.append(Line2D([], [], color=EW_COLORS[token], lw=1.0))
-                labels.append(EW_BIN_LABELS.get(token, token))
+                handles.append(Line2D([], [], color=group_colors[token], lw=1.0))
+                labels.append(group_labels.get(token, token))
         ax.legend(handles, labels, frameon=False, fontsize=7)
 
-    legend_note = (
-        "mass-only stacks" if plot_mode == "single"
-        else "detected bins, colored by EW"
-    )
+    legend_note = {
+        "single": "mass-only stacks",
+        "elg_noelg": "detected bins, ELG vs non-ELG",
+    }.get(plot_mode, "detected bins, colored by EW")
     fig.suptitle(
         f"Density-diagnostic ratio vs $n_e$: PyNeb model curves and observed "
         f"stack ratios ({legend_note})",

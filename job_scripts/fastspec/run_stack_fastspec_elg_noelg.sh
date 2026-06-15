@@ -7,9 +7,10 @@
 # three fit contexts (per-object catalog, EW stacks, ELG/NO-ELG stacks) use
 # the identical fastspecfit version and constraints.
 #
-# NOTE: the ELG / NO-ELG stack *input files* themselves are still being
-# finalized; the stack_mstar_{elg,noelg}_*.fits globs below are left as-is and
-# will be updated in a later stage.
+# Inputs are produced by code/stacking_analysis/stack_mstar_elg_vs_noelg.py
+# (1 mean row + 200 bootstrap rows; Scholte propagated-ivar error model, same
+# as the haew_5pct product). Stale fastspec_* outputs are removed below before
+# refitting so a dropped/renamed bin never lingers.
 
 # ---- fastspecfit environment ------------------------------------------------
 # Same fastspecfit/3.4.3 module as the production run, so stackfit runs the same
@@ -65,12 +66,25 @@ echo "Templates   : ${templates}"
 echo "Constraints : ${constraintsfile}"
 echo "Emlines     : ${emlinesfile}"
 
+# Remove previous fastspec_* outputs so a dropped/renamed bin never lingers.
+shopt -s nullglob
+n_old=0
+for f in "${STACK_PATH}"/fastspec_stack_mstar_elg_*.fits \
+         "${STACK_PATH}"/fastspec_stack_mstar_noelg_*.fits; do
+    rm -f "$f"
+    n_old=$((n_old + 1))
+done
+echo "Removed ${n_old} previous fastspec_stack_mstar_{elg,noelg}_*.fits files"
+
 # --- ELG stacks ---
 echo ""
 echo "--- ELG stacks ---"
 for f in ${STACK_PATH}/stack_mstar_elg_*.fits; do
     if [ -f "$f" ]; then
         basename=$(basename "$f")
+        case "${basename}" in
+            fastspec_*) continue ;;
+        esac
         outfile="${STACK_PATH}/fastspec_${basename}"
         echo "Processing: ${basename}"
         stackfit "$f" -o "$outfile" \
@@ -91,6 +105,9 @@ echo "--- NO-ELG stacks ---"
 for f in ${STACK_PATH}/stack_mstar_noelg_*.fits; do
     if [ -f "$f" ]; then
         basename=$(basename "$f")
+        case "${basename}" in
+            fastspec_*) continue ;;
+        esac
         outfile="${STACK_PATH}/fastspec_${basename}"
         echo "Processing: ${basename}"
         stackfit "$f" -o "$outfile" \
