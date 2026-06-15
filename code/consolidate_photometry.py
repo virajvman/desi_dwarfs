@@ -2109,6 +2109,96 @@ def add_wrong_redrock_maskbit(cat_path, main_datamodel, bit=16):
     print(f"Set DWARF_MASKBIT bit {bit} for {weird_mask.sum()} objects (MAIN HDU updated).")
 
 
+def add_vi_bad_redshift_maskbit(cat_path, main_datamodel, bit=18, tgid_file=None):
+    """
+    Flag objects whose redshift was found to be incorrect by visual inspection (VI)
+    and update DWARF_MASKBIT. This is the manual, human-vetted complement to bit 16
+    (`add_wrong_redrock_maskbit`), which flags wrong Redrock redshifts algorithmically
+    via UMAP/NMF spectral template anomaly detection. Here we simply match TARGETIDs
+    against a hand-curated list of VI-confirmed bad-redshift objects.
+
+    Updates the MAIN HDU safely, preserving variable-length columns and all other HDUs.
+
+    Parameters
+    ----------
+    cat_path : str
+        Path to the multi-extension FITS catalog.
+    main_datamodel : dict
+        Dictionary describing column metadata (dtype, description, unit, blank_value).
+    bit : int, optional
+        Bit index to set for VI-confirmed bad-redshift objects (default 18).
+    tgid_file : str, optional
+        Path to a text file listing one TARGETID per line. Defaults to
+        ``<repo>/data/vi_bad_tgids.txt`` resolved relative to this module.
+    """
+
+    if tgid_file is None:
+        tgid_file = os.path.join(
+            os.path.dirname(__file__), "..", "data", "vi_bad_tgids.txt"
+        )
+
+    # --- Parse the VI bad-redshift TARGETID list (int64, skip blanks, dedupe) ---
+    bad_tgids = set()
+    with open(tgid_file) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            bad_tgids.add(np.int64(line))
+    n_listed = len(bad_tgids)
+
+    # --- Read MAIN and match ---
+    main_cat = safe_read_table(cat_path, hdu="MAIN")
+    targetids = np.asarray(main_cat["TARGETID"], dtype=np.int64)
+    vi_mask = np.isin(targetids, np.fromiter(bad_tgids, dtype=np.int64))
+
+    matched_tgids = set(targetids[vi_mask].tolist())
+    n_unmatched = n_listed - len(matched_tgids)
+    print(
+        f"VI bad-z: matched {len(matched_tgids)}/{n_listed} listed TARGETIDs in MAIN"
+        f"; {n_unmatched} not present (ignored)."
+    )
+
+    # --- Update DWARF_MASKBIT ---
+    dwarf_maskbits = np.asarray(main_cat["DWARF_MASKBIT"], dtype=np.int64)
+    dwarf_maskbits[vi_mask] |= np.int64(1) << bit
+    main_cat["DWARF_MASKBIT"] = dwarf_maskbits
+
+    # --- Apply main_datamodel metadata (recasts DWARF_MASKBIT int64 -> int32) ---
+    for col in main_datamodel.keys():
+        if col not in main_cat.colnames:
+            print(f"Skipping column: {col}")
+            continue  # skip if column missing
+        meta = main_datamodel[col]
+
+        # Ensure dtype matches datamodel
+        desired_dtype = np.dtype(meta["dtype"])
+        if main_cat[col].dtype != desired_dtype:
+            main_cat[col] = main_cat[col].astype(desired_dtype)
+
+        # Set description (ASCII-fold for valid FITS card strings)
+        if meta.get("description"):
+            main_cat[col].description = _fold_fits_str(meta["description"])
+
+        # Set unit
+        if meta.get("unit") is not None:
+            main_cat[col].unit = meta["unit"]
+
+        blank_val = meta.get("blank_value", None)
+        if blank_val is not None:
+            col_data = np.asarray(main_cat[col], dtype=float)
+            bad = np.isnan(col_data)
+            col_data[bad] = blank_val
+            main_cat[col] = col_data
+
+    main_hdu_new = fits.table_to_hdu(main_cat)
+    main_hdu_new.name = "MAIN"
+    main_hdu_new.add_checksum()
+    _replace_main_extension_atomic(cat_path, main_hdu_new)
+
+    print(f"Set DWARF_MASKBIT bit {bit} for {int(vi_mask.sum())} objects (MAIN HDU updated).")
+
+
 # _load_nebcorr_delta_mag_table and add_delta_magDA_to_fastspec
 # are imported from mass_and_photo_corrections
 # MAG_*_MODEL_* columns are now written to the SPEC_DERIVED HDU by
@@ -2446,6 +2536,9 @@ if __name__ == '__main__':
         #update the dwarf_maskbit with some weird spectra masks
         add_wrong_redrock_maskbit(main_cat_outpath, main_datamodel)
 
+        #flag objects VI'd to have incorrect redshifts (manual complement to bit 16)
+        add_vi_bad_redshift_maskbit(main_cat_outpath, main_datamodel)
+
 
     # Halpha SFR, fiber Mstar/SFR, strong-line metallicity and other
     # spectroscopically derived nebular properties are now appended as a
@@ -2460,6 +2553,7 @@ if __name__ == '__main__':
 
     #TODO: WHAT IS CAUSING THE MISSING TARGETIDS FROM THE CUSTOM FASTSPECFIT CATALOG? THERE IS A SIGNIFICANT FRACTION OF SOURCES. Oh maybe it is because some objects were removed?
 
+    #TODO: why are there ELG objects with DELTACHI2 < 40 in catlaog?
 
 
 

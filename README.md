@@ -492,6 +492,7 @@ Each bit in `DWARF_MASKBIT` corresponds to a quality or cleaning flag. A value o
 | 15 | 32768 | If `MAG_TYPE = TRACTOR_OG` and `TRACTOR_MASKBITS` has at least one of {8,9} [Tractor bits](https://www.legacysurvey.org/dr9/bitmasks/) flagged |
 | 16 | 65536 | Likely incorrect Redrock redshift, identified via UMAP/NMF spectral template anomaly detection |
 | 17 | 131072 | M_g &lt; &minus;18.5 at the survey redshift (or fallback distance for low continuum-SNR mass rows) after nebular + filter + k-corrections. |
+| 18 | 262144 | Visually inspected (VI) and confirmed to have an incorrect redshift; TARGETID listed in data/vi_bad_tgids.txt |
 
 </details>
 
