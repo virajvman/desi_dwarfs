@@ -7,7 +7,8 @@
 #   sh cutouts_cnn_general.sh <N> <mp> <catalog_path> <outdir> \
 #       [ra_col] [dec_col] [id_col] [cutout_size] [extra_args...]
 
-mpiscript="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )/many_cutouts_general.py"
+SCRIPT_DIR="/global/u1/v/virajvm/DESI2_LOWZ/desi_dwarfs/job_scripts/image_cutouts/general"
+mpiscript="${SCRIPT_DIR}/many_cutouts_general.py"
 
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1

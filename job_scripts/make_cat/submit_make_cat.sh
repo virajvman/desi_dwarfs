@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="/global/u1/v/virajvm/DESI2_LOWZ/desi_dwarfs/job_scripts/make_cat"
 
 CONSOLIDATE_JOB="${SCRIPT_DIR}/run_consolidate.sh"
 NEBULAR_JOB="${SCRIPT_DIR}/run_nebular_props.sh"

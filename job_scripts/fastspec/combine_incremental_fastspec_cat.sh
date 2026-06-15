@@ -25,8 +25,9 @@ manifest=/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/desi_dr1_dwarfs_fastspec_incr
 fastspec_merged=/pscratch/sd/v/virajvm/desi_dwarf_catalogs/fastspecfit_custom_run/iron/catalogs/fastspec-iron-dr1-dwarfs.fits
 out_merged=/pscratch/sd/v/virajvm/desi_dwarf_catalogs/fastspecfit_custom_run/iron/catalogs/fastspec-iron-dr1-dwarfs-v2.fits
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CODE_DIR="${SCRIPT_DIR}/code"
+# NOTE: sbatch copies this script to a spool dir; BASH_SOURCE does NOT point at the repo.
+REPO_ROOT="/global/u1/v/virajvm/DESI2_LOWZ/desi_dwarfs"
+CODE_DIR="${REPO_ROOT}/code"
 
 export FASTSPECFIT_VERSION=3.4.3
 source /dvs_ro/common/software/desi/desi_environment.sh main
