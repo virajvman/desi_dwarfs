@@ -431,6 +431,7 @@ def bootstrap_stack(fluxes, ivars, wave, n_bootstrap=200, n_draw=5000,
                     flux_window=None,
                     catalog_line_fluxes=None,
                     min_n_valid=25,
+                    max_spectra=None,
                     n_jobs=1):
     """
     Bootstrap stack with flexible normalization methods.
@@ -458,6 +459,13 @@ def bootstrap_stack(fluxes, ivars, wave, n_bootstrap=200, n_draw=5000,
     min_n_valid : int
         Minimum number of normalized spectra required to stack. Default 25
         preserves legacy behavior; pass 1 to allow single-spectrum bins.
+    max_spectra : int or None
+        If set and the bin has more than this many valid spectra, randomly
+        subsample (without replacement, from the seeded RNG) down to
+        max_spectra before stacking. Bounds the per-realization memory and time
+        for very large bins; the resulting bootstrap error then reflects
+        max_spectra (mildly conservative). None (default) stacks all valid
+        spectra, i.e. unchanged behavior.
     n_jobs : int
         Number of worker processes for the per-realization coadds. 1 (default)
         runs serially. >1 forks a pool that shares the read-only normalized
@@ -516,6 +524,20 @@ def bootstrap_stack(fluxes, ivars, wave, n_bootstrap=200, n_draw=5000,
         print(f"    Warning: only {n_valid} valid spectra "
               f"(< min_n_valid={min_n_valid}), returning NaN")
         return nan_flux, nan_flux, None, None, nan_ivar
+
+    # Cap the number of spectra fed into the stack. For very large bins the
+    # full-sample stack is S/N-saturated, so a random subsample (without
+    # replacement, drawn from the seeded RNG) gives a stack indistinguishable in
+    # the mean while slashing per-realization memory and time; the bootstrap then
+    # reflects max_spectra (mildly conservative). Done before the bootstrap loop
+    # so every realization resamples from the capped set.
+    if max_spectra is not None and n_valid > max_spectra:
+        keep = rng.choice(n_valid, size=max_spectra, replace=False)
+        use_fluxes = use_fluxes[keep]
+        use_ivars = use_ivars[keep]
+        print(f"    Capping stack input: {n_valid} -> {max_spectra} spectra "
+              f"(random subsample)")
+        n_valid = max_spectra
 
     print(f"    Bootstrap: n_valid={n_valid}, n_bootstrap={n_bootstrap}")
 

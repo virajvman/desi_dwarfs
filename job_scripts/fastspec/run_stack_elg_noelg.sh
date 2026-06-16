@@ -50,7 +50,7 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 
 echo "=== [1/3] Bootstrap stacking (stack_mstar_elg_vs_noelg.py) ==="
-python3 code/stacking_analysis/stack_mstar_elg_vs_noelg.py
+python3 code/stacking_analysis/stack_mstar_elg_vs_noelg.py --resume
 
 echo "=== [2/3] FastSpecFit on ELG / NO-ELG stacks ==="
 bash job_scripts/fastspec/run_stack_fastspec_elg_noelg.sh

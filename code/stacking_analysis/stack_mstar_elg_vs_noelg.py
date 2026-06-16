@@ -45,6 +45,7 @@ Usage:
     python stack_mstar_elg_vs_noelg.py
 """
 
+import argparse
 import glob
 import os
 import sys
@@ -110,6 +111,17 @@ RANDOM_SEED = 42       # base seed; each (sample, mass) cell adds a stable offse
 # if bins are small / memory is ample; lower if you hit OOM. Run with
 # OMP_NUM_THREADS=1 (the orchestrator sets this) so workers don't oversubscribe.
 BOOT_NJOBS = 16
+
+# Cap on the number of spectra fed into any single stack. The non-ELG high-mass
+# bins reach 50k-100k galaxies; the full-sample stack is S/N-saturated, so a
+# random subsample to this size gives an indistinguishable mean stack at a small
+# fraction of the per-realization memory/time (it was 16 workers x a ~6.5 GB
+# resample copy that OOM-killed the 100k bin). Bins below the cap are untouched,
+# so the low-mass dwarf bins keep full fidelity; the bootstrap error on capped
+# (high-mass) bins reflects this cap, i.e. mildly conservative. None disables it.
+# Tunable: raise to ~20000 for tighter errors on the biggest bins -- still
+# memory-safe on a full node.
+MAX_STACK_SPECTRA = 10000
 
 # Output location.
 STACK_PATH = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/stack_files/mstar/"
@@ -228,6 +240,7 @@ def stack_one_bin(sub_cat, spectra_data, wave, sample_name, file_key,
         norm_method=NORM_METHOD,
         catalog_line_fluxes=halpha_fluxes,
         min_n_valid=1,
+        max_spectra=MAX_STACK_SPECTRA,
         n_jobs=BOOT_NJOBS,
     )
 
@@ -481,12 +494,25 @@ def make_ivar_diagnostic_plots(results, wave, plot_dir, max_bins=2):
 # MAIN
 # =============================================================================
 
-def main():
+def main(resume=False):
+    global OVERWRITE_STACKS
     os.makedirs(STACK_PATH, exist_ok=True)
     plot_dir = os.path.join(STACK_PATH, "plots")
 
-    print("[0] Cleaning previous stack outputs ...")
-    clean_stack_outputs(STACK_PATH)
+    if resume:
+        # Keep what's on disk and reuse cached per-bin pickles; stack_one_bin
+        # then loads any existing .pkl instead of recomputing, so only the bins
+        # still missing are (re)computed.
+        OVERWRITE_STACKS = False
+        print("[0] --resume: keeping existing outputs; cached per-bin pickles "
+              "are reused, only missing bins are computed.")
+        print("    NOTE: bins already on disk were stacked with whatever cap was "
+              "in effect when they were made; mixing them with freshly capped "
+              "bins is inconsistent. Prefer a clean (capped) rerun -- with the "
+              "cap the whole job is fast.")
+    else:
+        print("[0] Cleaning previous stack outputs ...")
+        clean_stack_outputs(STACK_PATH)
 
     # -------------------------------------------------------------------------
     # 1. Load catalog + spectra
@@ -571,4 +597,13 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(
+        description="ELG vs non-ELG bootstrap-stacked spectra in log M* bins.",
+    )
+    parser.add_argument(
+        "--resume", action="store_true",
+        help="Keep existing outputs (skip the initial clean) and reuse cached "
+             "per-bin pickles, computing only the bins still missing on disk.",
+    )
+    args = parser.parse_args()
+    main(resume=args.resume)
