@@ -100,9 +100,16 @@ Z_MAX_GLOBAL = 0.5
 STACK_NLIM = 50
 
 # Bootstrap settings (Scholte: 200 realizations, full-sample draws with replacement).
-N_BOOTSTRAP = 200      # number of bootstrap realizations
-N_BOOT_SAVE = 200      # how many realizations to save as FITS rows 1.. (all of them)
+N_BOOTSTRAP = 50       # number of bootstrap realizations (reduced from 200 for speed)
+N_BOOT_SAVE = 200      # how many realizations to save as FITS rows 1.. (capped at N_BOOTSTRAP)
 RANDOM_SEED = 42       # base seed; each (sample, mass) cell adds a stable offset
+
+# Worker processes for the per-realization coadds inside bootstrap_stack. The
+# non-ELG bins are large (a few GB working set per worker), so 16 keeps the peak
+# comfortably within a full Perlmutter CPU node (512 GB, run with --mem=0). Raise
+# if bins are small / memory is ample; lower if you hit OOM. Run with
+# OMP_NUM_THREADS=1 (the orchestrator sets this) so workers don't oversubscribe.
+BOOT_NJOBS = 16
 
 # Output location.
 STACK_PATH = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/stack_files/mstar/"
@@ -221,6 +228,7 @@ def stack_one_bin(sub_cat, spectra_data, wave, sample_name, file_key,
         norm_method=NORM_METHOD,
         catalog_line_fluxes=halpha_fluxes,
         min_n_valid=1,
+        n_jobs=BOOT_NJOBS,
     )
 
     if real_flux is None:

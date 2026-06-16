@@ -8,7 +8,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=128
-#SBATCH --mem=256GB
+#SBATCH --mem=0
 #SBATCH --time=02:00:00
 #SBATCH --job-name=run_stack_elg_noelg
 #SBATCH --output=run_stack_elg_noelg.log
@@ -38,6 +38,17 @@ source /global/cfs/cdirs/desi/software/desi_environment.sh main
 
 cd /global/u1/v/virajvm/DESI2_LOWZ/desi_dwarfs
 
+# Unbuffered Python so the .log shows live per-bin progress -- SLURM block-buffers
+# stdout, so a killed job otherwise loses all its progress prints. One BLAS thread
+# per process: stage 1's bootstrap coadds run on a process pool (BOOT_NJOBS),
+# stage 3's UltraNest parallelizes per row, and stage 2's stackfit --mp forks
+# workers; in every case we want a single thread per process to avoid CPU
+# oversubscription and the fork-with-threaded-BLAS hang.
+export PYTHONUNBUFFERED=1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+
 echo "=== [1/3] Bootstrap stacking (stack_mstar_elg_vs_noelg.py) ==="
 python3 code/stacking_analysis/stack_mstar_elg_vs_noelg.py
 
@@ -45,9 +56,6 @@ echo "=== [2/3] FastSpecFit on ELG / NO-ELG stacks ==="
 bash job_scripts/fastspec/run_stack_fastspec_elg_noelg.sh
 
 echo "=== [3/3] Direct-method metallicity (n_e fixed at 100 cm^-3) ==="
-export OMP_NUM_THREADS=1
-export MKL_NUM_THREADS=1
-export OPENBLAS_NUM_THREADS=1
 python3 code/nebular_stuff/stack_direct_metallicity.py \
     --products elg_noelg --line-flux-type FLUX --fix-ne100
 

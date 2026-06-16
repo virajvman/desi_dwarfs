@@ -11,7 +11,7 @@ _CODE_DIR = os.path.dirname(_THIS_DIR)
 if _CODE_DIR not in sys.path:
     sys.path.insert(0, _CODE_DIR)
 
-from multiprocessing import Pool
+from multiprocessing import Pool, get_context
 
 from astropy.table import Table, hstack
 import h5py
@@ -407,13 +407,31 @@ def mean_stack(fluxes, ivars, wave,
     return stack_flux, stack_ivar, n_valid
 
 
+# Read-only normalized arrays shared with bootstrap worker processes via fork
+# (copy-on-write -- no pickling/copying of the big arrays). Set just before the
+# Pool is created and cleared right after.
+_BOOT_SHARED = {}
+
+# Below this many valid spectra, the per-realization coadd is cheap enough that
+# the process-pool overhead isn't worth it; bootstrap_stack stays serial.
+BOOT_PARALLEL_MIN_NVALID = 500
+
+
+def _boot_one_realization(idx):
+    """Coadd one bootstrap resample (worker for bootstrap_stack's process pool)."""
+    return coadd_mean_with_propagated_ivar(
+        _BOOT_SHARED["fluxes"][idx], _BOOT_SHARED["ivars"][idx],
+    )
+
+
 def bootstrap_stack(fluxes, ivars, wave, n_bootstrap=200, n_draw=5000,
                     random_seed=42,
                     norm_method="boxcar_line",
                     line_window=None, cont_width=5.0,
                     flux_window=None,
                     catalog_line_fluxes=None,
-                    min_n_valid=25):
+                    min_n_valid=25,
+                    n_jobs=1):
     """
     Bootstrap stack with flexible normalization methods.
 
@@ -440,6 +458,15 @@ def bootstrap_stack(fluxes, ivars, wave, n_bootstrap=200, n_draw=5000,
     min_n_valid : int
         Minimum number of normalized spectra required to stack. Default 25
         preserves legacy behavior; pass 1 to allow single-spectrum bins.
+    n_jobs : int
+        Number of worker processes for the per-realization coadds. 1 (default)
+        runs serially. >1 forks a pool that shares the read-only normalized
+        arrays via copy-on-write and computes realizations in parallel; results
+        are bit-identical to the serial path (the resample indices are
+        pre-generated from the seeded RNG, so order and values are unchanged).
+        Only engaged when n_valid >= BOOT_PARALLEL_MIN_NVALID, since small bins
+        are already fast. Run with OMP_NUM_THREADS=1 to avoid oversubscription /
+        fork-with-threaded-BLAS hangs.
 
     Returns
     -------
@@ -502,11 +529,40 @@ def bootstrap_stack(fluxes, ivars, wave, n_bootstrap=200, n_draw=5000,
         boot_std = np.zeros(n_wave, dtype=np.float32)
         return flux0, boot_std, real_flux, real_ivar, ivar0
 
-    for b in range(n_bootstrap):
-        idx = rng.integers(0, n_valid, size=n_valid)
-        real_flux[b], real_ivar[b] = coadd_mean_with_propagated_ivar(
-            use_fluxes[idx], use_ivars[idx],
-        )
+    # Pre-generate every resample index array from the seeded RNG IN ORDER, so
+    # the result is bit-identical whether we run serially or across processes
+    # (and identical to the previous serial implementation for the same seed).
+    all_idx = [rng.integers(0, n_valid, size=n_valid) for _ in range(n_bootstrap)]
+
+    use_parallel = (
+        n_jobs is not None and n_jobs > 1
+        and n_bootstrap > 1 and n_valid >= BOOT_PARALLEL_MIN_NVALID
+    )
+    if use_parallel:
+        # Workers read use_fluxes/use_ivars from the forked address space (COW),
+        # so only the small index arrays are dispatched. imap preserves order, so
+        # real_flux[b] still corresponds to all_idx[b].
+        _BOOT_SHARED["fluxes"] = use_fluxes
+        _BOOT_SHARED["ivars"] = use_ivars
+        try:
+            # Force a fork context: workers must inherit _BOOT_SHARED (and the
+            # big read-only arrays) from the parent via copy-on-write. With the
+            # "spawn" default (macOS/Windows) children re-import the module and
+            # would see an empty _BOOT_SHARED. fork is the Linux/NERSC default
+            # anyway; making it explicit keeps this correct everywhere.
+            with get_context("fork").Pool(processes=int(n_jobs)) as pool:
+                for b, (fb, ib) in enumerate(
+                        pool.imap(_boot_one_realization, all_idx, chunksize=1)):
+                    real_flux[b] = fb
+                    real_ivar[b] = ib
+        finally:
+            _BOOT_SHARED.clear()
+        print(f"    (bootstrap coadds ran on {int(n_jobs)} processes)")
+    else:
+        for b, idx in enumerate(all_idx):
+            real_flux[b], real_ivar[b] = coadd_mean_with_propagated_ivar(
+                use_fluxes[idx], use_ivars[idx],
+            )
 
     central_flux = np.nanmean(real_flux, axis=0).astype(np.float32)
     central_ivar = np.nanmean(real_ivar, axis=0).astype(np.float32)

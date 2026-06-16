@@ -110,6 +110,13 @@ N_BOOTSTRAP = 200
 N_BOOT_SAVE = 200
 RANDOM_SEED = 42
 
+# Worker processes for the per-realization coadds inside bootstrap_stack
+# (result-preserving: parallel results are bit-identical to serial). haew cells
+# are EW-cut and usually small, so many fall below BOOT_PARALLEL_MIN_NVALID and
+# run serially regardless; this only speeds up the larger cells. Safe within a
+# full CPU node (--mem=0); run with OMP_NUM_THREADS=1 (the orchestrator sets it).
+BOOT_NJOBS = 16
+
 STACK_PATH = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/stack_files/mstar_haew_5pct/"
 MSTAR_ONLY_SUBDIR = "mstar_only"
 MSTAR_ONLY_PATH = os.path.join(STACK_PATH, MSTAR_ONLY_SUBDIR)
@@ -314,6 +321,7 @@ def stack_one_bin(sub_cat, spectra_data, wave, token, ew_min, ew_max_fits,
         norm_method=NORM_METHOD,
         catalog_line_fluxes=halpha_fluxes,
         min_n_valid=1,
+        n_jobs=BOOT_NJOBS,
     )
 
     if real_flux is None:
