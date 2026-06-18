@@ -188,7 +188,8 @@ if __name__ == "__main__":
     ax.set_ylim(41.25, 42)
 
     for i in range(10):
-        ax.fill_betweenx(y=[41.25, 41.5 + i*0.05], x1=-1.69, x2=-0.715, facecolor="k", edgecolor="none", alpha=0.01)
+        #the factor of 0.2 is for the young mzr correction. see sfr_and_metallicity.py
+        ax.fill_betweenx(y=[41.25, 41.5 + i*0.05], x1=-1.69+0.2, x2=-0.715+0.2, facecolor="k", edgecolor="none", alpha=0.01)
     
 
     ax.text( -1.69 - 0.135 , 41.35,r"$M_{\star}\!=\!10^6 M_{\odot}$", color="k",rotation=90,fontsize = 8)
