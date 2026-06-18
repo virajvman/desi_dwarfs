@@ -3,7 +3,7 @@
 
 **Contact:** Viraj Manwadkar ([virajvm@stanford.edu](mailto:virajvm@stanford.edu))
 
-The DESI Extragalactic Dwarf Galaxy Catalog provides spectroscopically confirmed dwarf galaxies from the Dark Energy Spectroscopic Instrument (DESI) Data Release 1. The catalog includes reprocessed photometry, spectral measurements, and value-added properties for low-mass galaxies with $\log(M_\star / M_\odot) < 9.25$. The catalog is stored as a multi-extension FITS file with seven extensions: **MAIN**, **ZCAT**, **TRACTOR**, **SPEC_DERIVED**, **REPROCESS_PHOTO**, **SPECTRA_TEMPLATE**, and **IMG_SSL**.
+The DESI Extragalactic Dwarf Galaxy Catalog provides spectroscopically confirmed dwarf galaxies from the Dark Energy Spectroscopic Instrument (DESI) Data Release 1. The catalog includes reprocessed photometry, spectral measurements, and value-added properties for low-mass galaxies with $\log(M_\star / M_\odot) < 9.25$. The catalog is stored as a multi-extension FITS file with eight extensions: **MAIN**, **ZCAT**, **TRACTOR**, **FASTSPEC**, **REPROCESS_PHOTO**, **SPECTRA_TEMPLATE**, **IMG_SSL**, and **SPEC_DERIVED**.
 
 <p align="center">
   <img src="figs/dwarf_example_panel.jpg" width="90%" alt="Example dwarf galaxies from the DESI catalog">
@@ -199,97 +199,74 @@ Original Tractor photometry and morphological parameters from the DESI Legacy Su
 ---
 
 <details>
-<summary><strong>Extension 4 &mdash; SPEC_DERIVED</strong></summary>
+<summary><strong>Extension 4 &mdash; FASTSPEC</strong></summary>
 
 <br>
 
-Spectral measurements from FastSpecFit: spectral indices, emission-line fluxes, and *k*-corrected absolute magnitudes.
+Emission-line fitting results from **FastSpecFit**. This extension is the **FASTSPEC** HDU (HDU 3) of a custom FastSpecFit run on the DESI Iron / DR1 spectra, matched to **MAIN** by `TARGETID` and carried **verbatim** — every FASTSPEC-HDU column is included, with no subsetting. Rows match **MAIN** by `TARGETID` and order; targets with no FastSpecFit match are sentinel-filled so the row alignment is preserved.
+
+The column definitions below follow the FastSpecFit data model (this run corresponds to the `fastspecfit` FASTSPEC-HDU schema, ~v3.x; see the [FastSpecFit FASTSPEC data model](https://fastspecfit.readthedocs.io/en/latest/fastspec.html)). Because the HDU is taken verbatim, columns are documented **by pattern** rather than enumerated one-by-one.
+
+> **Note.** The stellar-population / SED quantities you may expect from FastSpecFit — `LOGMSTAR`, `SFR`, `DN4000*`, `ABSMAG*`, `KCORR*`, `VDISP`, rest-frame luminosities — live in the FastSpecFit **SPECPHOT** HDU (HDU 2), which is **not** carried in this catalog. Only the FASTSPEC HDU (HDU 3) is included here. The emission-subtracted fiber photometry (`MAG_*_FIBER_NOEMI`) measured by this project's pipeline lives in the **SPEC_DERIVED** extension, not here.
+
+**Identification and quality columns**
 
 | Name | Type | Units | Description |
 | :--- | :--- | :---: | :---------- |
-| `TARGETID` | int64 | | DESI TARGET ID |
-| `RA_TARGET` | float64 | deg | Right Ascension from target catalog |
-| `DEC_TARGET` | float64 | deg | Declination from target catalog |
-| `DN4000` | float32 | | Narrow 4000 Å break index (Balogh et al. 1999) from emission-line subtracted spectrum |
-| `DN4000_OBS` | float32 | | Narrow 4000 Å break index from observed spectrum |
-| `DN4000_IVAR` | float32 | | Inverse variance of `DN4000` and `DN4000_OBS` |
-| `DN4000_MODEL` | float32 | | Narrow 4000 Å break index from best-fitting continuum model |
-| `SNR_B` | float32 | | Median S/N per pixel in the *b* camera |
-| `SNR_R` | float32 | | Median S/N per pixel in the *r* camera |
-| `SNR_Z` | float32 | | Median S/N per pixel in the *z* camera |
+| `TARGETID` | int64 | | DESI TARGET ID (matches `MAIN.TARGETID` row-by-row) |
+| `SURVEY` | bytes3 | | Survey name |
+| `PROGRAM` | bytes6 | | Program name |
+| `HEALPIX` | int32 | | HEALPix number (present for healpix coadds) |
+| `SNR_B` / `SNR_R` / `SNR_Z` | float32 | | Median S/N per pixel in the *b* / *r* / *z* camera |
+| `SMOOTHCORR_B` / `_R` / `_Z` | float32 | percent | Median smooth-continuum correction relative to the data in the *b* / *r* / *z* camera |
 | `APERCORR` | float32 | | Median aperture correction factor |
-| `APERCORR_G` | float32 | | Aperture correction factor in *g* band |
-| `APERCORR_R` | float32 | | Aperture correction factor in *r* band |
-| `APERCORR_Z` | float32 | | Aperture correction factor in *z* band |
-| `ABSMAG01_SDSS_G` | float32 | mag | Absolute magnitude in SDSS *g*-band, band-shifted to *z*=0.1 (*h*=1.0) |
-| `ABSMAG01_SDSS_R` | float32 | mag | Absolute magnitude in SDSS *r*-band, band-shifted to *z*=0.1 (*h*=1.0) |
-| `ABSMAG01_SDSS_I` | float32 | mag | Absolute magnitude in SDSS *i*-band, band-shifted to *z*=0.1 (*h*=1.0) |
-| `ABSMAG01_SDSS_Z` | float32 | mag | Absolute magnitude in SDSS *z*-band, band-shifted to *z*=0.1 (*h*=1.0) |
-| `ABSMAG01_IVAR_SDSS_G` | float32 | 1/mag² | Inverse variance of `ABSMAG01_SDSS_G` |
-| `ABSMAG01_IVAR_SDSS_R` | float32 | 1/mag² | Inverse variance of `ABSMAG01_SDSS_R` |
-| `ABSMAG01_IVAR_SDSS_I` | float32 | 1/mag² | Inverse variance of `ABSMAG01_SDSS_I` |
-| `ABSMAG01_IVAR_SDSS_Z` | float32 | 1/mag² | Inverse variance of `ABSMAG01_SDSS_Z` |
-| `OII_3726_FLUX` | float32 | 1e-17 erg/(cm² s) | Gaussian-integrated emission-line flux |
-| `OII_3726_FLUX_IVAR` | float32 | 1e+34 cm⁴ s²/erg² | Inverse variance of `OII_3726_FLUX` |
-| `OII_3729_FLUX` | float32 | 1e-17 erg/(cm² s) | Gaussian-integrated emission-line flux |
-| `OII_3729_FLUX_IVAR` | float32 | 1e+34 cm⁴ s²/erg² | Inverse variance of `OII_3729_FLUX` |
-| `OIII_4363_FLUX` | float32 | 1e-17 erg/(cm² s) | Gaussian-integrated emission-line flux |
-| `OIII_4363_FLUX_IVAR` | float32 | 1e+34 cm⁴ s²/erg² | Inverse variance of `OIII_4363_FLUX` |
-| `HEII_4686_FLUX` | float32 | 1e-17 erg/(cm² s) | Gaussian-integrated emission-line flux |
-| `HEII_4686_FLUX_IVAR` | float32 | 1e+34 cm⁴ s²/erg² | Inverse variance of `HEII_4686_FLUX` |
-| `HBETA_FLUX` | float32 | 1e-17 erg/(cm² s) | Gaussian-integrated emission-line flux |
-| `HBETA_FLUX_IVAR` | float32 | 1e+34 cm⁴ s²/erg² | Inverse variance of `HBETA_FLUX` |
-| `OIII_4959_FLUX` | float32 | 1e-17 erg/(cm² s) | Gaussian-integrated emission-line flux |
-| `OIII_4959_FLUX_IVAR` | float32 | 1e+34 cm⁴ s²/erg² | Inverse variance of `OIII_4959_FLUX` |
-| `OIII_5007_FLUX` | float32 | 1e-17 erg/(cm² s) | Gaussian-integrated emission-line flux |
-| `OIII_5007_FLUX_IVAR` | float32 | 1e+34 cm⁴ s²/erg² | Inverse variance of `OIII_5007_FLUX` |
-| `HEI_5876_FLUX` | float32 | 1e-17 erg/(cm² s) | Gaussian-integrated emission-line flux |
-| `HEI_5876_FLUX_IVAR` | float32 | 1e+34 cm⁴ s²/erg² | Inverse variance of `HEI_5876_FLUX` |
-| `NII_6548_FLUX` | float32 | 1e-17 erg/(cm² s) | Gaussian-integrated emission-line flux |
-| `NII_6548_FLUX_IVAR` | float32 | 1e+34 cm⁴ s²/erg² | Inverse variance of `NII_6548_FLUX` |
-| `HALPHA_FLUX` | float32 | 1e-17 erg/(cm² s) | Gaussian-integrated emission-line flux |
-| `HALPHA_FLUX_IVAR` | float32 | 1e+34 cm⁴ s²/erg² | Inverse variance of `HALPHA_FLUX` |
-| `HALPHA_BROAD_FLUX` | float32 | 1e-17 erg/(cm² s) | Gaussian-integrated broad emission-line flux |
-| `HALPHA_BROAD_FLUX_IVAR` | float32 | 1e+34 cm⁴ s²/erg² | Inverse variance of `HALPHA_BROAD_FLUX` |
-| `NII_6584_FLUX` | float32 | 1e-17 erg/(cm² s) | Gaussian-integrated emission-line flux |
-| `NII_6584_FLUX_IVAR` | float32 | 1e+34 cm⁴ s²/erg² | Inverse variance of `NII_6584_FLUX` |
-| `SII_6716_FLUX` | float32 | 1e-17 erg/(cm² s) | Gaussian-integrated emission-line flux |
-| `SII_6716_FLUX_IVAR` | float32 | 1e+34 cm⁴ s²/erg² | Inverse variance of `SII_6716_FLUX` |
-| `SII_6731_FLUX` | float32 | 1e-17 erg/(cm² s) | Gaussian-integrated emission-line flux |
-| `SII_6731_FLUX_IVAR` | float32 | 1e+34 cm⁴ s²/erg² | Inverse variance of `SII_6731_FLUX` |
-| `SIII_9069_FLUX` | float32 | 1e-17 erg/(cm² s) | Gaussian-integrated emission-line flux |
-| `SIII_9069_FLUX_IVAR` | float32 | 1e+34 cm⁴ s²/erg² | Inverse variance of `SIII_9069_FLUX` |
-| `SIII_9532_FLUX` | float32 | 1e-17 erg/(cm² s) | Gaussian-integrated emission-line flux |
-| `SIII_9532_FLUX_IVAR` | float32 | 1e+34 cm⁴ s²/erg² | Inverse variance of `SIII_9532_FLUX` |
-| `HALPHA_BOXFLUX` | float32 | 1e-17 erg/(cm² s) | Boxcar-integrated H-alpha emission-line flux |
-| `HALPHA_BOXFLUX_IVAR` | float32 | 1e+34 cm⁴ s²/erg² | Inverse variance of `HALPHA_BOXFLUX` |
-| `HALPHA_EW` | float32 | Angstrom | Rest-frame equivalent width of H-alpha |
-| `HALPHA_EW_IVAR` | float32 | 1/Angstrom² | Inverse variance of `HALPHA_EW` |
-| `LOG_MSTAR_24_FIBER` | float32 | $\log(M_\odot)$ | Stellar mass in the DESI fiber aperture from Tractor `FIBERTOTFLUX_*` (MAIN), MW extinction corrected, then the SPEC_DERIVED `DELTA_MAG_*` sum (same chain as primary masses) when `MAG_G_FIBER_NOEMI_ERR` and `MAG_R_FIBER_NOEMI_ERR` imply continuum SNR $\geq 10$; otherwise `get_stellar_mass_mia` on those fiber mags with `Z_CMB` and no delta mags. Uses `LUMI_DIST_MPC` |
-| `LOG_HALPHA_SFR_FIBER` | float64 | | log10(SFR / (M$_\odot$/yr)) from the Bauer+13 / Kennicutt prescription (`calc_SFR_Halpha`) using fiber `HALPHA_EW` and the *r*-band magnitude consistent with the `LOG_MSTAR_24_FIBER` photometry path; error not stored |
-| `FLUX_SYNTH_G` | float32 | nanomaggy | *g*-band flux (in the PHOTSYS photometric system) synthesized from the observed spectrum |
-| `FLUX_SYNTH_R` | float32 | nanomaggy | Like `FLUX_SYNTH_G` but for the *r*-band |
-| `FLUX_SYNTH_Z` | float32 | nanomaggy | Like `FLUX_SYNTH_G` but for the *z*-band |
-| `FLUX_SYNTH_SPECMODEL_G` | float32 | nanomaggy | *g*-band flux (in the PHOTSYS photometric system) synthesized from the best-fitting spectroscopic model |
-| `FLUX_SYNTH_SPECMODEL_R` | float32 | nanomaggy | Like `FLUX_SYNTH_SPECMODEL_G` but in the *r*-band |
-| `FLUX_SYNTH_SPECMODEL_Z` | float32 | nanomaggy | Like `FLUX_SYNTH_SPECMODEL_G` but in the *z*-band |
-| `FLUX_SYNTH_PHOTMODEL_G` | float32 | nanomaggy | *g*-band flux (in the PHOTSYS photometric system) synthesized from the best-fitting photometric continuum model |
-| `FLUX_SYNTH_PHOTMODEL_R` | float32 | nanomaggy | Like `FLUX_SYNTH_PHOTMODEL_G` but in the *r*-band |
-| `FLUX_SYNTH_PHOTMODEL_Z` | float32 | nanomaggy | Like `FLUX_SYNTH_PHOTMODEL_G` but in the *z*-band |
-| `MAG_G_FIBER_NOEMI` | float64 | mag | DECam *g*-band AB magnitude measured from the emission-subtracted DESI fiber spectrum |
-| `MAG_R_FIBER_NOEMI` | float64 | mag | DECam *r*-band AB magnitude measured from the emission-subtracted DESI fiber spectrum |
-| `MAG_G_FIBER_NOEMI_ERR` | float64 | mag | Uncertainty in `MAG_G_FIBER_NOEMI` |
-| `MAG_R_FIBER_NOEMI_ERR` | float64 | mag | Uncertainty in `MAG_R_FIBER_NOEMI` |
-| `MAG_G_DECAM_MODEL_NOEMI` | float64 | mag | DECam *g*-band AB magnitude of the fastspecfit continuum-only model (no emission lines) |
-| `MAG_R_DECAM_MODEL_NOEMI` | float64 | mag | DECam *r*-band AB magnitude of the fastspecfit continuum-only model (no emission lines) |
-| `MAG_G_DECAM_MODEL_WEMI` | float64 | mag | DECam *g*-band AB magnitude of the fastspecfit model including emission lines |
-| `MAG_R_DECAM_MODEL_WEMI` | float64 | mag | DECam *r*-band AB magnitude of the fastspecfit model including emission lines |
-| `MAG_G_BASS_MODEL_WEMI` | float64 | mag | BASS *g*-band AB magnitude of the fastspecfit model including emission lines |
-| `MAG_R_BASS_MODEL_WEMI` | float64 | mag | BASS *r*-band AB magnitude of the fastspecfit model including emission lines |
-| `MAG_G_SDSS_MODEL_NOEMI` | float64 | mag | SDSS *g*-band AB magnitude of the fastspecfit continuum-only model (no emission lines) at observed redshift |
-| `MAG_R_SDSS_MODEL_NOEMI` | float64 | mag | SDSS *r*-band AB magnitude of the fastspecfit continuum-only model (no emission lines) at observed redshift |
-| `MAG_G_SDSS_Z0_MODEL_NOEMI` | float64 | mag | SDSS *g*-band AB magnitude of the fastspecfit continuum-only model (no emission lines) *k*-corrected to *z*=0 |
-| `MAG_R_SDSS_Z0_MODEL_NOEMI` | float64 | mag | SDSS *r*-band AB magnitude of the fastspecfit continuum-only model (no emission lines) *k*-corrected to *z*=0 |
+| `APERCORR_G` / `APERCORR_R` / `APERCORR_Z` | float32 | | Aperture correction factor measured in the *g* / *r* / *z* band |
+| `INIT_SIGMA_UV` / `INIT_SIGMA_NARROW` / `INIT_SIGMA_BALMER` | float32 | km/s | Initial line width for UV / forbidden+narrow-Balmer / broad-Balmer lines |
+| `INIT_VSHIFT_UV` / `INIT_VSHIFT_NARROW` / `INIT_VSHIFT_BALMER` | float32 | km/s | Initial velocity shift for UV / narrow / broad-Balmer lines |
+| `INIT_BALMER_BROAD` | bool | | Whether a broad Balmer line was initially identified in the spectral range |
+| `DELTA_LINECHI2` | float32 | | Δχ² between the line model without vs. with broad lines |
+| `DELTA_LINENDOF` | int32 | | Δ(degrees of freedom) without vs. with broad lines |
+| `DELTA_KINECHI2` | float32 | | Δχ² between the constrained and relaxed-kinematics line model |
+| `DELTA_KINENDOF` | int32 | | Δ(degrees of freedom) between the constrained and relaxed-kinematics model |
+
+**Doublet line-ratios** — for `DOUBLET` ∈ {`MGII` (2796/2803), `OII` (3726/3729), `OIII` (5007/4959), `SII` (6731/6716), `NII` (6584/6548), `OIIRED` (7320/7330)}:
+
+| Name | Type | Description |
+| :--- | :--- | :---------- |
+| `{DOUBLET}_DOUBLET_RATIO` | float32 | Doublet flux ratio |
+| `{DOUBLET}_DOUBLET_RATIO_IVAR` | float32 | Inverse variance of the ratio |
+
+**Per-emission-line columns** — every fitted line (full list below) carries the following `{LINE}_*` columns:
+
+| Name | Type | Units | Description |
+| :--- | :--- | :---: | :---------- |
+| `{LINE}_MODELAMP` | float32 | 1e-17 erg/(Å cm² s) | Model line amplitude (before convolution with the resolution matrix) |
+| `{LINE}_AMP` | float32 | 1e-17 erg/(Å cm² s) | Emission-line amplitude |
+| `{LINE}_AMP_IVAR` | float32 | 1e+34 Å² cm⁴ s²/erg² | Inverse variance of `{LINE}_AMP` |
+| `{LINE}_FLUX` | float32 | 1e-17 erg/(cm² s) | Gaussian-integrated emission-line flux |
+| `{LINE}_FLUX_IVAR` | float32 | 1e+34 cm⁴ s²/erg² | Inverse variance of `{LINE}_FLUX` |
+| `{LINE}_BOXFLUX` | float32 | 1e-17 erg/(cm² s) | Boxcar-integrated emission-line flux |
+| `{LINE}_BOXFLUX_IVAR` | float32 | 1e+34 cm⁴ s²/erg² | Inverse variance of `{LINE}_BOXFLUX` |
+| `{LINE}_VSHIFT` | float32 | km/s | Velocity shift relative to `Z` |
+| `{LINE}_VSHIFT_IVAR` | float32 | s²/km² | Inverse variance of `{LINE}_VSHIFT` |
+| `{LINE}_SIGMA` | float32 | km/s | Gaussian line width (before convolution with the resolution matrix) |
+| `{LINE}_SIGMA_IVAR` | float32 | s²/km² | Inverse variance of `{LINE}_SIGMA` |
+| `{LINE}_CONT` | float32 | 1e-17 erg/(Å cm² s) | Continuum flux at line center |
+| `{LINE}_CONT_IVAR` | float32 | 1e+34 Å² cm⁴ s²/erg² | Inverse variance of `{LINE}_CONT` |
+| `{LINE}_EW` | float32 | Å | Rest-frame equivalent width |
+| `{LINE}_EW_IVAR` | float32 | 1/Å² | Inverse variance of `{LINE}_EW` |
+| `{LINE}_FLUX_LIMIT` | float32 | erg/(cm² s) | 1σ upper limit on the line flux |
+| `{LINE}_CHI2` | float32 | | χ² of the line fit |
+| `{LINE}_NPIX` | int32 | | Number of pixels attributed to the line |
+
+`{LINE}` runs over the 45 fitted lines: `NV_1240`, `OI_1304`, `SILIV_1396`, `CIV_1549`, `HEII_1640`, `ALIII_1857`, `SILIII_1892`, `CIII_1908`, `MGII_2796`, `MGII_2803`, `NEV_3346`, `NEV_3426`, `OII_3726`, `OII_3729`, `NEIII_3869`, `H6`, `H6_BROAD`, `HEPSILON`, `HEPSILON_BROAD`, `HDELTA`, `HDELTA_BROAD`, `HGAMMA`, `HGAMMA_BROAD`, `OIII_4363`, `HEI_4471`, `HEII_4686`, `HBETA`, `HBETA_BROAD`, `OIII_4959`, `OIII_5007`, `NII_5755`, `HEI_5876`, `OI_6300`, `SIII_6312`, `NII_6548`, `HALPHA`, `HALPHA_BROAD`, `NII_6584`, `SII_6716`, `SII_6731`, `ARIII_7135`, `OII_7320`, `OII_7330`, `SIII_9069`, `SIII_9532`.
+
+**Flux moments** — the strong lines `CIV_1549`, `MGII_2800`, `HBETA`, `OIII_5007` additionally carry, for *n* = 1, 2, 3:
+
+| Name | Type | Units | Description |
+| :--- | :--- | :---: | :---------- |
+| `{LINE}_MOMENT{n}` | float32 | Åⁿ | *n*-th moment of the continuum-subtracted flux within ±5σ of line center (1st = mean; 2nd / 3rd relative to the 1st) |
+| `{LINE}_MOMENT{n}_IVAR` | float32 | 1/Å²ⁿ | Inverse variance of `{LINE}_MOMENT{n}` |
 
 </details>
 
@@ -401,6 +378,73 @@ Image-based self-supervised learning (SSL) UMAP coordinates and similarity searc
 | `IMG_UMAP_1` | float64 | | Image SSL 2D UMAP coordinate (*y*) |
 | `SIM_TARGETID_i` | int64 | | TARGETID of the *i*-th most similar object (10 columns: `SIM_TARGETID_0` ... `SIM_TARGETID_9`) |
 | `SIM_SCORE_i` | float64 | | Cosine similarity score for the *i*-th most similar object (10 columns: `SIM_SCORE_0` ... `SIM_SCORE_9`) |
+
+</details>
+
+---
+
+<details>
+<summary><strong>Extension 8 &mdash; SPEC_DERIVED</strong></summary>
+
+<br>
+
+Spectroscopically **derived** value-added properties computed by [`code/add_nebular_props.py`](code/add_nebular_props.py) from the **MAIN**, **FASTSPEC**, and **TRACTOR** extensions: H-alpha star-formation rates, fiber stellar mass / SFR, strong-line and direct-method (electron-temperature) gas-phase metallicities, and the `DELTA_MAG_*` photometric corrections and `MAG_*_MODEL_*` model magnitudes used in the mass derivation. Rows match **MAIN** by `TARGETID` and order.
+
+**Star formation and fiber properties**
+
+| Name | Type | Units | Description |
+| :--- | :--- | :---: | :---------- |
+| `TARGETID` | int64 | | DESI TARGET ID (matches `MAIN.TARGETID` and `FASTSPEC.TARGETID` row-by-row) |
+| `LOG_SFR_HALPHA` | float64 | $\log(M_\odot/\mathrm{yr})$ | log₁₀(SFR) from the Bauer et al. (2013) L(Hα) combined with a per-object, metallicity-dependent Hα→SFR calibration (BPASS; Korhonen Cuestas 2025). Calibration metallicity set from `MAIN.LOG_MSTAR_M24` via the Kirby+13 mass–metallicity relation (+0.2 dex young-population offset, Zahid et al. 2017). Global aperture-corrected SFR using `MAIN.MAG_R` and `LUMI_DIST_MPC` with per-row fiber `HALPHA_EW` from FASTSPEC |
+| `LOG_SFR_HALPHA_ERR` | float64 | dex | 1σ uncertainty on `LOG_SFR_HALPHA` (first-order propagation; reflects Hα EW uncertainty only — the calibration constant is treated as exact) |
+| `LOG_MSTAR_24_FIBER` | float32 | $\log(M_\odot)$ | log₁₀(stellar mass) within the DESI fiber aperture only |
+| `LOG_HALPHA_SFR_FIBER` | float64 | $\log(M_\odot/\mathrm{yr})$ | log₁₀(SFR) within the fiber aperture only, using the same metallicity-dependent BPASS Hα→SFR calibration as `LOG_SFR_HALPHA` |
+| `Z_GAS_R23_N2` | float64 | | Gas-phase strong-line metallicity 12+log(O/H) from R23+N2 (Scholte et al. 2024) using FASTSPEC Gaussian line fluxes, with internal dust correction when Hα/Hβ > 2.86. Filled where all seven required lines pass the SNR/flux gate; NaN otherwise |
+
+**Emission-subtracted fiber photometry** — DECam AB magnitudes measured on the DESI fiber spectrum *after* subtracting the FastSpecFit emission-line model (computed by `compute_emission_subtracted_photo_errors`). Their `_ERR` values drive the continuum-SNR ≥ 10 split used for the fiber and aggregate stellar masses.
+
+| Name | Type | Units | Description |
+| :--- | :--- | :---: | :---------- |
+| `MAG_G_FIBER_NOEMI` / `MAG_R_FIBER_NOEMI` | float64 | mag | DECam *g* / *r* AB magnitude from the emission-subtracted fiber spectrum |
+| `MAG_G_FIBER_NOEMI_ERR` / `MAG_R_FIBER_NOEMI_ERR` | float64 | mag | Uncertainty in `MAG_G_FIBER_NOEMI` / `MAG_R_FIBER_NOEMI` |
+
+**Photometric correction deltas** — added to the working magnitude during the mass derivation. North-only `BASS2DECAM` deltas are ~0 in the south; unmatched `TARGETID`s are NaN.
+
+| Name | Type | Units | Description |
+| :--- | :--- | :---: | :---------- |
+| `DELTA_MAG_G_BASS2DECAM` / `DELTA_MAG_R_BASS2DECAM` | float64 | mag | BASS→DECam filter conversion (north only) |
+| `DELTA_MAG_G_NEB` / `DELTA_MAG_R_NEB` | float64 | mag | Nebular-emission removal, from the FastSpecFit template difference |
+| `DELTA_MAG_G_DECAM2SDSS` / `DELTA_MAG_R_DECAM2SDSS` | float64 | mag | DECam→SDSS filter conversion (continuum-only model) |
+| `DELTA_MAG_G_KCORR` / `DELTA_MAG_R_KCORR` | float64 | mag | *k*-correction, SDSS observed-*z* to *z*=0 (continuum-only model) |
+
+**Direct-method (electron-temperature) nebular properties** — populated only for rows passing the direct-method line gate (Hα, Hβ, Hγ, [OIII] 4363, [OIII] 5007, [OII] 3726, [OII] 3729 at sufficient SNR with flux > 1 in FastSpec units); all other rows are NaN / False / 0. Each quantity below also has `_LO` / `_HI` / `_ERR` siblings holding the 16th percentile, 84th percentile, and half the 84−16 spread of the UltraNest posterior.
+
+| Name | Type | Units | Description |
+| :--- | :--- | :---: | :---------- |
+| `TE_NE_OII` (+`_LO`/`_HI`/`_ERR`) | float64 | cm⁻³ | Electron density from the [OII] 3729/3726 doublet (posterior median) |
+| `TE_T_OIII` (+`_LO`/`_HI`/`_ERR`) | float64 | K | [OIII]-zone electron temperature from [OIII] 4363/5007 |
+| `TE_AV` (+`_LO`/`_HI`/`_ERR`) | float64 | mag | *V*-band attenuation (Cardelli+89, R_V=3.1) from the Balmer decrements |
+| `TE_LOG_O2_ABUND` (+`_LO`/`_HI`/`_ERR`) | float64 | | log₁₀(O⁺/H⁺) ionic abundance |
+| `TE_LOG_O3_ABUND` (+`_LO`/`_HI`/`_ERR`) | float64 | | log₁₀(O⁺⁺/H⁺) ionic abundance |
+| `TE_12_LOG_OH` (+`_LO`/`_HI`/`_ERR`) | float64 | | Direct-method 12+log(O/H) = 12+log₁₀(10^`TE_LOG_O2_ABUND` + 10^`TE_LOG_O3_ABUND`), computed per posterior sample |
+| `TE_N_RATIOS` | int32 | | Number of usable line ratios fed to the fit (out of 6); 0 if no fit attempted |
+| `TE_FIT_SUCCESS` | bool | | Whether the direct-method fit converged for this row |
+| `TE_CHI2_AV` | float64 | | χ² of the observed Balmer ratios vs. the model at the posterior-median ne/Te/Av |
+| `TE_CHI2_AV_ML` | float64 | | Same Balmer-ratio χ² evaluated at the maximum-likelihood ne/Te/Av (Stage-1 ML point) |
+| `TE_AV_ML` | float64 | mag | Maximum-likelihood *V*-band attenuation (Stage-1 ML point) |
+| `TE_ESS` | float64 | | UltraNest effective posterior sample size |
+| `TE_LOGZ` | float64 | | UltraNest log-evidence (ln Z) of the fit |
+| `TE_LOGZERR` | float64 | | 1σ uncertainty on `TE_LOGZ` |
+
+**FastSpecFit model magnitudes** — AB magnitudes synthesized from the FastSpecFit best-fit model, matched by `TARGETID` to the pre-computed `model_photometry_diffs_*` tables; unmatched rows are NaN.
+
+| Name | Type | Units | Description |
+| :--- | :--- | :---: | :---------- |
+| `MAG_G_DECAM_MODEL_NOEMI` / `MAG_R_DECAM_MODEL_NOEMI` | float64 | mag | DECam *g* / *r* of the continuum-only model (no emission lines) |
+| `MAG_G_DECAM_MODEL_WEMI` / `MAG_R_DECAM_MODEL_WEMI` | float64 | mag | DECam *g* / *r* of the model including emission lines |
+| `MAG_G_BASS_MODEL_WEMI` / `MAG_R_BASS_MODEL_WEMI` | float64 | mag | BASS *g* / *r* of the model including emission lines |
+| `MAG_G_SDSS_MODEL_NOEMI` / `MAG_R_SDSS_MODEL_NOEMI` | float64 | mag | SDSS *g* / *r* of the continuum-only model at observed redshift |
+| `MAG_G_SDSS_Z0_MODEL_NOEMI` / `MAG_R_SDSS_Z0_MODEL_NOEMI` | float64 | mag | SDSS *g* / *r* of the continuum-only model *k*-corrected to *z*=0 |
 
 </details>
 

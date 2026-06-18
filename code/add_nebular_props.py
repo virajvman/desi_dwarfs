@@ -12,6 +12,9 @@ fresh ``SPEC_DERIVED`` HDU containing:
     LOG_HALPHA_SFR_FIBER
     Z_GAS_R23_N2
 
+    MAG_{G,R}_FIBER_NOEMI, MAG_{G,R}_FIBER_NOEMI_ERR
+        (relocated here from FASTSPEC and stripped from that HDU)
+
     DELTA_MAG_{G,R}_BASS2DECAM       (north-masked; previously in FASTSPEC)
     DELTA_MAG_{G,R}_NEB
     DELTA_MAG_{G,R}_DECAM2SDSS
@@ -38,7 +41,10 @@ The ``MAG_*_MODEL_*`` columns are matched by TARGETID to the pre-computed
 ``model_photometry_diffs_{gal_type}.fits`` tables; unmatched rows are NaN.
 
 The operation is idempotent: re-running replaces any existing
-``SPEC_DERIVED`` HDU. Existing HDUs (including ``FASTSPEC``) are preserved
+``SPEC_DERIVED`` HDU. On the first run the ``MAG_*_FIBER_NOEMI[_ERR]`` columns
+are relocated out of ``FASTSPEC`` into ``SPEC_DERIVED`` (and stripped from
+``FASTSPEC``); on subsequent runs they are already absent from ``FASTSPEC`` and
+are re-read from the existing ``SPEC_DERIVED`` HDU. All other HDUs are preserved
 bit-for-bit via a temp-file + ``os.replace`` swap.
 
 The direct-method fit uses one of two strategies (set via

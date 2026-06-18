@@ -541,39 +541,48 @@ def get_metallicity_S22(fastspec_cat):
 # NOTES: ADD PRINT STATEMENTS ON HOW MANY SPECTRA HAVE DETECTIONS!
 # FOR EACH line how many significant detections >3 do we have?
 
+# Zahid et al. 2017: mass-weighted vs recent/luminosity-weighted stellar Z offset
+# applied to Kirby+13 before the BPASS Halpha->SFR C(Z) lookup (see stellar_mass_msz).
+_Z_MZR_YOUNG_POP_OFFSET_DEX = 0.2
+
+
 def stellar_mass_msz(logmstar):
     '''
-    This is the stellar mass metallicity relation from Kirby+13, the [Fe/H] = 0 when solar, so this is essentially
-    the log fraction metallicity relative to solar.
+    Kirby+13 stellar mass-metallicity relation, shifted by +0.2 dex in log(Z/Z_sun)
+    to approximate the young/luminosity-weighted metallicity relevant for the
+    Halpha->SFR calibration (Zahid et al. 2017 mass-weighted vs recent-pop offset).
+
+    [Fe/H] = 0 at solar, so the Kirby relation is essentially log(Z/Z_sun).
+
     Parameters
     ----------
-    Mstar : float
-        Stellar mass in Msun
-    Returns:
-        linear metallicity relative to solar
+    logmstar : float or array_like
+        log10(stellar mass / M_sun)
 
-    TODO (SFR calibration metallicity): this is the *stellar* MZR (Kirby+13),
-    and it treats [Fe/H] as log(Z/Z_sun). But the Halpha->SFR conversion
-    C(Z*) (sfr_log_cz_BPASS) is parametrized by the metallicity of the YOUNG
-    IONIZING population, i.e. the current GAS-phase metallicity. Stellar Z is
-    mass-weighted/old and systematically lower than the gas, and [Fe/H] != [Z/H]
-    for alpha-enhanced dwarfs -- both bias C(Z*) and hence the inferred SFR.
-    PLAN: replace this with our own measured gas-phase O/H vs stellar-mass
-    relation (fit to the strong-line Z_GAS_R23_N2 / PG16 measurements), still
-    returned as a function of logmstar so calc_SFR_Halpha's interface is
+    Returns
+    -------
+    linear metallicity Z / Z_sun (scalar or ndarray)
+
+    TODO (SFR calibration metallicity): this remains a stellar MZR proxy, not
+    measured gas-phase O/H. The +0.2 dex offset partially corrects the bias that
+    mass-weighted stellar Z is systematically lower than the young ionizing
+    population metallicity that parametrizes C(Z*) in sfr_log_cz_BPASS. Long
+    term, replace with our own gas-phase O/H vs M* fit (Z_GAS_R23_N2 / PG16),
+    still returned as a function of logmstar so calc_SFR_Halpha's interface is
     unchanged. Convert the fitted 12+log(O/H)(M*) to linear Z/Z_sun via solar
     12+log(O/H)=8.69 and Z_sun=0.02 before returning, and make sure the
     resulting Z/Z_sun range stays inside the sfr_log_cz_BPASS calibration
-    window [10**_LOG_ZMET_MIN, 10**_LOG_ZMET_MAX]. The gas-MZR scatter is
-    expected to be sub-dominant to the other SFR systematics, so a mean
-    relation in M* is adequate. Not yet implemented -- the gas MZR fit is
-    still to be derived.
+    window [10**_LOG_ZMET_MIN, 10**_LOG_ZMET_MAX].
     '''
-    z_value = -1.69 + 0.30 * (logmstar - 6)
-    return 10**z_value
+    z_value = (
+        -1.69
+        + 0.30 * (logmstar - 6)
+        + _Z_MZR_YOUNG_POP_OFFSET_DEX
+    )
+    return 10.0 ** z_value
 
 _LOG_ZMET_MIN = -2.35
-_LOG_ZMET_MAX = -0.6
+_LOG_ZMET_MAX = -0.5
 
 
 def sfr_log_cz_BPASS(linear_zmet):
@@ -589,24 +598,25 @@ def sfr_log_cz_BPASS(linear_zmet):
     NOTE on validity range: the fit is INTENTIONALLY restricted to the low-Z
     subset (Z/Z_sun < 0.2, i.e. zem4 + z001-z003), because that is the only
     metallicity range we sample. Our stellar-mass range logM* in [5, 9.25],
-    mapped through stellar_mass_msz (Kirby+13), gives log(Z/Z_sun) in
-    [-1.99, -0.715], over which this quadratic reproduces BPASS C(Z*) to
-    <0.01 dex. It is NOT valid at higher Z and extrapolates high there:
-    ~+0.03 dex at z006 (log Z/Zsun=-0.52), ~+0.06 at z010, ~+0.10 at solar.
-    The clip ceiling _LOG_ZMET_MAX = -0.6 sits just above our sampled range
-    and never actually engages for the current sample.
+    mapped through stellar_mass_msz (Kirby+13 + 0.2 dex Zahid+17 offset), gives
+    log(Z/Z_sun) in [-1.79, -0.515], over which this quadratic reproduces
+    BPASS C(Z*) to <0.01 dex for most of the range. It is NOT valid at higher Z
+    and extrapolates high there: ~+0.03 dex at z006 (log Z/Zsun=-0.52),
+    ~+0.06 at z010, ~+0.10 at solar. The clip ceiling _LOG_ZMET_MAX = -0.5
+    accommodates the offset MZR at the massive end and sits near the edge of
+    the validated BPASS fit (~-0.52).
 
     TODO (refit on gas-MZR swap): when stellar_mass_msz is replaced by the
-    measured GAS-phase O/H vs M* relation (see its TODO / Q1), gas O/H runs
-    HIGHER than stellar Z at fixed mass, so the massive end (logM* ~ 9) will
-    push toward -- or past -- the divergent region above. At that point REFIT
-    this quadratic over the actual log(Z/Z_sun) range sampled (or replace it
-    with a direct interpolation of the BPASS Table-2 points to remove any
-    extrapolation risk) and re-check _LOG_ZMET_MAX.
+    measured GAS-phase O/H vs M* relation (see its TODO), REFIT this quadratic
+    over the actual log(Z/Z_sun) range sampled (or replace it with a direct
+    interpolation of the BPASS Table-2 points to remove any extrapolation risk)
+    and re-check _LOG_ZMET_MAX.
 
     log10(linear_zmet) is clipped to [_LOG_ZMET_MIN, _LOG_ZMET_MAX] before evaluation;
     values outside the fit range receive log C at the nearest boundary.
     '''
+
+    TODO: need to fix the interpolation scheme here! With the +0.2 dex offset, we need to revist this
 
     coeffs = np.array([-3.70148004e-02, -2.06139022e-01,  4.14755688e+01])
 
@@ -685,8 +695,9 @@ def calc_SFR_Halpha(
     Uses a per-object, metallicity-dependent Hα→SFR calibration from
     sfr_log_cz_BPASS (BPASS, fit to Korhonen Cuestas 2025). The linear
     metallicity (relative to solar) is set by the stellar mass `logmstar`
-    through the Kirby+13 mass-metallicity relation (stellar_mass_msz), and
-    sfr_log_cz_BPASS returns log10(C_Hα / [erg/s per (M_sun/yr)]).
+    through stellar_mass_msz (Kirby+13 with +0.2 dex young-population offset
+    from Zahid et al. 2017), and sfr_log_cz_BPASS returns log10(C_Hα /
+    [erg/s per (M_sun/yr)]).
 
     Implements Eq. 2 of Bauer et al. (2013, MNRAS 434, 209), in the REST frame
     (the published equation's observed-frame (1+z) is dropped here because both
@@ -755,9 +766,9 @@ def calc_SFR_Halpha(
         1-sigma uncertainty on Mr [mag].
     logmstar : array_like
         log10(stellar mass / M_sun). Sets the per-object linear metallicity
-        via stellar_mass_msz (Kirby+13), which in turn sets the Hα→SFR
-        calibration constant via sfr_log_cz_BPASS. Non-finite values yield
-        NaN SFRs.
+        via stellar_mass_msz (Kirby+13 + 0.2 dex Zahid+17 offset), which in
+        turn sets the Hα→SFR calibration constant via sfr_log_cz_BPASS.
+        Non-finite values yield NaN SFRs.
     EWc : float, optional
         Constant stellar-absorption correction to add to the emission EW [Å].
         Default 0. Bauer+13 use 2.5 Å for a population-averaged correction.
@@ -838,12 +849,10 @@ def calc_SFR_Halpha(
     L_Halpha_cgs = L_Halpha * 1.0e7    # [erg/s]; calibration is in erg/s units
 
     # Per-object, metallicity-dependent Hα→SFR calibration. The linear
-    # metallicity (relative to solar) is set by the stellar mass via the
-    # Kirby+13 mass-metallicity relation, and sfr_log_cz_BPASS returns
-    # log10(C_Hα / [erg/s per (M_sun/yr)]) (BPASS, Korhonen Cuestas 2025).
-    # TODO: stellar_mass_msz is the *stellar* MZR; C(Z*) wants the GAS-phase
-    # (young-population) metallicity. Swap in our measured gas-phase O/H vs M*
-    # relation here once derived -- see the TODO on stellar_mass_msz.
+    # metallicity (relative to solar) is set by the stellar mass via
+    # stellar_mass_msz (Kirby+13 + 0.2 dex Zahid+17 young-pop offset), and
+    # sfr_log_cz_BPASS returns log10(C_Hα / [erg/s per (M_sun/yr)]) (BPASS,
+    # Korhonen Cuestas 2025). Long term, swap in measured gas-phase O/H vs M*.
     linear_zmet = stellar_mass_msz(np.asarray(logmstar, dtype=float))
     C_Halpha = 10.0 ** sfr_log_cz_BPASS(linear_zmet)  # [erg/s per (M_sun/yr)]
 
@@ -1222,6 +1231,63 @@ def _write_te_cache(cache_path, cache_tab_old, fit_tab_new, tids_to_compute,
         )
 
 
+# Emission-subtracted fiber photometry computed by
+# compute_emission_subtracted_photo_errors. Written into FASTSPEC at build time,
+# then relocated into SPEC_DERIVED here (and stripped from FASTSPEC).
+_FIBER_NOEMI_COLS = (
+    "MAG_G_FIBER_NOEMI",
+    "MAG_R_FIBER_NOEMI",
+    "MAG_G_FIBER_NOEMI_ERR",
+    "MAG_R_FIBER_NOEMI_ERR",
+)
+
+
+def _read_fiber_noemi_mags(fspec_cat, cat_path, tid_main, verbose=True):
+    """Return (dict of the 4 MAG_*_FIBER_NOEMI(_ERR) arrays aligned to tid_main, source).
+
+    Read from the FASTSPEC HDU on the first run (where
+    compute_emission_subtracted_photo_errors writes them); fall back to the
+    existing SPEC_DERIVED HDU on re-runs (after they have been stripped from
+    FASTSPEC). NaN-filled if found in neither; ``source`` is "FASTSPEC",
+    "SPEC_DERIVED", or None.
+    """
+    tid_main = np.asarray(tid_main, dtype=np.int64)
+    n = len(tid_main)
+    out = {c: np.full(n, np.nan, dtype=np.float64) for c in _FIBER_NOEMI_COLS}
+
+    if all(c in fspec_cat.colnames for c in _FIBER_NOEMI_COLS):
+        for c in _FIBER_NOEMI_COLS:
+            out[c] = np.asarray(fspec_cat[c].data, dtype=np.float64)
+        return out, "FASTSPEC"
+
+    try:
+        prev = safe_read_table(cat_path, hdu=DWARF_CATALOG_DERIVED_HDU)
+    except Exception:
+        prev = None
+    if prev is not None and all(c in prev.colnames for c in _FIBER_NOEMI_COLS):
+        prev_tid = np.asarray(prev["TARGETID"], dtype=np.int64)
+        if len(prev) == n and np.array_equal(prev_tid, tid_main):
+            for c in _FIBER_NOEMI_COLS:
+                out[c] = np.asarray(prev[c].data, dtype=np.float64)
+        else:
+            order = np.argsort(prev_tid)
+            pos = np.clip(
+                np.searchsorted(prev_tid[order], tid_main), 0, len(prev_tid) - 1
+            )
+            matched = order[pos]
+            valid = prev_tid[matched] == tid_main
+            for c in _FIBER_NOEMI_COLS:
+                out[c][valid] = np.asarray(prev[c].data, dtype=np.float64)[matched[valid]]
+        return out, "SPEC_DERIVED"
+
+    if verbose:
+        print(
+            "  WARNING: MAG_*_FIBER_NOEMI not found in FASTSPEC or SPEC_DERIVED; "
+            "NaN-filled (all rows use the low-SNR fallback for fiber mass / Halpha SFR)."
+        )
+    return out, None
+
+
 def build_spec_derived_hdu(
     cat_path,
     line_flux_type,
@@ -1408,6 +1474,13 @@ def build_spec_derived_hdu(
             f"TARGETID mismatch between MAIN and {DWARF_CATALOG_SPEC_HDU}"
         )
 
+    # Emission-subtracted fiber photometry: read from FASTSPEC (first run) or the
+    # existing SPEC_DERIVED HDU (re-run). These are copied into SPEC_DERIVED below
+    # and stripped from FASTSPEC at write time.
+    fiber_noemi, fiber_noemi_src = _read_fiber_noemi_mags(
+        fspec_cat, cat_path, tid_main, verbose=verbose
+    )
+
     z = np.asarray(main_cat["Z"].data, dtype=float)
     mag_g = np.asarray(main_cat["MAG_G"].data, dtype=float)
     mag_r = np.asarray(main_cat["MAG_R"].data, dtype=float)
@@ -1468,29 +1541,18 @@ def build_spec_derived_hdu(
         3.25,
     )
 
+    # Continuum-SNR split from the emission-subtracted fiber mag errors. When the
+    # columns were absent (fiber_noemi_src is None) the arrays are all-NaN, so
+    # ~np.isfinite drives every row into the low-SNR fallback automatically.
     mag_err_limit = 1.0857 / 10.0
-    if (
-        "MAG_G_FIBER_NOEMI_ERR" in fspec_cat.colnames
-        and "MAG_R_FIBER_NOEMI_ERR" in fspec_cat.colnames
-    ):
-        g_err = np.asarray(fspec_cat["MAG_G_FIBER_NOEMI_ERR"].data, dtype=float)
-        r_err_noemi = np.asarray(
-            fspec_cat["MAG_R_FIBER_NOEMI_ERR"].data, dtype=float
-        )
-        low_snr = (
-            ~np.isfinite(g_err)
-            | ~np.isfinite(r_err_noemi)
-            | (g_err >= mag_err_limit)
-            | (r_err_noemi >= mag_err_limit)
-        )
-    else:
-        low_snr = np.ones(n_fspec, dtype=bool)
-        r_err_noemi = np.zeros(n_fspec, dtype=float)
-        if verbose:
-            print(
-                "  WARNING: MAG_G_FIBER_NOEMI_ERR / MAG_R_FIBER_NOEMI_ERR missing; "
-                "all rows use low-SNR fallback (no DELTA_MAG) for Hα SFR / fiber mass."
-            )
+    g_err = fiber_noemi["MAG_G_FIBER_NOEMI_ERR"]
+    r_err_noemi = fiber_noemi["MAG_R_FIBER_NOEMI_ERR"]
+    low_snr = (
+        ~np.isfinite(g_err)
+        | ~np.isfinite(r_err_noemi)
+        | (g_err >= mag_err_limit)
+        | (r_err_noemi >= mag_err_limit)
+    )
 
     # Single source of truth for the photometric corrections: the same matched
     # NEBCORR DELTA_MAG_* arrays are summed onto the working mags here (for the
@@ -1629,6 +1691,11 @@ def build_spec_derived_hdu(
     derived_tab["LOG_MSTAR_24_FIBER"] = log_mstar_fiber
     derived_tab["LOG_HALPHA_SFR_FIBER"] = log_sfr_fiber
     derived_tab["Z_GAS_R23_N2"] = z_gas
+
+    # Emission-subtracted fiber photometry, relocated here from the FASTSPEC HDU
+    # (stripped from FASTSPEC at write time below).
+    for col in _FIBER_NOEMI_COLS:
+        derived_tab[col] = fiber_noemi[col]
 
     # ------------------------------------------------------------------
     # Block A: DELTA_MAG_* photometric correction columns from NEBCORR.
@@ -1896,6 +1963,23 @@ def build_spec_derived_hdu(
     derived_hdu.name = DWARF_CATALOG_DERIVED_HDU
     derived_hdu.add_checksum()
 
+    # If the fiber-photometry columns are still in FASTSPEC (first run), build a
+    # stripped FASTSPEC HDU so those columns live only in SPEC_DERIVED. On re-runs
+    # they are already gone, so FASTSPEC is left untouched.
+    fiber_cols_in_fspec = [c for c in _FIBER_NOEMI_COLS if c in fspec_cat.colnames]
+    fspec_hdu_stripped = None
+    if fiber_cols_in_fspec:
+        fspec_stripped = fspec_cat.copy()
+        fspec_stripped.remove_columns(fiber_cols_in_fspec)
+        fspec_hdu_stripped = fits.table_to_hdu(fspec_stripped)
+        fspec_hdu_stripped.name = DWARF_CATALOG_SPEC_HDU
+        fspec_hdu_stripped.add_checksum()
+        if verbose:
+            print(
+                f"  Stripping {fiber_cols_in_fspec} from FASTSPEC HDU "
+                "(relocated to SPEC_DERIVED)"
+            )
+
     cat_abs = os.path.abspath(cat_path)
     cat_dir = os.path.dirname(cat_abs) or "."
     fd, tmp_path = tempfile.mkstemp(
@@ -1911,6 +1995,8 @@ def build_spec_derived_hdu(
         # (including MAIN's VLA heap) are written straight from disk.
         with fits.open(cat_abs, memmap=False) as hdul:
             hdu_names = [hdu.name for hdu in hdul]
+            if fspec_hdu_stripped is not None and DWARF_CATALOG_SPEC_HDU in hdu_names:
+                hdul[hdu_names.index(DWARF_CATALOG_SPEC_HDU)] = fspec_hdu_stripped
             if DWARF_CATALOG_DERIVED_HDU in hdu_names:
                 hdul[hdu_names.index(DWARF_CATALOG_DERIVED_HDU)] = derived_hdu
                 replaced = True
@@ -1935,6 +2021,7 @@ def build_spec_derived_hdu(
             f"  {action} {DWARF_CATALOG_DERIVED_HDU} HDU with TARGETID, "
             "LOG_SFR_HALPHA, LOG_SFR_HALPHA_ERR, LOG_MSTAR_24_FIBER, "
             "LOG_HALPHA_SFR_FIBER, Z_GAS_R23_N2, "
+            "MAG_{G,R}_FIBER_NOEMI(_ERR) (relocated from FASTSPEC), "
             "DELTA_MAG_{G,R}_{BASS2DECAM,NEB,DECAM2SDSS,KCORR}, "
             "TE_NE_OII, TE_T_OIII, TE_AV, TE_LOG_O2_ABUND, "
             "TE_LOG_O3_ABUND, TE_12_LOG_OH (+_LO/_HI/_ERR), "

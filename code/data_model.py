@@ -1515,26 +1515,10 @@ fastspec_hdu_datamodel["FLUX_SYNTH_PHOTMODEL_Z"] = {
 # They are now written by code/add_nebular_props.py to the SPEC_DERIVED HDU
 # via add_model_photometry_to_spec_derived rather than to the FASTSPEC HDU.
 
-fastspec_hdu_datamodel["MAG_G_FIBER_NOEMI"] = {
-    "unit": "mag",
-    "description": "DECam g-band AB magnitude measured from the emission-subtracted DESI fiber spectrum.",
-    "dtype": "float64"
-}
-fastspec_hdu_datamodel["MAG_R_FIBER_NOEMI"] = {
-    "unit": "mag",
-    "description": "DECam r-band AB magnitude measured from the emission-subtracted DESI fiber spectrum.",
-    "dtype": "float64"
-}
-fastspec_hdu_datamodel["MAG_G_FIBER_NOEMI_ERR"] = {
-    "unit": "mag",
-    "description": "Uncertainty in MAG_G_FIBER_NOEMI.",
-    "dtype": "float64"
-}
-fastspec_hdu_datamodel["MAG_R_FIBER_NOEMI_ERR"] = {
-    "unit": "mag",
-    "description": "Uncertainty in MAG_R_FIBER_NOEMI.",
-    "dtype": "float64"
-}
+# MAG_*_FIBER_NOEMI[_ERR] moved to spec_derived_hdu_datamodel (see above).
+# They are still computed by compute_emission_subtracted_photo_errors and written
+# into the FASTSPEC HDU during catalog build, but code/add_nebular_props.py then
+# relocates them into the SPEC_DERIVED HDU and strips them from FASTSPEC.
 
 # DELTA_MAG_{G,R}_* entries moved to spec_derived_hdu_datamodel (see below).
 # They are now written by code/add_nebular_props.py to the SPEC_DERIVED HDU
@@ -1636,8 +1620,9 @@ spec_derived_hdu_datamodel = {
         "description": (
             "log10(SFR / (Msun/yr)) from Bauer et al. (2013) Eq. 2 L(Halpha) combined with a per-object, "
             "metallicity-dependent Halpha->SFR calibration (sfr_log_cz_BPASS; BPASS, Korhonen Cuestas 2025). "
-            "The calibration metallicity is set from MAIN LOG_MSTAR_M24 via the Kirby+13 mass-metallicity "
-            "relation (stellar_mass_msz), replacing the previous fixed Chabrier constant. Global aperture-corrected "
+            "The calibration metallicity is set from MAIN LOG_MSTAR_M24 via stellar_mass_msz "
+            "(Kirby+13 mass-metallicity relation with +0.2 dex young-population offset, Zahid et al. 2017), "
+            "replacing the previous fixed Chabrier constant. Global aperture-corrected "
             "SFR using MAIN MAG_R and LUMI_DIST_MPC (distance modulus), per-row fiber HALPHA_EW from FASTSPEC."
         ),
         "dtype": "float64",
@@ -1662,7 +1647,8 @@ spec_derived_hdu_datamodel = {
         "unit": None,
         "description": (
             "log10(SFR / (Msun/yr)) in the fiber aperture only. Same metallicity-dependent BPASS Halpha->SFR "
-            "calibration as LOG_SFR_HALPHA (metallicity from MAIN LOG_MSTAR_M24 via stellar_mass_msz)."
+            "calibration as LOG_SFR_HALPHA (metallicity from MAIN LOG_MSTAR_M24 via stellar_mass_msz: "
+            "Kirby+13 with +0.2 dex Zahid et al. 2017 offset)."
         ),
         "dtype": "float64",
     },
@@ -1674,6 +1660,42 @@ spec_derived_hdu_datamodel = {
             "Filled where all seven lines pass line_snr (SNR > 3, flux > 1 in FastSpec units); NaN otherwise."
         ),
         "dtype": "float64",
+    },
+
+    # ---------------------------------------------------------------
+    # Emission-subtracted fiber photometry (MAG_*_FIBER_NOEMI)
+    #
+    # Computed by mass_and_photo_corrections.compute_emission_subtracted_photo_errors
+    # (DECam g/r measured on the fiber spectrum after subtracting the FastSpecFit
+    # emission model). They are written into the FASTSPEC HDU during catalog build,
+    # then RELOCATED here by code/add_nebular_props.py: build_spec_derived_hdu copies
+    # them into SPEC_DERIVED and strips them from FASTSPEC so FASTSPEC stays a clean
+    # FastSpecFit passthrough. The fiber-mass / Halpha-SFR pipeline consumes the
+    # _ERR columns to set the continuum-SNR (>= 10) split.
+    # ---------------------------------------------------------------
+    "MAG_G_FIBER_NOEMI": {
+        "unit": "mag",
+        "description": "DECam g-band AB magnitude measured from the emission-subtracted DESI fiber spectrum.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "MAG_R_FIBER_NOEMI": {
+        "unit": "mag",
+        "description": "DECam r-band AB magnitude measured from the emission-subtracted DESI fiber spectrum.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "MAG_G_FIBER_NOEMI_ERR": {
+        "unit": "mag",
+        "description": "Uncertainty in MAG_G_FIBER_NOEMI.",
+        "dtype": "float64",
+        "blank_value": np.nan,
+    },
+    "MAG_R_FIBER_NOEMI_ERR": {
+        "unit": "mag",
+        "description": "Uncertainty in MAG_R_FIBER_NOEMI.",
+        "dtype": "float64",
+        "blank_value": np.nan,
     },
 
     # ---------------------------------------------------------------
