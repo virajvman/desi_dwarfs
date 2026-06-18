@@ -557,7 +557,8 @@ def stellar_mass_msz(logmstar):
     )
     return 10.0 ** z_value
 
-_LOG_ZMET_MIN = -2.35
+#range in stellar metallicity in which we trust our fit!
+_LOG_ZMET_MIN = -1.8
 _LOG_ZMET_MAX = -0.5
 
 
@@ -569,32 +570,25 @@ def sfr_log_cz_BPASS(linear_zmet):
     log_C_Z_star = np.array([41.680, 41.647, 41.619, 41.595, 41.544, 41.512, 41.473, 41.411, 41.373]) #this is the conversion factor I am trying to get!
      zem4    0.00010       -2.301      41.754
 
-    coeffs = np.polyfit( np.log10(Z_star[Z_star < 0.2]), log_C_Z_star[Z_star < 0.2], 2)
+    coeffs = np.polyfit( np.log10(Z_star[Z_star < 0.4]), log_C_Z_star[Z_star < 0.4], 3)
 
     NOTE on validity range: the fit is INTENTIONALLY restricted to the low-Z
-    subset (Z/Z_sun < 0.2, i.e. zem4 + z001-z003), because that is the only
+    subset because that is the only
     metallicity range we sample. Our stellar-mass range logM* in [5, 9.25],
     mapped through stellar_mass_msz (Kirby+13 + 0.2 dex Zahid+17 offset), gives
     log(Z/Z_sun) in [-1.79, -0.515], over which this quadratic reproduces
-    BPASS C(Z*) to <0.01 dex for most of the range. It is NOT valid at higher Z
+    BPASS C(Z*) to high accuracy. It is NOT valid at higher Z
     and extrapolates high there: ~+0.03 dex at z006 (log Z/Zsun=-0.52),
     ~+0.06 at z010, ~+0.10 at solar. The clip ceiling _LOG_ZMET_MAX = -0.5
     accommodates the offset MZR at the massive end and sits near the edge of
     the validated BPASS fit (~-0.52).
 
-    TODO (refit on gas-MZR swap): when stellar_mass_msz is replaced by the
-    measured GAS-phase O/H vs M* relation (see its TODO), REFIT this quadratic
-    over the actual log(Z/Z_sun) range sampled (or replace it with a direct
-    interpolation of the BPASS Table-2 points to remove any extrapolation risk)
-    and re-check _LOG_ZMET_MAX.
-
     log10(linear_zmet) is clipped to [_LOG_ZMET_MIN, _LOG_ZMET_MAX] before evaluation;
     values outside the fit range receive log C at the nearest boundary.
     '''
 
-    print("TODO: need to fix the interpolation scheme here! With the +0.2 dex offset, we need to revist this")
-
-    coeffs = np.array([-3.70148004e-02, -2.06139022e-01,  4.14755688e+01])
+    # coeffs = np.array([-3.70148004e-02, -2.06139022e-01,  4.14755688e+01])
+    coeffs = np.array([-0.06935767, -0.34143986, -0.61221057, 41.30813363])
 
     log_zmet = np.log10(np.atleast_1d(np.asarray(linear_zmet, dtype=float)))
 
