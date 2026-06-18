@@ -616,7 +616,7 @@ def sfr_log_cz_BPASS(linear_zmet):
     values outside the fit range receive log C at the nearest boundary.
     '''
 
-    TODO: need to fix the interpolation scheme here! With the +0.2 dex offset, we need to revist this
+    print("TODO: need to fix the interpolation scheme here! With the +0.2 dex offset, we need to revist this")
 
     coeffs = np.array([-3.70148004e-02, -2.06139022e-01,  4.14755688e+01])
 
