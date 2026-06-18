@@ -18,6 +18,13 @@ from mass_and_photo_corrections import (
 )
 from desi_lowz_funcs import get_stellar_mass_mia, r_kcorr
 from data_model import spec_derived_hdu_datamodel
+from cardelli_attenuation import (
+    k_ccm89,
+    attenuation,
+    transmission,
+    BALMER_INTRINSIC,
+    model_hahb,
+)
 
 # FastSpec {LINE}_FLUX units: 1e-17 erg / (cm2 s). Reject tiny fluxes whose
 # IVAR can yield spuriously high SNR.
@@ -390,41 +397,10 @@ def get_metallicity_P16_tgid(tgid, fastspec_cat):
 
 
 ### metallicity measurement from Scholte+22 
-def k_ccm89(lam, Rv=3.1, unit_aa=True):
-    lam = np.atleast_1d(lam)
-    if unit_aa:
-        lam=lam/10000.
-    else:
-        lam=lam
-    xs=1/lam
-    def a(x):
-        y = x-1.82
-        if (x>=0.3) & (x<=1.1):
-            return 0.574*x**1.61
-        elif (x>1.1) & (x<=3.3):
-            return 1 + 0.17699*y - 0.50447*y**2 - 0.02427*y**3 + 0.72085*y**4 + 0.01979*y**5 - 0.77530*y**6 + 0.32999*y**7
-        else:
-            return np.ones_like(x) * np.nan
-    def b(x):
-        y = x-1.82
-        if (x>=0.3) & (x<=1.1):
-            return -0.527*x**1.61
-        elif (x>1.1) & (x<=3.3):
-            return 1.41338*y + 2.28305*y**2 + 1.07233*y**3 - 5.38434*y**4 - 0.62251*y**5 + 5.30260*y**6 - 2.09002*y**7
-        else:
-            return np.ones_like(x) * np.nan
-    if len(lam)==1:
-        return [a(x) + b(x)/Rv for x in xs][0]
-    else:
-        return [a(x) + b(x)/Rv for x in xs]
-
-def attenuation(lam, bd_obs):
-    if len(np.atleast_1d(lam))>1.:
-        bd_obs = np.atleast_1d(bd_obs)
-    return (2.5*np.log10(1/2.86 * bd_obs)/(k_ccm89(4861) - k_ccm89(6563))) * k_ccm89(lam)
-    
-def transmission(bd_obs, lam):
-    return 10**(-0.4*attenuation(lam, bd_obs))
+# k_ccm89 / attenuation / transmission and the intrinsic BALMER_INTRINSIC are
+# imported from cardelli_attenuation (single source of truth) -- they used to be
+# duplicated here. transmission() now deredden against BALMER_INTRINSIC = 2.79
+# (was 2.86), which is what Z_R23_N2 below and the Halpha-SFR dust term use.
     
 
 
@@ -441,7 +417,7 @@ def Z_R23_N2(
     Code by Dirk Scholte to compute metallicities
     '''
     BD = ha/hb
-    if ha/hb>2.86:
+    if ha/hb > BALMER_INTRINSIC:
         OII3727 = OII3727 / transmission(BD, 3727)
         OII3729 = OII3729 / transmission(BD, 3729)
         hb = hb / transmission(BD, 4861)
@@ -670,7 +646,7 @@ def sfr_log_cz_BPASS(linear_zmet):
 _BPASS_LOWZ_12_HA_W_CHABRIER = (3.63 * 10**34)   # W per (M_sun/yr), Chabrier IMF
 
 _HALPHA_REST_A    = 6564.61   # Hα rest wavelength [Å]
-_BALMER_INTRINSIC = 2.86      # Case B Hα/Hβ at T_e=1e4 K, n_e=100 cm^-3
+_BALMER_INTRINSIC = BALMER_INTRINSIC  # adopted intrinsic Hα/Hβ = 2.79 (from cardelli_attenuation)
 _DUST_EXPONENT    = 2.36      # Bauer+13 Eq. 2 dust-correction exponent
 _AB_MAG_ZPT       = 34.10     # Bauer+13 Eq. 2 zeropoint; gives L_nu in [W/Hz]
                               # when applied as 10^(-0.4*(M_r - 34.10))
@@ -705,7 +681,7 @@ def calc_SFR_Halpha(
 
         L(Hα) [W] = (EW + EWc) * 10^(-0.4*(Mr - 34.10))
                     * 3e18 / (6564.61)^2
-                    * (BD / 2.86)^2.36
+                    * (BD / 2.79)^2.36
 
     where c = 2.99792458e18 is the speed of light in Å/s (for the L_ν → L_λ
     conversion via c/λ_rest^2 at the rest Hα wavelength), and 34.10 is the AB
@@ -888,9 +864,9 @@ def get_halpha_sfrs(cat, halpha_ew, halpha_ew_ivar, logmstar=None):
     `calc_SFR_Halpha` docstring for how to get fiber SFRs instead) and
     LUMI_DIST_MPC from the input catalog. Redshift and photometric errors
     are treated as zero; this is fine for DESI redshifts but ignores the
-    (small) Tractor magnitude errors. A population-average Balmer decrement
-    is assumed for every galaxy — if per-object BDs are available, call
-    calc_SFR_Halpha directly.
+    (small) Tractor magnitude errors. The dust correction uses the mass-based
+    average Balmer decrement model_hahb(logmstar); pass per-object BDs to
+    calc_SFR_Halpha directly if you have reliable ones.
 
     Aperture-correction caveats apply; in particular for low-redshift and/or
     compact dwarf galaxies the assumption of spatially uniform EW(Hα) can
@@ -928,6 +904,8 @@ def get_halpha_sfrs(cat, halpha_ew, halpha_ew_ivar, logmstar=None):
         Mr=absm_r,
         Mr_err=zeros,
         logmstar=logmstar,
+        BD=model_hahb(logmstar),
+        BD_err=0.0,
     )
     return log_halpha_sfr
 
@@ -1422,17 +1400,20 @@ def build_spec_derived_hdu(
     with no BPT cuts; NaN otherwise or if the fit fails.
 
     LOG_SFR_HALPHA, LOG_SFR_HALPHA_ERR, and LOG_HALPHA_SFR_FIBER are only set
-    for rows with finite HALPHA_FLUX > 1 (FastSpec units), HBETA_FLUX > 0,
-    HALPHA_EW > 0,
-    HALPHA_EW SNR > 3 (EW × sqrt(EW_IVAR)), HALPHA_FLUX SNR > 3, and
-    HBETA_FLUX SNR > 3; otherwise those entries are NaN. This is independent
-    of the continuum-SNR split from MAG_*_FIBER_NOEMI_ERR above.
+    for rows with finite HALPHA_FLUX > 1 (FastSpec units), HALPHA_EW > 0,
+    HALPHA_EW SNR > 3 (EW × sqrt(EW_IVAR)), HALPHA_FLUX SNR > 3, and finite
+    global LOG_MSTAR_M24; otherwise those entries are NaN. This is independent
+    of the continuum-SNR split from MAG_*_FIBER_NOEMI_ERR above. Hbeta is NOT
+    required (in earlier versions it was, solely to form the per-object Balmer
+    decrement); dropping that requirement expands the SFR sample.
 
-    The Balmer decrement used for the SFR dust correction is computed per
-    object as BD = HALPHA_FLUX / HBETA_FLUX on rows passing the SFR mask,
-    and floored at the Case-B value 2.86 (values below 2.86 are unphysical).
-    Rows that do not pass the mask are filled with the population-average
-    BD = 3.25, but their SFRs are subsequently nulled to NaN.
+    The Balmer decrement used for the SFR dust correction is the mass-based
+    average model_hahb(LOG_MSTAR_M24) -- a logistic fit to stacked
+    HALPHA/HBETA -- using the GLOBAL stellar mass for both the global and the
+    fiber SFR. It is dereddened against the intrinsic Balmer decrement
+    BALMER_INTRINSIC = 2.79 inside calc_SFR_Halpha. This replaces the former
+    per-object BD = HALPHA_FLUX / HBETA_FLUX (floored at 2.86); model_hahb is
+    >= 2.86 by construction, so no floor is needed.
 
     r_kcorr in desi_lowz_funcs is nominally valid for z < 0.5.
     """
@@ -1492,12 +1473,15 @@ def build_spec_derived_hdu(
     halpha_ew_ivar = np.asarray(fspec_cat["HALPHA_EW_IVAR"].data, dtype=float)
     halpha_flux = np.asarray(fspec_cat[f"HALPHA_{line_flux_type}"].data, dtype=float)
     halpha_flux_ivar = np.asarray(fspec_cat[f"HALPHA_{line_flux_type}_IVAR"].data, dtype=float)
-    hbeta_flux = np.asarray(fspec_cat[f"HBETA_{line_flux_type}"].data, dtype=float)
-    hbeta_flux_ivar = np.asarray(fspec_cat[f"HBETA_{line_flux_type}_IVAR"].data, dtype=float)
     with np.errstate(invalid="ignore"):
         halpha_ew_snr = halpha_ew * np.sqrt(halpha_ew_ivar)
         halpha_flux_snr = halpha_flux * np.sqrt(halpha_flux_ivar)
-        hbeta_flux_snr = hbeta_flux * np.sqrt(hbeta_flux_ivar)
+    # SFR eligibility no longer requires Hbeta: the dust correction now comes
+    # from the mass-based model_hahb(logM*) rather than a per-object
+    # HALPHA/HBETA decrement. Eligibility is a good Halpha detection (EW + flux)
+    # plus a finite global stellar mass (needed by model_hahb and by the
+    # metallicity-dependent Halpha->SFR calibration). This expands the SFR
+    # sample relative to earlier catalog versions, which required HBETA SNR > 3.
     ok_halpha_for_sfr = (
         np.isfinite(halpha_flux)
         & (halpha_flux > DEFAULT_MIN_LINE_FLUX)
@@ -1511,34 +1495,22 @@ def build_spec_derived_hdu(
         & (halpha_flux_ivar > 0)
         & np.isfinite(halpha_flux_snr)
         & (halpha_flux_snr > 3.0)
-        & np.isfinite(hbeta_flux)
-        & (hbeta_flux > 0)
-        & np.isfinite(hbeta_flux_ivar)
-        & (hbeta_flux_ivar > 0)
-        & np.isfinite(hbeta_flux_snr)
-        & (hbeta_flux_snr > 3.0)
+        & np.isfinite(logmstar_global)
     )
 
-    # Per-object Balmer decrement = HALPHA_FLUX / HBETA_FLUX on the SFR-eligible
-    # rows; values below the Case-B floor of 2.86 are unphysical and clipped.
-    # Rows that fail the mask get the population-average 3.25 fill so the BD
-    # array stays finite for calc_SFR_Halpha; their SFRs are nulled below.
-    with np.errstate(divide="ignore", invalid="ignore"):
-        bd_raw = np.where(
-            ok_halpha_for_sfr & (hbeta_flux > 0),
-            halpha_flux / hbeta_flux,
-            np.nan,
-        )
-    n_below_bd = int(np.sum(ok_halpha_for_sfr & np.isfinite(bd_raw) & (bd_raw < 2.86)))
-    n_eligible = int(np.sum(ok_halpha_for_sfr))
+    # Average internal nebular dust correction from the mass-based Balmer
+    # decrement model (logistic fit to stacked HALPHA/HBETA): BD =
+    # model_hahb(logM*), using the GLOBAL stellar mass for both the global and
+    # the fiber SFR. Replaces the former per-object BD = HALPHA_FLUX /
+    # HBETA_FLUX (floored at 2.86). model_hahb is >= 2.86 by construction (no
+    # floor needed) and is dereddened against BALMER_INTRINSIC = 2.79 inside
+    # calc_SFR_Halpha. Rows failing ok_halpha_for_sfr get NaN SFRs below
+    # regardless of this value.
+    bd_for_sfr = model_hahb(logmstar_global)
     print(
-        f"  build_spec_derived_hdu: {n_below_bd} / {n_eligible} "
-        "SFR-eligible objects had per-object BD < 2.86; clipped to 2.86"
-    )
-    bd_per_object = np.where(
-        ok_halpha_for_sfr,
-        np.maximum(bd_raw, 2.86),
-        3.25,
+        f"  build_spec_derived_hdu: {int(np.sum(ok_halpha_for_sfr))} "
+        "SFR-eligible objects (good Halpha + finite logM*); "
+        "dust BD = model_hahb(LOG_MSTAR_M24)"
     )
 
     # Continuum-SNR split from the emission-subtracted fiber mag errors. When the
@@ -1591,7 +1563,7 @@ def build_spec_derived_hdu(
         Mr_err=mr_err,
         logmstar=logmstar_global,
         EWc=0.0,
-        BD=bd_per_object,
+        BD=bd_for_sfr,
         BD_err=0.0,
         imf_factor=1.0,
     )
@@ -1648,7 +1620,7 @@ def build_spec_derived_hdu(
         Mr_err=mr_err,
         logmstar=logmstar_global,
         EWc=0.0,
-        BD=bd_per_object,
+        BD=bd_for_sfr,
         BD_err=0.0,
         imf_factor=1.0,
     )

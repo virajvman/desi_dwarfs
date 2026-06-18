@@ -41,8 +41,19 @@ Outputs (written to STACK_PATH; stale files removed at the start of each run):
   - plots/grid_all_stacks.png                  (rows=mass bins, cols=ELG/non-ELG)
   - plots/ivar_vs_bootstd_{label}.png          (validation, representative bins)
 
+Normalization mode (``--norm``):
+  - ``halpha`` (default): divide each spectrum by its catalog HALPHA_FLUX
+    (SF-weighted stack); writes to ``stack_files/mstar/``.
+  - ``continuum``: divide by a continuum r-band flux scalar derived from the
+    rest-frame, emission-removed model magnitude MAG_R_SDSS_Z0_MODEL_NOEMI,
+    ``F_r = 10^(-0.4*(mag - 22.5))`` (luminosity-weighted stack); writes to
+    ``stack_files/mstar_contnorm/``. The per-galaxy scalar cancels in all
+    downstream line ratios in either mode -- it only reweights galaxies in the
+    mean stack. Both modes use the identical ``catalog`` path in bootstrap_stack.
+
 Usage:
-    python stack_mstar_elg_vs_noelg.py
+    python stack_mstar_elg_vs_noelg.py                 # Halpha-normalized
+    python stack_mstar_elg_vs_noelg.py --norm continuum  # continuum-normalized
 """
 
 import argparse
@@ -123,8 +134,12 @@ BOOT_NJOBS = 16
 # memory-safe on a full node.
 MAX_STACK_SPECTRA = 10000
 
-# Output location.
-STACK_PATH = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/stack_files/mstar/"
+# Output location. Selected by --norm in main(): the Halpha-normalized product
+# writes to mstar/, the continuum (r-band) normalized product to mstar_contnorm/,
+# so the two coexist with identical per-bin filenames in separate directories.
+STACK_PATH_HALPHA = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/stack_files/mstar/"
+STACK_PATH_CONTNORM = "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/stack_files/mstar_contnorm/"
+STACK_PATH = STACK_PATH_HALPHA   # overridden for continuum mode in main()
 
 # De-redshifted spectra file -- the SAME flux-conserving (_noinvvar) rebin used
 # by stack_mstar_haew_5pct.py, so both products stack identically-rebinned spectra.
@@ -139,16 +154,42 @@ OVERWRITE_STACKS = True
 # Rest-frame wavelength upper bound (consistent with haew_5pct).
 WAVE_MAX = 6800
 
-# Spectrum-normalization method passed into bootstrap_stack.
-#   "catalog"     - normalize each spectrum by its catalog HALPHA_FLUX (recommended)
+# Spectrum-normalization method passed into bootstrap_stack. Both --norm modes
+# use the "catalog" path (divide each spectrum by a per-galaxy scalar); only the
+# scalar differs, so the stacking core is untouched.
+#   "catalog"     - normalize each spectrum by a per-galaxy catalog flux scalar
 #   "boxcar_line" - normalize by a self-measured boxcar Halpha flux
-#   "flux_window" - normalize by integrated flux in a continuum window
+#   "flux_window" - normalize by integrated flux in a continuum window (unused)
 NORM_METHOD = "catalog"
-# Per-galaxy normalization line flux. Gaussian HALPHA_FLUX (not boxcar): FLUX is
-# the more reliable line-flux measurement, and since every load_catalog galaxy
-# already passes HALPHA_FLUX > 1, normalizing by it drops no galaxies. The
-# normalization constant cancels in all downstream line ratios. Matches haew_5pct.
+
+# Spectrum-normalization MODE, set by --norm in main(); default "halpha" so the
+# existing run is unchanged. The per-galaxy scalar cancels in all downstream line
+# ratios in either mode; it only reweights galaxies in the mean stack (Halpha ->
+# SF-weighted; continuum -> luminosity-weighted).
+#   "halpha"    - divide each spectrum by its catalog HALPHA_FLUX
+#   "continuum" - divide by a continuum r-band flux scalar (see CONT_* below)
+NORM_MODE = "halpha"
+
+# Per-galaxy normalization column (the scalar each spectrum is divided by).
+# Set in main() to CONT_FLUX_COL when --norm continuum. Default HALPHA_FLUX:
+# Gaussian FLUX is the more reliable line-flux measurement, and since every
+# load_catalog galaxy already passes HALPHA_FLUX > 1, normalizing by it drops no
+# galaxies. Matches haew_5pct.
 NORM_COL = "HALPHA_FLUX"
+
+# Continuum-mode normalization (--norm continuum). The scalar is built from the
+# rest-frame (z=0), emission-removed FastSpec model r-band magnitude:
+#   F_r = 10^(-0.4*(MAG_R_SDSS_Z0_MODEL_NOEMI - 22.5))   [nanomaggies]
+# The nanomaggie zeropoint keeps normalized continua O(1) (the scalar cancels
+# downstream, so the ZP is purely numerical hygiene). Galaxies with a non-finite
+# model mag (unmatched in the model-photometry catalog) get F_r=NaN and are
+# dropped before stacking, so NOBJ reflects the honestly-stacked count.
+CONT_MAG_COL = "MAG_R_SDSS_Z0_MODEL_NOEMI"
+CONT_MAG_ZP = 22.5
+CONT_FLUX_COL = "CONT_FLUX_R"
+
+# Human-readable normalization label for plot axes/titles (set in main()).
+NORM_LABEL = "Halpha-normalized"
 
 # Plotting.
 SAMPLE_COLORS = {"elg": "#d62728", "noelg": "#1f77b4"}
@@ -211,14 +252,34 @@ def stack_one_bin(sub_cat, spectra_data, wave, sample_name, file_key,
             return pickle.load(f)
 
     # Match catalog rows to spectra by TARGETID and pull the per-spectrum
-    # Halpha flux for normalization.
+    # normalization scalar (HALPHA_FLUX or the continuum r-band flux).
     out = get_sample_spectra_with_linenorm(
         sub_cat, spectra_data, line_norm="HALPHA", norm_col=NORM_COL,
     )
-    fluxes, ivars, halpha_fluxes, tgids_matched = out
+    fluxes, ivars, norm_scalars, tgids_matched = out
 
     if fluxes is None or len(fluxes) == 0:
         print("      No matched spectra; skipping.")
+        return None
+
+    # Drop spectra with a non-finite / non-positive normalization scalar before
+    # stacking. This is a no-op for Halpha mode (load_catalog already requires
+    # HALPHA_FLUX > 1), but in continuum mode the model r-mag is NaN for galaxies
+    # unmatched in the model-photometry catalog; dropping them up front keeps
+    # n_matched / NOBJ honest (bootstrap_stack would otherwise silently mask them).
+    norm_scalars = np.asarray(norm_scalars, dtype=float)
+    tgids_matched = np.asarray(tgids_matched)
+    good = np.isfinite(norm_scalars) & (norm_scalars > 0)
+    n_drop = int((~good).sum())
+    if n_drop:
+        print(f"      Dropping {n_drop}/{len(good)} spectra with non-finite/<=0 "
+              f"{NORM_COL} (norm scalar)")
+        fluxes = fluxes[good]
+        ivars = ivars[good]
+        norm_scalars = norm_scalars[good]
+        tgids_matched = tgids_matched[good]
+    if len(fluxes) == 0:
+        print("      No spectra with a valid normalization scalar; skipping.")
         return None
 
     n_matched = len(fluxes)
@@ -238,7 +299,7 @@ def stack_one_bin(sub_cat, spectra_data, wave, sample_name, file_key,
         n_bootstrap=N_BOOTSTRAP,
         random_seed=seed,
         norm_method=NORM_METHOD,
-        catalog_line_fluxes=halpha_fluxes,
+        catalog_line_fluxes=norm_scalars,
         min_n_valid=1,
         max_spectra=MAX_STACK_SPECTRA,
         n_jobs=BOOT_NJOBS,
@@ -381,7 +442,7 @@ def make_overlay_plots(results, wave, mstar_bins, plot_dir):
         _add_line_guides(ax)
         ax.set_xlim(wave.min(), wave.max())
         ax.set_xlabel(r"Rest wavelength [$\AA$]")
-        ax.set_ylabel("Halpha-normalized stacked flux")
+        ax.set_ylabel(f"{NORM_LABEL} stacked flux")
         ax.set_title(f"log M* in [{m_lo:.2f}, {m_hi:.2f}]")
         ax.legend(loc="upper left", fontsize=8, frameon=False)
         fig.tight_layout()
@@ -441,7 +502,7 @@ def make_grid_plot(results, wave, mstar_bins, plot_dir):
             if i == n_mstar - 1:
                 ax.set_xlabel(r"Rest $\lambda$ [$\AA$]", fontsize=8)
 
-    fig.suptitle("Halpha-normalized stacks (ELG vs non-ELG per mass bin)", fontsize=12)
+    fig.suptitle(f"{NORM_LABEL} stacks (ELG vs non-ELG per mass bin)", fontsize=12)
     fig.tight_layout(rect=[0, 0, 1, 0.985])
 
     out_png = os.path.join(plot_dir, "grid_all_stacks.png")
@@ -494,8 +555,24 @@ def make_ivar_diagnostic_plots(results, wave, plot_dir, max_bins=2):
 # MAIN
 # =============================================================================
 
-def main(resume=False):
-    global OVERWRITE_STACKS
+def main(resume=False, norm_mode="halpha"):
+    global OVERWRITE_STACKS, STACK_PATH, NORM_COL, NORM_MODE, NORM_LABEL
+
+    # Resolve the normalization mode -> output dir, scalar column, plot label.
+    NORM_MODE = norm_mode
+    if norm_mode == "halpha":
+        STACK_PATH = STACK_PATH_HALPHA
+        NORM_COL = "HALPHA_FLUX"
+        NORM_LABEL = "Halpha-normalized"
+    elif norm_mode == "continuum":
+        STACK_PATH = STACK_PATH_CONTNORM
+        NORM_COL = CONT_FLUX_COL
+        NORM_LABEL = "continuum (r-band) normalized"
+    else:
+        raise ValueError(f"Unknown norm_mode: {norm_mode!r} (expected 'halpha' or 'continuum')")
+    print(f"[0] Normalization mode: {norm_mode}  (scalar column: {NORM_COL})")
+    print(f"    Output dir: {STACK_PATH}")
+
     os.makedirs(STACK_PATH, exist_ok=True)
     plot_dir = os.path.join(STACK_PATH, "plots")
 
@@ -520,6 +597,22 @@ def main(resume=False):
     print("[1] Loading catalog ...")
     tot_cat = load_catalog()
     print(f"    Total galaxies after quality cuts: {len(tot_cat)}")
+
+    # In continuum mode, derive the per-galaxy continuum r-band flux scalar from
+    # the rest-frame, emission-removed model r-mag: F_r = 10^(-0.4*(mag - ZP)).
+    # Non-finite mags (galaxies unmatched in the model-photometry catalog) -> NaN
+    # flux, which stack_one_bin then drops before stacking.
+    if norm_mode == "continuum":
+        mag = np.asarray(tot_cat[CONT_MAG_COL], dtype=float)
+        with np.errstate(over="ignore", invalid="ignore"):
+            cont_flux = np.where(
+                np.isfinite(mag), 10.0 ** (-0.4 * (mag - CONT_MAG_ZP)), np.nan,
+            )
+        tot_cat[CONT_FLUX_COL] = cont_flux
+        n_finite = int(np.isfinite(cont_flux).sum())
+        print(f"    Continuum scalar from {CONT_MAG_COL} (ZP={CONT_MAG_ZP}): "
+              f"{n_finite}/{len(tot_cat)} galaxies have a finite model r-mag "
+              f"(the rest are dropped per-bin at stacking).")
 
     print("\n[2] Loading de-redshifted spectra (flux-conserving _noinvvar) ...")
     spectra_data = load_spectra(SPECTRA_FILE)
@@ -605,5 +698,13 @@ if __name__ == "__main__":
         help="Keep existing outputs (skip the initial clean) and reuse cached "
              "per-bin pickles, computing only the bins still missing on disk.",
     )
+    parser.add_argument(
+        "--norm", choices=["halpha", "continuum"], default="halpha",
+        help="Per-galaxy normalization: 'halpha' divides each spectrum by its "
+             "catalog HALPHA_FLUX (SF-weighted stack, default, writes to mstar/); "
+             "'continuum' divides by a continuum r-band flux scalar from "
+             "MAG_R_SDSS_Z0_MODEL_NOEMI (luminosity-weighted, writes to "
+             "mstar_contnorm/).",
+    )
     args = parser.parse_args()
-    main(resume=args.resume)
+    main(resume=args.resume, norm_mode=args.norm)

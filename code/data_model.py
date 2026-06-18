@@ -1623,7 +1623,11 @@ spec_derived_hdu_datamodel = {
             "The calibration metallicity is set from MAIN LOG_MSTAR_M24 via stellar_mass_msz "
             "(Kirby+13 mass-metallicity relation with +0.2 dex young-population offset, Zahid et al. 2017), "
             "replacing the previous fixed Chabrier constant. Global aperture-corrected "
-            "SFR using MAIN MAG_R and LUMI_DIST_MPC (distance modulus), per-row fiber HALPHA_EW from FASTSPEC."
+            "SFR using MAIN MAG_R and LUMI_DIST_MPC (distance modulus), per-row fiber HALPHA_EW from FASTSPEC. "
+            "Internal dust correction uses the mass-based average Balmer decrement model_hahb(LOG_MSTAR_M24) "
+            "dereddened against the intrinsic Halpha/Hbeta = 2.79 (Bauer+13 dust exponent 2.36), replacing the "
+            "former per-object HALPHA/HBETA. Set where HALPHA_FLUX > 1, HALPHA_EW > 0, HALPHA_EW and HALPHA_FLUX "
+            "SNR > 3, and LOG_MSTAR_M24 is finite (Hbeta is no longer required); NaN otherwise."
         ),
         "dtype": "float64",
     },
@@ -1648,7 +1652,8 @@ spec_derived_hdu_datamodel = {
         "description": (
             "log10(SFR / (Msun/yr)) in the fiber aperture only. Same metallicity-dependent BPASS Halpha->SFR "
             "calibration as LOG_SFR_HALPHA (metallicity from MAIN LOG_MSTAR_M24 via stellar_mass_msz: "
-            "Kirby+13 with +0.2 dex Zahid et al. 2017 offset)."
+            "Kirby+13 with +0.2 dex Zahid et al. 2017 offset). Internal dust correction uses the mass-based "
+            "model_hahb(LOG_MSTAR_M24) (GLOBAL stellar mass) dereddened against intrinsic 2.79, as in LOG_SFR_HALPHA."
         ),
         "dtype": "float64",
     },
@@ -1656,7 +1661,8 @@ spec_derived_hdu_datamodel = {
         "unit": None,
         "description": (
             "Gas-phase strong-line metallicity from R23+N2 (see Scholte et al. 2024) "
-            "using FASTSPEC Gaussian line fluxes; internal dust correction when Halpha/Hbeta > 2.86. "
+            "using FASTSPEC Gaussian line fluxes; per-object internal dust correction (CCM89) when "
+            "Halpha/Hbeta > 2.79 (intrinsic BALMER_INTRINSIC). "
             "Filled where all seven lines pass line_snr (SNR > 3, flux > 1 in FastSpec units); NaN otherwise."
         ),
         "dtype": "float64",
