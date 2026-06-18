@@ -6,6 +6,7 @@
 #SBATCH --mail-user=virajvm@stanford.edu
 #SBATCH --mail-type=ALL
 #SBATCH --nodes=1
+#SBATCH --ntasks=1
 #SBATCH --gpus-per-task=1
 #SBATCH --mem=100GB
 #SBATCH --time=00:30:00
