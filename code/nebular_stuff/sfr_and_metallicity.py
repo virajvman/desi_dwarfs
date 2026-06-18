@@ -647,7 +647,13 @@ _BPASS_LOWZ_12_HA_W_CHABRIER = (3.63 * 10**34)   # W per (M_sun/yr), Chabrier IM
 
 _HALPHA_REST_A    = 6564.61   # Hα rest wavelength [Å]
 _BALMER_INTRINSIC = BALMER_INTRINSIC  # adopted intrinsic Hα/Hβ = 2.79 (from cardelli_attenuation)
-_DUST_EXPONENT    = 2.36      # Bauer+13 Eq. 2 dust-correction exponent
+# Effective Halpha dust-correction exponent for the full Cardelli+89 (R_V=3.1)
+# law: term3 = 1/transmission(BD, Halpha) equals (BD/_BALMER_INTRINSIC)**this,
+# so it also serves as d ln(term3)/d ln(BD) in the error propagation. Derived
+# from the SHARED k_ccm89 curve, using attenuation()'s 4861/6563 Hbeta/Halpha
+# normalization, so the SFR dust correction is IDENTICAL to deredden_flux_mstar
+# and Z_R23_N2 -- not Bauer+13's fixed 2.36 (which CCM89 reproduces to ~0.004).
+_DUST_EXPONENT    = k_ccm89(_HALPHA_REST_A) / (k_ccm89(4861.0) - k_ccm89(6563.0))
 _AB_MAG_ZPT       = 34.10     # Bauer+13 Eq. 2 zeropoint; gives L_nu in [W/Hz]
                               # when applied as 10^(-0.4*(M_r - 34.10))
 _C_ANGSTROM_PER_S = 2.99792458e18  # speed of light [Å/s] (L_nu -> L_lambda via c/λ^2)
@@ -681,7 +687,14 @@ def calc_SFR_Halpha(
 
         L(Hα) [W] = (EW + EWc) * 10^(-0.4*(Mr - 34.10))
                     * 3e18 / (6564.61)^2
-                    * (BD / 2.79)^2.36
+                    / T_CCM89(BD; 6564.61 Å)
+
+    where the dust correction 1/T_CCM89 is the full Cardelli+89 (R_V=3.1)
+    transmission at Hα for an observed Balmer decrement BD (intrinsic
+    Hα/Hβ = 2.79), the SAME law used by deredden_flux_mstar and Z_R23_N2. This
+    replaces Bauer+13's fixed (BD/2.86)^2.36; for CCM89 the effective exponent
+    k(Hα)/(k(Hβ)-k(Hα)) ≈ 2.36, so the values are nearly identical but now
+    consistent across the pipeline.
 
     where c = 2.99792458e18 is the speed of light in Å/s (for the L_ν → L_λ
     conversion via c/λ_rest^2 at the rest Hα wavelength), and 34.10 is the AB
@@ -775,7 +788,8 @@ def calc_SFR_Halpha(
       uniform across the galaxy. This can fail badly for compact starburst
       dwarfs, BCDs, or galaxies with off-center star-forming knots.
     - Case B recombination at T_e = 1e4 K, n_e = 100 cm^-3.
-    - Fixed dust attenuation law (Bauer+13 Eq. 2 exponent 2.36).
+    - Full Cardelli+89 (R_V=3.1) dust attenuation law at Hα (same law and
+      intrinsic Hα/Hβ = 2.79 as the rest of the pipeline).
     - Kennicutt-style calibrations assume a fully-sampled IMF and continuous SF
       over ~5-10 Myr; Hα becomes a noisy SFR tracer for SFR < ~0.01 M_sun/yr
       due to stochastic IMF sampling (see e.g. Lee et al. 2009, da Silva et al.
@@ -819,7 +833,11 @@ def calc_SFR_Halpha(
     # grows with redshift (~0.04 dex at z=0.05, ~0.16 at z=0.2, ~0.35 at z=0.5).
     term1 = EW_total * 10.0 ** (-0.4 * (Mr - _AB_MAG_ZPT))
     term2 = _C_ANGSTROM_PER_S / (_HALPHA_REST_A) ** 2
-    term3 = (BD / _BALMER_INTRINSIC) ** _DUST_EXPONENT
+    # Dust correction: full Cardelli+89 (R_V=3.1) transmission at Halpha -- the
+    # same law and intrinsic BALMER_INTRINSIC (2.79) used by deredden_flux_mstar
+    # and Z_R23_N2. Algebraically (BD/_BALMER_INTRINSIC)**_DUST_EXPONENT; written
+    # via transmission() to make the shared-law consistency explicit.
+    term3 = 1.0 / transmission(BD, _HALPHA_REST_A)
 
     L_Halpha = term1 * term2 * term3  # [W]
     L_Halpha_cgs = L_Halpha * 1.0e7    # [erg/s]; calibration is in erg/s units
