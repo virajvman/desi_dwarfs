@@ -73,6 +73,19 @@ OUTLIER_THRESHOLDS = [2.0, 5.0]
 # Percentiles to record for the reduced-chi^2 distribution
 PERCENTILES = [2.5, 16, 50, 84, 90, 97.5, 99]
 
+# Emission lines for the line-window chi^2 (VACUUM wavelengths in Angstrom, since
+# DESI works in vacuum). Standard dwarf set: [OII] doublet, Hbeta, [OIII] doublet,
+# Halpha, [SII] doublet. chi^2 is summed over +/- LINE_HALFWIDTH around each.
+LINE_CENTERS = [3727.09, 3729.88,   # [OII]
+                4862.68,            # Hbeta
+                4960.30, 5008.24,   # [OIII]
+                6564.61,            # Halpha
+                6718.29, 6732.68]   # [SII]
+LINE_HALFWIDTH = 10.0   # Angstrom, rest-frame
+
+# Fraction of objects (by per-pixel SNR) kept for the "high-SNR subset" metric.
+HISNR_TOP_FRACTION = 0.25
+
 
 # ----------------------------------------------------------------------------
 # NNMF training (mirrors nnmf_analysis.py PART 2)
@@ -115,32 +128,47 @@ def train_nnmf_templates(flux_cp, ivar_cp, n_templates, rng):
 # ----------------------------------------------------------------------------
 # Module-level globals populated per-worker via the Pool initializer, so the
 # (large) flux/ivar/template arrays are not pickled on every task.
-_W = None        # templates (n_pix, n_templates)
-_FLUX = None     # (n_pix, n_obj)
-_IVAR = None     # (n_pix, n_obj)
+_W = None         # templates (n_pix, n_templates)
+_FLUX = None      # (n_pix, n_obj)
+_IVAR = None      # (n_pix, n_obj)
+_LINE_MASK = None # (n_pix,) bool: pixels inside emission-line windows
 
 
-def _init_fit_worker(W, flux, ivar):
-    global _W, _FLUX, _IVAR
-    _W, _FLUX, _IVAR = W, flux, ivar
+def _init_fit_worker(W, flux, ivar, line_mask):
+    global _W, _FLUX, _IVAR, _LINE_MASK
+    _W, _FLUX, _IVAR, _LINE_MASK = W, flux, ivar, line_mask
 
 
 def _fit_one(i):
-    """Return rnorm^2 (= chi^2) for object i: min_x>=0 ||sqrt(ivar)(W x - flux)||^2."""
+    """Fit object i (min_x>=0 ||sqrt(ivar)(W x - flux)||^2) and return
+    (global chi^2, line-window chi^2)."""
     sqrt_ivar = np.sqrt(_IVAR[:, i])
     A = sqrt_ivar[:, None] * _W
     b = sqrt_ivar * _FLUX[:, i]
-    _, rnorm = nnls(A, b)
-    return rnorm * rnorm
+    coeffs, rnorm = nnls(A, b)
+    chi2_global = rnorm * rnorm                       # = sum ivar*(flux-fit)^2
+    fit = _W @ coeffs
+    chi2_pix = _IVAR[:, i] * (_FLUX[:, i] - fit) ** 2
+    chi2_lines = float(chi2_pix[_LINE_MASK].sum())
+    return chi2_global, chi2_lines
 
 
-def fit_chi2(W, flux, ivar, n_proc):
-    """Per-object chi^2 (= sum ivar*(flux-fit)^2) for all columns of flux."""
+def fit_chi2(W, flux, ivar, line_mask, n_proc):
+    """Per-object global and line-window chi^2 for all columns of flux."""
     n_obj = flux.shape[1]
     with Pool(processes=n_proc, initializer=_init_fit_worker,
-              initargs=(W, flux, ivar)) as pool:
-        chi2 = list(pool.imap(_fit_one, range(n_obj), chunksize=256))
-    return np.asarray(chi2)
+              initargs=(W, flux, ivar, line_mask)) as pool:
+        out = list(pool.imap(_fit_one, range(n_obj), chunksize=256))
+    out = np.asarray(out)                             # (n_obj, 2)
+    return out[:, 0], out[:, 1]
+
+
+def build_line_mask(wave_rest, centers, halfwidth):
+    """Boolean mask of pixels within +/- halfwidth of any line center."""
+    mask = np.zeros(wave_rest.shape, dtype=bool)
+    for c in centers:
+        mask |= np.abs(wave_rest - c) <= halfwidth
+    return mask
 
 
 def reduced_chi2(chi2, n_good, n_templates):
@@ -181,6 +209,21 @@ if __name__ == "__main__":
     ngood_train = (ivar_train > 0).sum(axis=0)
     ngood_valid = (ivar_valid > 0).sum(axis=0)
 
+    # Emission-line window mask + good line-pixel counts (normalize the line chi^2).
+    line_mask = build_line_mask(wave_rest, LINE_CENTERS, LINE_HALFWIDTH)
+    print(f"line-window pixels: {int(line_mask.sum())} of {line_mask.size}")
+    ngood_line_train = ((ivar_train > 0) & line_mask[:, None]).sum(axis=0)
+    ngood_line_valid = ((ivar_valid > 0) & line_mask[:, None]).sum(axis=0)
+
+    # Per-object SNR proxy (median per-pixel S/N over good pixels) -> high-SNR cut.
+    snr_pix = flux_valid * np.sqrt(ivar_valid)
+    snr_pix[ivar_valid <= 0] = np.nan
+    snr_valid = np.nanmedian(snr_pix, axis=0)
+    del snr_pix
+    hi_mask = snr_valid >= np.nanpercentile(snr_valid, 100 * (1 - HISNR_TOP_FRACTION))
+    print(f"high-SNR subset: {int(hi_mask.sum())} objects "
+          f"(top {HISNR_TOP_FRACTION:.0%} by median S/N)")
+
     # Move the training data to the GPU once and reuse across the whole grid.
     print_stage("Moving training data to GPU")
     flux_train_cp = cp.array(flux_train)
@@ -200,35 +243,51 @@ if __name__ == "__main__":
 
         # Fit to validation and training sets.
         t0 = time.time()
-        chi2_valid = fit_chi2(W, flux_valid, ivar_valid, N_PROC)
-        chi2_train = fit_chi2(W, flux_train, ivar_train, N_PROC)
+        chi2_valid, chi2line_valid = fit_chi2(W, flux_valid, ivar_valid, line_mask, N_PROC)
+        chi2_train, chi2line_train = fit_chi2(W, flux_train, ivar_train, line_mask, N_PROC)
         t_fit = time.time() - t0
         print(f"  fit (valid+train) in {t_fit:.1f} s")
 
         rc_valid = reduced_chi2(chi2_valid, ngood_valid, n_templates)
         rc_train = reduced_chi2(chi2_train, ngood_train, n_templates)
+        # Line-region chi^2 per good line-pixel (model already fixed, so no -k).
+        rcline_valid = chi2line_valid / np.maximum(ngood_line_valid, 1)
+        rcline_train = chi2line_train / np.maximum(ngood_line_train, 1)
 
-        per_object[f"redchi2_valid_ntemp{n_templates}"] = rc_valid.astype("f4")
-        per_object[f"redchi2_train_ntemp{n_templates}"] = rc_train.astype("f4")
-        np.save(f"{RESULTS_DIR}/redchi2_valid_ntemp{n_templates}.npy", rc_valid.astype("f4"))
-        np.save(f"{RESULTS_DIR}/redchi2_train_ntemp{n_templates}.npy", rc_train.astype("f4"))
+        for tag, arr in (("redchi2_valid", rc_valid), ("redchi2_train", rc_train),
+                         ("redchi2line_valid", rcline_valid),
+                         ("redchi2line_train", rcline_train)):
+            per_object[f"{tag}_ntemp{n_templates}"] = arr.astype("f4")
+            np.save(f"{RESULTS_DIR}/{tag}_ntemp{n_templates}.npy", arr.astype("f4"))
 
+        # (name, reduced-chi^2 array, raw chi^2 array for the total) for each metric.
+        metrics = [
+            ("valid",       rc_valid,            chi2_valid),
+            ("train",       rc_train,            chi2_train),
+            ("valid_line",  rcline_valid,        chi2line_valid),
+            ("train_line",  rcline_train,        chi2line_train),
+            ("valid_hisnr", rc_valid[hi_mask],   chi2_valid[hi_mask]),
+        ]
         row = {"n_templates": n_templates,
                "train_seconds": t_train, "fit_seconds": t_fit}
-        for name, rc in (("valid", rc_valid), ("train", rc_train)):
+        for name, rc, chi2 in metrics:
             pcts = np.percentile(rc, PERCENTILES)
             for p, v in zip(PERCENTILES, pcts):
                 row[f"{name}_p{p}"] = v
             row[f"{name}_mean"] = float(np.mean(rc))
-            # total catalog chi^2 (un-reduced) -- the sum the user mentioned
-            row[f"{name}_total_chi2"] = float(np.sum(chi2_valid if name == "valid" else chi2_train))
+            row[f"{name}_total_chi2"] = float(np.sum(chi2))   # un-reduced catalog sum
             for thr in OUTLIER_THRESHOLDS:
                 row[f"{name}_frac_gt{thr}"] = float(np.mean(rc > thr))
         rows.append(row)
 
-        med = row["valid_p50"]
-        lo, hi = row["valid_p16"], row["valid_p84"]
-        print(f"  VALID reduced chi2: median={med:.3f}  [16,84]=[{lo:.3f}, {hi:.3f}]")
+        print(f"  VALID global redchi2: median={row['valid_p50']:.3f}  "
+              f"[16,84]=[{row['valid_p16']:.3f}, {row['valid_p84']:.3f}]  "
+              f"p90={row['valid_p90']:.3f}  p99={row['valid_p99']:.3f}  "
+              f"frac>2={row['valid_frac_gt2.0']:.4f}")
+        print(f"  VALID line   redchi2: median={row['valid_line_p50']:.3f}  "
+              f"p90={row['valid_line_p90']:.3f}  p99={row['valid_line_p99']:.3f}")
+        print(f"  VALID hi-SNR redchi2: median={row['valid_hisnr_p50']:.3f}  "
+              f"p90={row['valid_hisnr_p90']:.3f}  p99={row['valid_hisnr_p99']:.3f}")
 
     # ------------------------------------------------------------------
     # Save summary table
@@ -237,7 +296,6 @@ if __name__ == "__main__":
     tab = Table(rows)
     tab.write(f"{RESULTS_DIR}/ntemplate_scan_summary.csv", overwrite=True)
     np.savez(f"{RESULTS_DIR}/ntemplate_scan_summary.npz",
-             n_templates=np.array(N_TEMPLATE_GRID),
              **{c: np.array(tab[c]) for c in tab.colnames},
              **per_object)
     print(tab)
@@ -246,10 +304,10 @@ if __name__ == "__main__":
     # Diagnostic plots
     # ------------------------------------------------------------------
     n_arr = np.array(tab["n_templates"])
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5.5), layout="constrained")
+    fig, axes = plt.subplots(2, 2, figsize=(15, 11), layout="constrained")
 
-    # Panel 1: median + 16-84 band, validation vs training.
-    ax = axes[0]
+    # Panel 1: global median + 16-84 band, validation vs training.
+    ax = axes[0, 0]
     ax.fill_between(n_arr, tab["valid_p16"], tab["valid_p84"],
                     color="C0", alpha=0.25, label="validation 16-84%")
     ax.plot(n_arr, tab["valid_p50"], "-o", color="C0", label="validation median")
@@ -257,17 +315,40 @@ if __name__ == "__main__":
     ax.axhline(1.0, color="k", ls=":", lw=1, label=r"$\chi^2_\nu = 1$")
     ax.set_xlabel("number of NNMF templates")
     ax.set_ylabel(r"reduced $\chi^2$ (per object)")
-    ax.set_title("Reconstruction quality vs. template count")
+    ax.set_title("Global reconstruction quality")
     ax.legend()
 
-    # Panel 2: tail of the distribution + outlier fractions (validation).
-    ax = axes[1]
+    # Panel 2: global tail (validation).
+    ax = axes[0, 1]
     ax.plot(n_arr, tab["valid_p90"], "-o", label="90th pct")
     ax.plot(n_arr, tab["valid_p97.5"], "-s", label="97.5th pct")
     ax.plot(n_arr, tab["valid_p99"], "-^", label="99th pct")
     ax.set_xlabel("number of NNMF templates")
     ax.set_ylabel(r"reduced $\chi^2$ (validation tail)")
-    ax.set_title("Poorly-fit tail vs. template count")
+    ax.set_title("Global poorly-fit tail")
+    ax.legend()
+
+    # Panel 3: emission-line-window chi^2 (validation), median + band + tail.
+    ax = axes[1, 0]
+    ax.fill_between(n_arr, tab["valid_line_p16"], tab["valid_line_p84"],
+                    color="C2", alpha=0.25, label="validation 16-84%")
+    ax.plot(n_arr, tab["valid_line_p50"], "-o", color="C2", label="median")
+    ax.plot(n_arr, tab["valid_line_p90"], "-^", color="C2", alpha=0.6, label="90th pct")
+    ax.plot(n_arr, tab["valid_line_p99"], ":d", color="C2", alpha=0.6, label="99th pct")
+    ax.set_xlabel("number of NNMF templates")
+    ax.set_ylabel(r"line-window $\chi^2$ / line pixel")
+    ax.set_title("Emission-line region fit quality")
+    ax.legend()
+
+    # Panel 4: high-SNR subset vs all objects (validation), median + tail.
+    ax = axes[1, 1]
+    ax.plot(n_arr, tab["valid_p50"], "--o", color="0.5", label="all: median")
+    ax.plot(n_arr, tab["valid_hisnr_p50"], "-o", color="C1", label="hi-SNR: median")
+    ax.plot(n_arr, tab["valid_hisnr_p90"], "-^", color="C1", alpha=0.7, label="hi-SNR: 90th")
+    ax.plot(n_arr, tab["valid_hisnr_p99"], ":d", color="C1", alpha=0.7, label="hi-SNR: 99th")
+    ax.set_xlabel("number of NNMF templates")
+    ax.set_ylabel(r"reduced $\chi^2$ (per object)")
+    ax.set_title(f"High-SNR subset (top {HISNR_TOP_FRACTION:.0%})")
     ax.legend()
 
     plt.savefig(f"{RESULTS_DIR}/ntemplate_scan.pdf", bbox_inches="tight")
