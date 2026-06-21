@@ -18,10 +18,14 @@
 #SBATCH --job-name=mh_xmatch
 #SBATCH --output=mh_xmatch_%j.log
 
-set -euo pipefail
+# -e and pipefail are safe throughout. nounset (-u) is enabled only AFTER the
+# DESI environment is loaded: conda activation and desi_environment.sh reference
+# unset vars (e.g. DESI_ROOT) and would abort the job under -u.
+set -eo pipefail
 
 cd /global/u1/v/virajvm/DESI2_LOWZ
 source /global/cfs/cdirs/desi/software/desi_environment.sh main
+set -u
 
 # One thread per BLAS op; parallelism comes from the script's process Pool.
 export OMP_NUM_THREADS=1
