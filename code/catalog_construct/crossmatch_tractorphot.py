@@ -4,57 +4,59 @@ crossmatch_tractorphot.py
 =========================
 
 Stage 2 of the matterhorn BGS/LOW_Z catalog build. Takes the output of
-`select_matterhorn_bgs_lowz.py`, cross-matches it to the Legacy Surveys Tractor
-catalogs to recover the columns the zcatalog does NOT carry, applies the
-FRACFLUX cut, and adds Galactic-extinction-corrected magnitudes.
+`select_matterhorn_bgs_lowz.py`, attaches the photometric columns the zcatalog
+does NOT carry (FRACFLUX, MW_TRANSMISSION, ...), applies the FRACFLUX cut, and
+adds Galactic-extinction-corrected magnitudes. Writes TWO catalogs:
 
-Why this step exists
---------------------
-The matterhorn zcatalog has FLUX_G/R/Z + EBV but NOT FRACFLUX (a Tractor-only
-contamination diagnostic) and NOT MW_TRANSMISSION. Both come for free from the
-Tractor catalogs. There is no matterhorn `tractorphot` VAC, so we gather the
-photometry on the fly with `desispec.io.photo.gather_tractorphot`, which:
-  * matches deterministically on RELEASE + BRICKID + BRICK_OBJID (carried by the
-    stage-1 catalog), falling back to a 1" positional match, and
-  * returns the full Tractor row, incl. FRACFLUX_*, FRACMASKED_*, FRACIN_*,
-    RCHISQ_*, NOBS_*, and MW_TRANSMISSION_*.
+  *_phot.fits   ALL z<0.2 selected objects with photometry + flags (no cut)
+  *_clean.fits  the subset that is matched AND passes the FRACFLUX cut
 
-Cost scales with the number of UNIQUE BRICKS the sample touches (one Tractor
-file read per brick), so this script parallelizes over bricks with
-multiprocessing (`--nproc`) and prints the unique-brick count up front.
+Two photometry sources, by target class
+---------------------------------------
+* BGS objects (BGS_BRIGHT or BGS_FAINT, including objects that are ALSO LOW_Z):
+  `desispec.io.photo.gather_tractorphot` against the Legacy Surveys Tractor
+  catalogs (matched on RELEASE+BRICKID+BRICK_OBJID, 1" positional fallback).
 
-What it produces
-----------------
-Adds to the stage-1 catalog: FRACFLUX_{G,R,Z}, FRACMASKED_{G,R,Z},
-FRACIN_{G,R,Z}, RCHISQ_{G,R,Z}, NOBS_{G,R,Z}, MW_TRANSMISSION_{G,R,Z},
-dereddened MAG_{G,R,Z}_DERED, and the booleans TRACTORPHOT_MATCH / FRACFLUX_PASS.
-By default it then WRITES ONLY rows that matched AND pass the FRACFLUX cut
-(use --keep-all to write every row with the flags instead).
+* LOW_Z-only objects (IS_LOWZ and NOT BGS): the LOW_Z target selection was done
+  separately, so their photometry comes from Elise's DR9 LOW_Z target catalogs
+  (north + south), combined with the exact footprint logic from
+  construct_dwarf_galaxy_catalogs.py and matched positionally at 1". ALL
+  photometry (FLUX/FLUX_IVAR/FIBERFLUX/MW_TRANSMISSION/FRACFLUX/...) is taken
+  from Elise for these objects. LOW_Z-only objects that miss Elise fall back to
+  gather_tractorphot (recorded as PHOT_SOURCE='tractorphot_fallback').
+
+Provenance: PHOT_SOURCE in {'tractorphot','lowz_target','tractorphot_fallback',
+'none'}; PHOT_MATCH = (PHOT_SOURCE != 'none').
 
 FRACFLUX cut (this build): keep only objects with FRACFLUX_G < f AND
-FRACFLUX_R < f AND FRACFLUX_Z < f (all three bands; f = --fracflux-max, def 0.35).
-Unmatched objects get FRACFLUX = NaN and therefore fail the cut.
+FRACFLUX_R < f AND FRACFLUX_Z < f (all three; f = --fracflux-max, def 0.35).
+Unmatched objects get FRACFLUX=NaN and therefore fail.
 
-Dereddening: MAG_X_DERED = 22.5 - 2.5*log10(FLUX_X / MW_TRANSMISSION_X), using
-the Tractor MW_TRANSMISSION (identical to what the iron pipeline divided by).
+Dereddening: MAG_X_DERED = 22.5 - 2.5*log10(FLUX_X / MW_TRANSMISSION_X).
+Raw MAG_X are recomputed from the final (source) FLUX so mags and FLUX agree.
+
+Cost scales with the number of UNIQUE BRICKS the BGS/fallback set touches (one
+Tractor file read each); parallelized over bricks with `--nproc`, with progress.
 
 Examples
 --------
-  python crossmatch_tractorphot.py                       # defaults (pix, nproc 128)
-  python crossmatch_tractorphot.py --nproc 1             # serial (small samples)
-  python crossmatch_tractorphot.py --keep-all            # don't drop; just flag
-  python crossmatch_tractorphot.py --legacysurveydir /global/cfs/cdirs/desi/external/legacysurvey/dr10
+  python crossmatch_tractorphot.py
+  python crossmatch_tractorphot.py --nproc 1
+  python crossmatch_tractorphot.py --output /path/mh_clean.fits --phot-output /path/mh_phot.fits
 
 Author: Viraj Manwadkar (desi_dwarfs)
 """
 
 import os
+import time
 import argparse
 from functools import partial
 from multiprocessing import Pool
 
 import numpy as np
 from astropy.table import Table, vstack
+from astropy.coordinates import SkyCoord
+import astropy.units as u
 
 from desiutil.log import get_logger
 from desiutil.brick import brickname as radec_to_brickname
@@ -63,18 +65,26 @@ from desispec.io.photo import gather_tractorphot
 log = get_logger()
 
 DEFAULT_INPUT = "/pscratch/sd/v/virajvm/matterhorn/matterhorn_pix_bgs_lowz_raw.fits"
-DEFAULT_OUTPUT = "/pscratch/sd/v/virajvm/matterhorn/matterhorn_pix_bgs_lowz_clean.fits"
+DEFAULT_CLEAN = "/pscratch/sd/v/virajvm/matterhorn/matterhorn_pix_bgs_lowz_clean.fits"
+DEFAULT_NORTH = "/pscratch/sd/v/virajvm/target/dr9_north_lowz_targets_no_rfib_cut.fits"
+DEFAULT_SOUTH = "/pscratch/sd/v/virajvm/target/dr9_south_lowz_targets_no_rfib_cut_dec20.fits"
 
-# Tractor columns to carry into the final catalog (besides the match keys).
-FRAC_BANDS = ("G", "R", "Z")
-TRACTOR_FLOAT_COLS = (
-    [f"FRACFLUX_{b}" for b in FRAC_BANDS]
-    + [f"FRACMASKED_{b}" for b in FRAC_BANDS]
-    + [f"FRACIN_{b}" for b in FRAC_BANDS]
-    + [f"RCHISQ_{b}" for b in FRAC_BANDS]
-    + [f"MW_TRANSMISSION_{b}" for b in FRAC_BANDS]
+BANDS = ("G", "R", "Z")
+# Photometry columns already present in the stage-1 catalog (from the imaging
+# file): kept for unmatched rows, overwritten by the matched source otherwise.
+EXISTING_FLOAT = [f"FLUX_{b}" for b in BANDS] + [f"FLUX_IVAR_{b}" for b in BANDS]
+EXISTING_INT = ["MASKBITS", "RELEASE", "BRICKID", "BRICK_OBJID"]
+# New columns supplied by the photometry match (NaN / -1 where unmatched).
+NEW_FLOAT = (
+    [f"FIBERFLUX_{b}" for b in BANDS]
+    + [f"MW_TRANSMISSION_{b}" for b in BANDS]
+    + [f"FRACFLUX_{b}" for b in BANDS]
+    + [f"FRACMASKED_{b}" for b in BANDS]
+    + [f"FRACIN_{b}" for b in BANDS]
+    + [f"RCHISQ_{b}" for b in BANDS]
 )
-TRACTOR_INT_COLS = [f"NOBS_{b}" for b in FRAC_BANDS]
+NEW_INT = [f"NOBS_{b}" for b in BANDS]
+WANT_COLS = EXISTING_FLOAT + EXISTING_INT + NEW_FLOAT + NEW_INT
 
 # Columns gather_tractorphot wants for an exact (non-positional) match.
 MATCH_COLS = ["TARGETID", "TARGET_RA", "TARGET_DEC",
@@ -83,83 +93,207 @@ MATCH_COLS = ["TARGETID", "TARGET_RA", "TARGET_DEC",
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Cross-match the matterhorn BGS/LOW_Z selection to Tractor photometry.",
+        description="Attach Tractor / LOW_Z-target photometry to the matterhorn selection.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--input", default=DEFAULT_INPUT, help="Stage-1 selection FITS.")
-    p.add_argument("--output", default=DEFAULT_OUTPUT, help="Output cleaned FITS.")
+    p.add_argument("--output", default=DEFAULT_CLEAN, help="Cleaned (FRACFLUX-cut) FITS.")
+    p.add_argument("--phot-output", default=None,
+                   help="Full (no-cut) photometry FITS. Default: --output with "
+                        "'_clean'->'_phot' (or '_phot' appended).")
+    p.add_argument("--north-targets", default=DEFAULT_NORTH, help="Elise DR9 north LOW_Z targets.")
+    p.add_argument("--south-targets", default=DEFAULT_SOUTH, help="Elise DR9 south LOW_Z targets.")
     p.add_argument("--legacysurveydir", default=None,
                    help="Legacy Surveys Tractor dir. Default: "
                         "$DESI_ROOT/external/legacysurvey/dr9 (resolved by desispec).")
     p.add_argument("--nproc", type=int, default=128,
-                   help="Worker processes (parallelize over bricks). 1 = serial.")
+                   help="Worker processes for the Tractor gather. 1 = serial.")
     p.add_argument("--fracflux-max", type=float, default=0.35,
                    help="Keep objects with FRACFLUX < this in ALL of g,r,z.")
-    p.add_argument("--keep-all", action="store_true",
-                   help="Write every row with flag columns instead of dropping "
-                        "unmatched / FRACFLUX-failing rows.")
     return p.parse_args()
 
 
-def normalize_str_col(tab, col):
-    """Ensure a character column is unicode (FITS round-trips can yield bytes)."""
-    if col in tab.colnames and tab[col].dtype.kind == "S":
-        tab[col] = np.char.decode(np.asarray(tab[col]), "utf-8")
+def derive_phot_output(clean_path):
+    base, ext = os.path.splitext(clean_path)
+    if "_clean" in base:
+        return base.replace("_clean", "_phot") + ext
+    return base + "_phot" + ext
 
 
-def filled_bricknames(cat):
-    """Brick name per row, computing blanks from RA/Dec (for the brick split)."""
-    n = len(cat)
-    if "BRICKNAME" in cat.colnames:
-        bn = np.asarray(cat["BRICKNAME"]).astype(str)
-        bn = np.char.strip(bn)
+# --------------------------------------------------------------------------- #
+# Tractor gather (BGS + LOW_Z fallback), parallelized over bricks
+# --------------------------------------------------------------------------- #
+def filled_bricknames(input_tab):
+    n = len(input_tab)
+    if "BRICKNAME" in input_tab.colnames:
+        bn = np.char.strip(np.asarray(input_tab["BRICKNAME"]).astype(str))
     else:
         bn = np.full(n, "", dtype="<U8")
     blank = bn == ""
     if blank.any():
         bn = bn.astype("<U8")
-        bn[blank] = radec_to_brickname(np.asarray(cat["TARGET_RA"])[blank],
-                                       np.asarray(cat["TARGET_DEC"])[blank])
+        bn[blank] = radec_to_brickname(np.asarray(input_tab["TARGET_RA"])[blank],
+                                       np.asarray(input_tab["TARGET_DEC"])[blank])
     return bn
 
 
-def split_indices_by_brick(bricknames, nproc):
-    """Partition row indices into <=nproc groups, each holding whole bricks."""
-    uniq = np.unique(bricknames)
-    brick_bin = {b: i % nproc for i, b in enumerate(uniq)}
-    binid = np.fromiter((brick_bin[b] for b in bricknames), dtype=np.int64,
-                        count=len(bricknames))
-    groups = [np.where(binid == k)[0] for k in range(nproc)]
-    return [g for g in groups if g.size > 0], len(uniq)
-
-
-def _gather_worker(input_sub, legacysurveydir):
-    """Top-level so it is picklable; returns Tractor photometry for input_sub."""
-    return gather_tractorphot(input_sub, legacysurveydir=legacysurveydir, verbose=False)
-
-
-def gather_all(input_tab, legacysurveydir, nproc):
-    """Run gather_tractorphot over the whole input, parallelized over bricks.
-
-    Returns a photometry Table row-aligned to `input_tab`.
-    """
-    if nproc <= 1 or len(input_tab) < 2:
-        phot = gather_tractorphot(input_tab, legacysurveydir=legacysurveydir, verbose=False)
-        return phot
-
+def make_brick_batches(input_tab, nproc):
+    """Group rows into ~8x nproc batches of whole bricks (for progress + parallelism)."""
     bn = filled_bricknames(input_tab)
-    groups, _ = split_indices_by_brick(bn, nproc)
-    sub_tabs = [input_tab[idx] for idx in groups]
+    uniq_bricks = np.unique(bn)
+    n_bricks = uniq_bricks.size
+    n_batches = max(1, min(n_bricks, nproc * 8))
+    brick_to_batch = {b: i for i, arr in enumerate(np.array_split(uniq_bricks, n_batches))
+                      for b in arr}
+    batch_id = np.fromiter((brick_to_batch[b] for b in bn), dtype=np.int64, count=len(bn))
+    batches = []
+    for i in range(n_batches):
+        idx = np.where(batch_id == i)[0]
+        if idx.size:
+            batches.append((idx, input_tab[idx]))
+    return batches, n_bricks
 
-    with Pool(processes=min(nproc, len(sub_tabs))) as pool:
-        results = pool.map(partial(_gather_worker, legacysurveydir=legacysurveydir), sub_tabs)
 
-    phot_concat = vstack(results, join_type="exact")
-    order = np.concatenate(groups)              # cat-row index for each phot_concat row
-    phot = phot_concat[np.argsort(order)]       # back to input_tab order
-    return phot
+def _gather_worker(batch, legacysurveydir):
+    rowidx, sub_tab = batch
+    return rowidx, gather_tractorphot(sub_tab, legacysurveydir=legacysurveydir, verbose=False)
 
 
+def gather_all(input_tab, legacysurveydir, nproc, label=""):
+    """gather_tractorphot over input_tab, batched over bricks, with progress/ETA."""
+    batches, n_bricks = make_brick_batches(input_tab, nproc)
+    n_batches = len(batches)
+    log.info(f"[{label}] Gathering {len(input_tab):,} sources across {n_bricks:,} bricks "
+             f"in {n_batches} batches on {nproc} process(es)...")
+    worker = partial(_gather_worker, legacysurveydir=legacysurveydir)
+    log_every = max(1, n_batches // 50)
+    t0 = time.monotonic()
+    idx_parts, phot_parts = [], []
+
+    def _record(done, rowidx, phot_sub):
+        idx_parts.append(rowidx)
+        phot_parts.append(phot_sub)
+        if done % log_every == 0 or done == n_batches:
+            el = time.monotonic() - t0
+            frac = done / n_batches
+            eta = el * (1 - frac) / frac if frac > 0 else 0.0
+            log.info(f"  [{label}] progress: {done}/{n_batches} batches ({100*frac:.1f}%), "
+                     f"elapsed {el/60:.1f} min, ETA ~{eta/60:.1f} min")
+
+    if nproc <= 1:
+        for done, batch in enumerate(batches, start=1):
+            rowidx, phot_sub = worker(batch)
+            _record(done, rowidx, phot_sub)
+    else:
+        with Pool(processes=min(nproc, n_batches)) as pool:
+            for done, (rowidx, phot_sub) in enumerate(pool.imap_unordered(worker, batches), start=1):
+                _record(done, rowidx, phot_sub)
+
+    log.info(f"  [{label}] gather finished in {(time.monotonic() - t0)/60:.1f} min.")
+    phot_concat = vstack(phot_parts, join_type="exact")
+    order = np.concatenate(idx_parts)
+    return phot_concat[np.argsort(order)]
+
+
+def gather_dedup(input_tab, legacysurveydir, nproc, label=""):
+    """Gather Tractor photometry, deduplicating by photometric source first.
+
+    Several DESI TARGETIDs (main + SV, primary + secondary) can point at the
+    same Legacy Surveys source (same RELEASE+BRICKID+BRICK_OBJID); gather_tractorphot
+    rejects duplicate BRICK_OBJID within a brick, so we gather once per unique
+    source and broadcast back. Returns photometry row-aligned to input_tab.
+    """
+    n = len(input_tab)
+
+    def _col(name):
+        return (np.asarray(input_tab[name], dtype=np.int64)
+                if name in input_tab.colnames else np.zeros(n, dtype=np.int64))
+
+    release, brickid, objid = _col("RELEASE"), _col("BRICKID"), _col("BRICK_OBJID")
+    valid = (release > 0) & (brickid > 0) & (objid > 0)
+    srckey = (release << 40) | (brickid << 16) | objid
+    srckey[~valid] = -(np.arange(n)[~valid] + 1)
+
+    uniq, uniq_idx, inverse = np.unique(srckey, return_index=True, return_inverse=True)
+    if uniq.size < n:
+        log.info(f"[{label}] {n:,} rows -> {uniq.size:,} unique photometric sources "
+                 f"({n - uniq.size:,} TARGETIDs share a source).")
+    phot_uniq = gather_all(input_tab[uniq_idx], legacysurveydir, nproc, label=label)
+    return phot_uniq[inverse]
+
+
+# --------------------------------------------------------------------------- #
+# LOW_Z-only photometry from Elise's DR9 LOW_Z target catalogs
+# --------------------------------------------------------------------------- #
+def _galactic_b(ra, dec):
+    return SkyCoord(ra=np.asarray(ra) * u.degree,
+                    dec=np.asarray(dec) * u.degree, frame="icrs").galactic.b.value
+
+
+def remove_south_lowz(data):
+    """North target catalog footprint (mirrors construct_dwarf_galaxy_catalogs.py)."""
+    b = _galactic_b(data["RA"], data["DEC"])
+    dec = np.asarray(data["DEC"])
+    return data[(b > 0) & (dec > 32.375) & (np.abs(b) > 15.0)]
+
+
+def clean_south_lowz(data):
+    """South target catalog footprint (mirrors construct_dwarf_galaxy_catalogs.py).
+
+    NB: faithfully reproduces the original, where the |b|>15 line is overwritten,
+    so the effective selection is (DEC < 32.375) | (b < 0).
+    """
+    b = _galactic_b(data["RA"], data["DEC"])
+    dec = np.asarray(data["DEC"])
+    return data[(dec < 32.375) | (b < 0)]
+
+
+def _match_sky(ra1, dec1, ra2, dec2):
+    c1 = SkyCoord(ra=ra1 * u.degree, dec=dec1 * u.degree)
+    c2 = SkyCoord(ra=ra2 * u.degree, dec=dec2 * u.degree)
+    idx, d2d, _ = c1.match_to_catalog_sky(c2)
+    return idx, d2d.arcsec
+
+
+def match_lowz_targets(sub, north_path, south_path):
+    """Positionally match LOW_Z-only objects (1") to Elise's combined north+south
+    target catalog, with a south-only fallback for the overlap region (mirrors
+    construct_dwarf_galaxy_catalogs.get_lowz_catalogs).
+
+    Returns (src_table aligned to `sub`, matched bool array).
+    """
+    log.info(f"[lowz] reading Elise LOW_Z target catalogs:\n  {north_path}\n  {south_path}")
+    north = Table.read(north_path)
+    south = Table.read(south_path)
+    total = vstack([remove_south_lowz(north), clean_south_lowz(south)])
+
+    keep = ["RA", "DEC"] + [c for c in WANT_COLS if c in total.colnames and c in south.colnames]
+    total = total[keep]
+    south = south[keep]
+
+    ra = np.asarray(sub["TARGET_RA"], dtype=float)
+    dec = np.asarray(sub["TARGET_DEC"], dtype=float)
+
+    idx, sep = _match_sky(ra, dec, np.asarray(total["RA"], float), np.asarray(total["DEC"], float))
+    matched = sep <= 1.0
+    src = total[idx]                                  # aligned to sub
+    log.info(f"[lowz] {matched.sum():,}/{len(sub):,} matched to combined catalog at <=1\".")
+
+    nm = np.where(~matched)[0]
+    if nm.size:
+        idx2, sep2 = _match_sky(ra[nm], dec[nm],
+                                np.asarray(south["RA"], float), np.asarray(south["DEC"], float))
+        ok2 = sep2 <= 1.0
+        if ok2.any():
+            src[nm[ok2]] = south[idx2[ok2]]
+            matched[nm[ok2]] = True
+            log.info(f"[lowz] south-fallback recovered {ok2.sum():,} more matches.")
+    return src, matched
+
+
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
 def raw_mag(flux):
     flux = np.asarray(flux, dtype=np.float64)
     mag = np.full(flux.shape, np.nan)
@@ -168,99 +302,145 @@ def raw_mag(flux):
     return mag
 
 
+def fill_from_source(phot, global_idx, src, matched):
+    """Write src's WANT_COLS into the phot dict at global_idx[matched]."""
+    sel = global_idx[matched]
+    for c in EXISTING_FLOAT + NEW_FLOAT:
+        if c in src.colnames:
+            phot[c][sel] = np.asarray(src[c], dtype=np.float64)[matched]
+    for c in EXISTING_INT + NEW_INT:
+        if c in src.colnames:
+            phot[c][sel] = np.asarray(src[c])[matched].astype(np.int64)
+
+
 def main():
     args = parse_args()
-    log.info(f"input  : {args.input}")
-    log.info(f"output : {args.output}")
+    phot_output = args.phot_output or derive_phot_output(args.output)
+    log.info(f"input       : {args.input}")
+    log.info(f"phot output : {phot_output}")
+    log.info(f"clean output: {args.output}")
 
     cat = Table.read(args.input)
-    n_in = len(cat)
-    log.info(f"Loaded {n_in:,} selected objects.")
-    if n_in == 0:
+    n = len(cat)
+    log.info(f"Loaded {n:,} selected objects.")
+    if n == 0:
         raise SystemExit("Empty input catalog; nothing to do.")
 
     for c in ("BRICKNAME", "PHOTSYS"):
-        normalize_str_col(cat, c)
+        if c in cat.colnames and cat[c].dtype.kind == "S":
+            cat[c] = np.char.decode(np.asarray(cat[c]), "utf-8")
 
-    # Build the (copied) match input for gather_tractorphot.
-    have = [c for c in MATCH_COLS if c in cat.colnames]
-    for req in ("TARGETID", "TARGET_RA", "TARGET_DEC"):
-        if req not in have:
+    for req in ("TARGETID", "TARGET_RA", "TARGET_DEC",
+                "IS_BGS_BRIGHT", "IS_BGS_FAINT", "IS_LOWZ"):
+        if req not in cat.colnames:
             raise KeyError(f"Input catalog is missing required column {req}.")
-    input_tab = cat[have].copy()
+    input_tab = cat[[c for c in MATCH_COLS if c in cat.colnames]].copy()
 
-    bn = filled_bricknames(cat)
-    n_bricks = np.unique(bn).size
-    log.info(f"Sample touches {n_bricks:,} unique Legacy Surveys bricks "
-             f"(one Tractor file read each); nproc={args.nproc}.")
+    # ---- initialize the unified photometry arrays -------------------------- #
+    phot = {}
+    for c in EXISTING_FLOAT:
+        phot[c] = (np.asarray(cat[c], dtype=np.float64) if c in cat.colnames
+                   else np.full(n, np.nan))
+    for c in NEW_FLOAT:
+        phot[c] = np.full(n, np.nan)
+    for c in EXISTING_INT:
+        phot[c] = (np.asarray(cat[c]).astype(np.int64) if c in cat.colnames
+                   else np.full(n, -1, np.int64))
+    for c in NEW_INT:
+        phot[c] = np.full(n, -1, np.int64)
+    phot_source = np.full(n, "none", dtype="<U24")
 
-    # ---- gather Tractor photometry ----------------------------------------- #
-    phot = gather_all(input_tab, args.legacysurveydir, args.nproc)
-    if not np.array_equal(np.asarray(phot["TARGETID"]), np.asarray(cat["TARGETID"])):
-        raise RuntimeError("Tractor photometry is not row-aligned to the input; aborting.")
+    # ---- partition --------------------------------------------------------- #
+    is_bgs = np.asarray(cat["IS_BGS_BRIGHT"], bool) | np.asarray(cat["IS_BGS_FAINT"], bool)
+    lowz_only = np.asarray(cat["IS_LOWZ"], bool) & ~is_bgs
+    bgs_idx = np.where(is_bgs)[0]
+    lowz_idx = np.where(lowz_only)[0]
+    log.info(f"Partition: BGS (gather_tractorphot) = {bgs_idx.size:,}; "
+             f"LOW_Z-only (Elise) = {lowz_idx.size:,}.")
 
-    # Matched = a real DR9/DR10 Tractor source was found.
-    matched = np.asarray(phot["RELEASE"]) > 0
-    log.info(f"Tractor matches: {matched.sum():,} / {n_in:,} "
-             f"({100*matched.sum()/n_in:.1f}%); unmatched: {(~matched).sum():,}")
+    # ---- 1) BGS via gather_tractorphot ------------------------------------- #
+    if bgs_idx.size:
+        src = gather_dedup(input_tab[bgs_idx], args.legacysurveydir, args.nproc, label="bgs")
+        m = np.asarray(src["RELEASE"]) > 0
+        fill_from_source(phot, bgs_idx, src, m)
+        phot_source[bgs_idx[m]] = "tractorphot"
+        log.info(f"[bgs] matched {m.sum():,}/{bgs_idx.size:,}.")
 
-    # ---- attach Tractor columns (NaN/-1 where unmatched) ------------------- #
-    for col in TRACTOR_FLOAT_COLS:
-        vals = np.asarray(phot[col], dtype=np.float64).copy()
-        vals[~matched] = np.nan
-        cat[col] = vals
-    for col in TRACTOR_INT_COLS:
-        vals = np.asarray(phot[col]).astype(np.int32).copy()
-        vals[~matched] = -1
-        cat[col] = vals
+    # ---- 2) LOW_Z-only via Elise target catalogs (+ tractorphot fallback) -- #
+    if lowz_idx.size:
+        src, m = match_lowz_targets(cat[lowz_idx], args.north_targets, args.south_targets)
+        fill_from_source(phot, lowz_idx, src, m)
+        phot_source[lowz_idx[m]] = "lowz_target"
 
-    # ---- dereddened magnitudes (Tractor MW_TRANSMISSION) ------------------- #
-    for b in FRAC_BANDS:
-        flux = np.asarray(cat[f"FLUX_{b}"], dtype=np.float64)
-        mwt = np.asarray(cat[f"MW_TRANSMISSION_{b}"], dtype=np.float64)
+        miss = lowz_idx[~m]
+        if miss.size:
+            log.info(f"[lowz] {miss.size:,} LOW_Z-only objects missed Elise; "
+                     f"falling back to gather_tractorphot.")
+            src2 = gather_dedup(input_tab[miss],
+                                args.legacysurveydir, args.nproc, label="lowz-fallback")
+            m2 = np.asarray(src2["RELEASE"]) > 0
+            fill_from_source(phot, miss, src2, m2)
+            phot_source[miss[m2]] = "tractorphot_fallback"
+            log.info(f"[lowz-fallback] recovered {m2.sum():,}/{miss.size:,}.")
+
+    # ---- derived quantities ------------------------------------------------ #
+    matched = phot_source != "none"
+    rel = phot["RELEASE"].astype(np.int64)
+    bid = phot["BRICKID"].astype(np.int64)
+    oid = phot["BRICK_OBJID"].astype(np.int64)
+    ls_id = np.where(rel > 0, (rel << 40) | (bid << 16) | oid, 0)
+
+    for b in BANDS:
+        cat[f"FLUX_{b}"] = phot[f"FLUX_{b}"]
+        cat[f"FLUX_IVAR_{b}"] = phot[f"FLUX_IVAR_{b}"]
+        cat[f"MAG_{b}"] = raw_mag(phot[f"FLUX_{b}"])
         with np.errstate(invalid="ignore", divide="ignore"):
-            dered_flux = np.where(mwt > 0, flux / mwt, np.nan)
-        cat[f"MAG_{b}_DERED"] = raw_mag(dered_flux)
+            dered = np.where(phot[f"MW_TRANSMISSION_{b}"] > 0,
+                             phot[f"FLUX_{b}"] / phot[f"MW_TRANSMISSION_{b}"], np.nan)
+        cat[f"MAG_{b}_DERED"] = raw_mag(dered)
+    for c in NEW_FLOAT + NEW_INT + ["MASKBITS", "RELEASE", "BRICKID", "BRICK_OBJID"]:
+        cat[c] = phot[c]
+    cat["LS_ID"] = ls_id
+    cat["PHOT_SOURCE"] = phot_source
+    cat["PHOT_MATCH"] = matched
 
-    # ---- FRACFLUX cut: all three bands < fmax (NaN -> fails) --------------- #
     fmax = args.fracflux_max
     with np.errstate(invalid="ignore"):
-        fracflux_pass = (
-            (np.asarray(cat["FRACFLUX_G"]) < fmax)
-            & (np.asarray(cat["FRACFLUX_R"]) < fmax)
-            & (np.asarray(cat["FRACFLUX_Z"]) < fmax)
-        )
-    cat["TRACTORPHOT_MATCH"] = matched
+        fracflux_pass = ((phot["FRACFLUX_G"] < fmax) & (phot["FRACFLUX_R"] < fmax)
+                         & (phot["FRACFLUX_Z"] < fmax))
     cat["FRACFLUX_PASS"] = fracflux_pass
-    log.info(f"FRACFLUX (all g,r,z < {fmax}) pass: {fracflux_pass.sum():,}; "
-             f"matched & pass: {(matched & fracflux_pass).sum():,}")
 
-    # ---- write ------------------------------------------------------------- #
-    if args.keep_all:
-        out = cat
-        log.info(f"--keep-all: writing all {len(out):,} rows (with flag columns).")
-    else:
-        keep = matched & fracflux_pass
-        out = cat[keep]
-        log.info(f"Writing {len(out):,} cleaned rows "
-                 f"(dropped {(~keep).sum():,}: unmatched or FRACFLUX-failing).")
+    # ---- report ------------------------------------------------------------ #
+    log.info("PHOT_SOURCE breakdown:")
+    for src_name in ("tractorphot", "lowz_target", "tractorphot_fallback", "none"):
+        log.info(f"  {src_name:22s}: {(phot_source == src_name).sum():,}")
+    keep = matched & fracflux_pass
+    log.info(f"matched={matched.sum():,}; FRACFLUX(all g,r,z<{fmax}) pass={fracflux_pass.sum():,}; "
+             f"clean (matched & pass)={keep.sum():,}")
 
-    out.meta["EXTNAME"] = "BGS_LOWZ_CLEAN"
-    out.meta["NIN"] = n_in
-    out.meta["NMATCH"] = int(matched.sum())
-    out.meta["NOUT"] = len(out)
-    out.meta["FFLUXMAX"] = fmax
-    out.meta["FFLUXDEF"] = "all g,r,z < FFLUXMAX"
-    out.meta["LSDIR"] = args.legacysurveydir or "default:dr9"
-    out.meta["COMMENT"] = (
-        "Stage-2 Tractor cross-match of the matterhorn BGS/LOW_Z selection. "
-        "FRACFLUX/MW_TRANSMISSION from gather_tractorphot; MAG_*_DERED dereddened "
-        "with the Tractor MW_TRANSMISSION."
-    )
+    # ---- write both catalogs ----------------------------------------------- #
+    def _meta(tab, ncut_desc, nout):
+        tab.meta["NIN"] = n
+        tab.meta["NMATCH"] = int(matched.sum())
+        tab.meta["NOUT"] = int(nout)
+        tab.meta["FFLUXMAX"] = fmax
+        tab.meta["FFLUXDEF"] = "all g,r,z < FFLUXMAX"
+        tab.meta["COMMENT"] = (
+            "matterhorn BGS/LOW_Z photometry: BGS via gather_tractorphot, "
+            "LOW_Z-only via Elise DR9 LOW_Z targets (PHOT_SOURCE). " + ncut_desc)
 
+    os.makedirs(os.path.dirname(os.path.abspath(phot_output)), exist_ok=True)
+    cat.meta["EXTNAME"] = "BGS_LOWZ_PHOT"
+    _meta(cat, "No FRACFLUX cut applied (full z<0.2 sample with photometry).", n)
+    cat.write(phot_output, format="fits", overwrite=True)
+    log.info(f"Wrote {n:,} rows -> {phot_output}")
+
+    clean = cat[keep]
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
-    out.write(args.output, format="fits", overwrite=True)
-    log.info(f"Wrote {len(out):,} rows -> {args.output}")
+    clean.meta["EXTNAME"] = "BGS_LOWZ_CLEAN"
+    _meta(clean, "FRACFLUX cut applied; matched sources only.", len(clean))
+    clean.write(args.output, format="fits", overwrite=True)
+    log.info(f"Wrote {len(clean):,} rows -> {args.output}")
 
 
 if __name__ == "__main__":

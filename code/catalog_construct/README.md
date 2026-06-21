@@ -7,10 +7,9 @@ catalog from the DESI Y5 **matterhorn** `zall` zcatalog (v2).
 Pipeline (two stages):
 
 ```
-matterhorn zall  ──①select──▶  *_raw.fits  ──②crossmatch──▶  *_clean.fits
- (base+imaging)                (targeting +                 (+ FRACFLUX cut,
-                                redshift cuts,               + dereddened mags)
-                                raw mags)
+matterhorn zall ──①select──▶ *_raw.fits ──②crossmatch──┬─▶ *_phot.fits  (all + photometry)
+ (base+imaging)              (targeting,               └─▶ *_clean.fits (FRACFLUX cut)
+                             redshift cuts)
 ```
 
 ## ① `select_matterhorn_bgs_lowz.py`
@@ -41,27 +40,36 @@ Run on an interactive/compute node (one pass over the ~30 GB base file).
 
 ## ② `crossmatch_tractorphot.py`
 
-There is **no matterhorn `tractorphot` VAC**, so this gathers Tractor photometry
-on the fly with `desispec.io.photo.gather_tractorphot` (matching on
-`RELEASE+BRICKID+BRICK_OBJID`, 1″ positional fallback). It adds
-`FRACFLUX_{G,R,Z}`, `FRACMASKED_*`, `FRACIN_*`, `RCHISQ_*`, `NOBS_*`,
-`MW_TRANSMISSION_{G,R,Z}`, dereddened `MAG_{G,R,Z}_DERED`, and the flags
-`TRACTORPHOT_MATCH` / `FRACFLUX_PASS`.
+Attaches the photometric columns the zcatalog lacks (`FRACFLUX_*`,
+`MW_TRANSMISSION_*`, `FRACMASKED_*`, `FRACIN_*`, `RCHISQ_*`, `NOBS_*`,
+`FIBERFLUX_*`), recomputes raw + dereddened `MAG_{G,R,Z}[_DERED]`, and writes
+**two** catalogs. Photometry comes from two sources by target class, recorded in
+`PHOT_SOURCE`:
 
-- **FRACFLUX cut:** keep only objects with `FRACFLUX_G/R/Z` *all* `< 0.35`
-  (`--fracflux-max`). Unmatched objects get `FRACFLUX=NaN` → fail.
-- **Dereddening:** `MAG_X_DERED = 22.5 - 2.5·log10(FLUX_X / MW_TRANSMISSION_X)`,
-  using the Tractor `MW_TRANSMISSION` (identical to the iron pipeline's).
-- By default writes only matched & FRACFLUX-passing rows; `--keep-all` writes
-  every row with the flag columns instead.
-- **Cost** ∝ number of unique bricks the sample touches (one Tractor file read
-  each). Parallelized over bricks with `--nproc`; the unique-brick count is
-  printed up front.
+- **BGS** (BGS_BRIGHT/FAINT, incl. objects that are *also* LOW_Z) →
+  `desispec.io.photo.gather_tractorphot` against the DR9 Tractor catalogs
+  (matched on `RELEASE+BRICKID+BRICK_OBJID`, 1″ positional fallback). There is
+  no matterhorn `tractorphot` VAC, so this is gathered on the fly.
+- **LOW_Z-only** (IS_LOWZ & not BGS) → positional 1″ match to Elise's DR9 LOW_Z
+  target catalogs (north + south, using the `remove_south_lowz`/`clean_south_lowz`
+  footprint logic + south-only fallback). **All** photometry is taken from Elise.
+  LOW_Z-only objects that miss Elise fall back to `gather_tractorphot`
+  (`PHOT_SOURCE='tractorphot_fallback'`).
+
+Adds `PHOT_SOURCE` (`tractorphot`/`lowz_target`/`tractorphot_fallback`/`none`),
+`PHOT_MATCH`, `FRACFLUX_PASS`, and `LS_ID` (dedup key for shared sources).
+
+**Outputs (both written):**
+- `*_phot.fits` — every z<0.2 selected object with photometry attached (no cut).
+- `*_clean.fits` — matched objects passing `FRACFLUX_G/R/Z` *all* `< 0.35`.
+
+- **Dereddening:** `MAG_X_DERED = 22.5 - 2.5·log10(FLUX_X / MW_TRANSMISSION_X)`.
+- **Cost** ∝ unique bricks the BGS/fallback set touches; parallelized over bricks
+  with `--nproc`, with a progress + ETA log line.
 
 ```bash
 python crossmatch_tractorphot.py --nproc 128          # default
 python crossmatch_tractorphot.py --nproc 1            # serial (small samples)
-python crossmatch_tractorphot.py --keep-all           # flag, don't drop
 ```
 
 ## Running the full chain on Perlmutter
