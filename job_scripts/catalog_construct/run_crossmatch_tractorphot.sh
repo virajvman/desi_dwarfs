@@ -14,7 +14,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=256
 #SBATCH --mem=0
-#SBATCH --time=12:00:00
+#SBATCH --time=05:00:00
 #SBATCH --job-name=mh_xmatch
 #SBATCH --output=mh_xmatch_%j.log
 
