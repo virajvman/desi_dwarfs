@@ -195,30 +195,69 @@ def gather_all(input_tab, legacysurveydir, nproc, label=""):
     return phot_concat[np.argsort(order)]
 
 
-def gather_dedup(input_tab, legacysurveydir, nproc, label=""):
-    """Gather Tractor photometry, deduplicating by photometric source first.
+def _photsys_str(input_tab):
+    n = len(input_tab)
+    if "PHOTSYS" in input_tab.colnames:
+        return np.char.strip(np.asarray(input_tab["PHOTSYS"]).astype(str))
+    return np.full(n, "", dtype="<U1")
 
-    Several DESI TARGETIDs (main + SV, primary + secondary) can point at the
-    same Legacy Surveys source (same RELEASE+BRICKID+BRICK_OBJID); gather_tractorphot
-    rejects duplicate BRICK_OBJID within a brick, so we gather once per unique
-    source and broadcast back. Returns photometry row-aligned to input_tab.
+
+def _gather_unique(uniq_tab, legacysurveydir, nproc, label):
+    """Gather photometry for a set of UNIQUE sources, SPLIT BY PHOTSYS region.
+
+    gather_tractorphot asserts a single PHOTSYS per brick (desispec.io.photo
+    line ~978), but an N/S-overlap brick can legitimately hold both north and
+    south sources. Splitting the gather by PHOTSYS guarantees every brick passed
+    to gather_tractorphot is single-region. Returns photometry aligned to uniq_tab.
+    """
+    ps = _photsys_str(uniq_tab)
+    parts_idx, parts_phot = [], []
+    for region in np.unique(ps):
+        sel = np.where(ps == region)[0]
+        tag = region if region else "pos"
+        parts_phot.append(gather_all(uniq_tab[sel], legacysurveydir, nproc,
+                                     label=f"{label}:{tag}"))
+        parts_idx.append(sel)
+    phot_concat = vstack(parts_phot, join_type="exact")
+    order = np.concatenate(parts_idx)
+    return phot_concat[np.argsort(order)]
+
+
+def gather_dedup(input_tab, legacysurveydir, nproc, label=""):
+    """Gather Tractor photometry, deduplicating by photometric SOURCE first.
+
+    Several DESI TARGETIDs (main + SV, primary + secondary) point at the same
+    Legacy Surveys source. Inside a brick gather_tractorphot matches purely on
+    BRICK_OBJID and assumes one PHOTSYS, so the identity it actually uses is
+    (PHOTSYS, BRICKID, BRICK_OBJID) -- NOT RELEASE, which can differ spuriously
+    between target lists for the same physical source and would otherwise leave
+    duplicate BRICK_OBJID within a brick. We dedup on that key, gather once per
+    unique source (split by PHOTSYS region), and broadcast back. Returns
+    photometry row-aligned to input_tab.
     """
     n = len(input_tab)
 
-    def _col(name):
+    def _icol(name):
         return (np.asarray(input_tab[name], dtype=np.int64)
                 if name in input_tab.colnames else np.zeros(n, dtype=np.int64))
 
-    release, brickid, objid = _col("RELEASE"), _col("BRICKID"), _col("BRICK_OBJID")
-    valid = (release > 0) & (brickid > 0) & (objid > 0)
-    srckey = (release << 40) | (brickid << 16) | objid
-    srckey[~valid] = -(np.arange(n)[~valid] + 1)
+    brickid, objid = _icol("BRICKID"), _icol("BRICK_OBJID")
+    ps = _photsys_str(input_tab)
+    valid = (brickid > 0) & (objid > 0) & (ps != "")
 
-    uniq, uniq_idx, inverse = np.unique(srckey, return_index=True, return_inverse=True)
+    # Robust string key (no bit-packing overflow). Invalid rows (positional
+    # matching) each get a unique key so they are never collapsed together.
+    keys = np.char.add(np.char.add(np.char.add(ps, "|"),
+                                   np.char.add(brickid.astype("U12"), "|")),
+                       objid.astype("U12"))
+    inv = ~valid
+    keys[inv] = np.char.add("u", np.arange(n)[inv].astype("U12"))
+
+    uniq, uniq_idx, inverse = np.unique(keys, return_index=True, return_inverse=True)
     if uniq.size < n:
         log.info(f"[{label}] {n:,} rows -> {uniq.size:,} unique photometric sources "
                  f"({n - uniq.size:,} TARGETIDs share a source).")
-    phot_uniq = gather_all(input_tab[uniq_idx], legacysurveydir, nproc, label=label)
+    phot_uniq = _gather_unique(input_tab[uniq_idx], legacysurveydir, nproc, label)
     return phot_uniq[inverse]
 
 
