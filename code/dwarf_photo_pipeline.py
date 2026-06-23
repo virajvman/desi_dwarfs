@@ -9,7 +9,7 @@ from tqdm import tqdm, trange
 url_prefix = 'https://www.legacysurvey.org/viewer/'
 from io import BytesIO
 from aperture_photo import run_aperture_pipe
-from aperture_cogs import run_cog_pipe
+from aperture_cogs import run_cog_pipe, make_empty_final_cog_dict
 # from get_sga_distances import get_sga_info
 from desi_lowz_funcs import save_subimage, fetch_psf, generate_random_string, add_paths_to_catalog, get_stellar_mass
 import cutout_store
@@ -596,8 +596,19 @@ def hydrate_run_aperture_pipe(input_dict):
 
 
 def hydrate_run_cog_pipe(input_dict):
-    '''Worker entry point: read this object's cutout from HDF5, then run the COG pipeline.'''
-    return run_cog_pipe(_hydrate_cutout(input_dict))
+    '''Worker entry point: read this object's cutout from HDF5, then run the COG pipeline.
+
+    Wrapped so one bad object (e.g. a missing/stale tractor model .npy) yields
+    NaN photometry for that object instead of an uncaught exception that tears
+    down the whole COG pool and aborts the chunk. The filler dict carries every
+    catalog-mapped key so stack_results stays consistent across results.'''
+    try:
+        return run_cog_pipe(_hydrate_cutout(input_dict))
+    except Exception as e:
+        print(f"COG WORKER ERROR: TARGETID {input_dict.get('tgid')} "
+              f"(brick {input_dict.get('brick')}, file {input_dict.get('save_path')}): "
+              f"{type(e).__name__}: {e}", flush=True)
+        return make_empty_final_cog_dict()
 
 
 if __name__ == '__main__':
@@ -900,7 +911,7 @@ if __name__ == '__main__':
                 #we do not care about the order in the brick jobs!!
                 #doing the prep work before running the actual job!!
                 all_brick_jobs = []
-                with ThreadPoolExecutor(max_workers=62) as executor:
+                with ThreadPoolExecutor(max_workers=max(1, ncores - 2)) as executor:
                     futures = [executor.submit(create_brick_jobs_fixed, brick_i) for brick_i in unique_bricks_chunki]
                 
                     for future in tqdm(as_completed(futures), total=len(futures), desc="Creating brick jobs!"):

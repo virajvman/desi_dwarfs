@@ -1178,6 +1178,52 @@ EMPTY_COG_DICT = {
         "aper_rad_mus": [np.nan] * 4 }
 
 
+def make_empty_final_cog_dict():
+    '''
+    Build the complete "filler" COG output dict with every catalog-mapped key
+    present and NaN/False/None valued. Used both (a) when COG is skipped because
+    the source does not lie on a segment, and (b) as the return value when a COG
+    worker hits an unrecoverable per-object error, so one bad object yields NaN
+    photometry instead of aborting the entire COG stage. MUST contain every key
+    referenced by the *_table_keys maps in dwarf_photo_pipeline.py.
+    '''
+    FINAL_COG_DICT = {}
+
+    for ki, val in EMPTY_COG_DICT.items():
+        FINAL_COG_DICT[ki] = copy.deepcopy(val)
+    for ki, val in EMPTY_COG_DICT.items():
+        FINAL_COG_DICT[ki + "_no_isolate"] = copy.deepcopy(val)
+
+    empty_tractor_cog_dict = make_empty_tractor_cog_dict()
+    for ki, val in empty_tractor_cog_dict.items():
+        FINAL_COG_DICT[ki + "_no_isolate"] = copy.deepcopy(val)
+    for ki, val in empty_tractor_cog_dict.items():
+        FINAL_COG_DICT[ki + "_w_isolate"] = copy.deepcopy(val)
+
+    FINAL_COG_DICT["jaccard_path"] = None
+    FINAL_COG_DICT["deblend_smooth_num_seg"] = 0
+    FINAL_COG_DICT["deblend_smooth_dist_pix"] = np.nan
+    FINAL_COG_DICT["tractor_parent_isolate_mags"] = [np.nan, np.nan, np.nan]
+    FINAL_COG_DICT["tractor_parent_no_isolate_mags"] = [np.nan, np.nan, np.nan]
+    FINAL_COG_DICT["revert_to_org_tractor"] = True
+    FINAL_COG_DICT["aper_r2_mu_r_ellipse_tractor"] = np.nan
+    FINAL_COG_DICT["aper_r2_mu_r_island_tractor"] = np.nan
+    FINAL_COG_DICT["deblend_blob_dist_pix"] = np.nan
+    FINAL_COG_DICT["cog_segment_nseg"] = np.nan
+    FINAL_COG_DICT["cog_segment_nseg_smooth"] = np.nan
+    FINAL_COG_DICT["cog_segment_on_blob"] = False
+    FINAL_COG_DICT["num_trac_source_no_isolate"] = np.nan
+    FINAL_COG_DICT["num_trac_source_isolate"] = np.nan
+    FINAL_COG_DICT["aperfrac_in_image_data_r4"] = np.nan
+    FINAL_COG_DICT["simple_photo_mags"] = [np.nan, np.nan, np.nan]
+    FINAL_COG_DICT["simple_photo_island_dist_pix"] = np.nan
+    FINAL_COG_DICT["simplest_photo_aper_frac_in_image"] = np.nan
+    FINAL_COG_DICT["tractor_brightest_source_mags_no_isolate"] = [np.nan, np.nan, np.nan]
+    FINAL_COG_DICT["tractor_brightest_source_mags_w_isolate"] = [np.nan, np.nan, np.nan]
+
+    return FINAL_COG_DICT
+
+
 def run_cogs(data_arr, segment_map_v2, star_mask, aperture_mask, tgid, tractor_dr9_mags,save_path, subtract_source_pos, pcnn_val, npixels_min, threshold_rms_scale, wcs, source_zred=None, source_radec=None):
     '''
     In this function, we run the curve-of-growth (COG) analysis!
@@ -1645,51 +1691,7 @@ def run_cog_pipe(input_dict):
 
     else:
         print(f"COG WILL NOT BE RUN FOR {source_tgid}. Returning blank empty dictionary")
-
-        FINAL_COG_DICT = {}
-    
-        ##adding the cog_isolate params
-        for ki,val in EMPTY_COG_DICT.items():
-            FINAL_COG_DICT[ki] = copy.deepcopy(val)
-
-        #adding the cog no isoalte params
-        for ki,val in EMPTY_COG_DICT.items():
-            FINAL_COG_DICT[ki + "_no_isolate"] = copy.deepcopy(val)
-
-    
-        ##make an empty tractor cog dict
-        empty_tractor_cog_dict = make_empty_tractor_cog_dict()
-
-        for ki, val in empty_tractor_cog_dict.items():
-            FINAL_COG_DICT[ki + "_no_isolate"] = copy.deepcopy(val)
-
-        for ki, val in empty_tractor_cog_dict.items():
-            FINAL_COG_DICT[ki + "_w_isolate"] = copy.deepcopy(val)
-
-        #adding the other params
-        FINAL_COG_DICT["jaccard_path"] = None
-        FINAL_COG_DICT["deblend_smooth_num_seg"] = 0
-        FINAL_COG_DICT["deblend_smooth_dist_pix"] =  np.nan
-        FINAL_COG_DICT["tractor_parent_isolate_mags"] = [np.nan, np.nan, np.nan]
-        FINAL_COG_DICT["tractor_parent_no_isolate_mags"] = [np.nan, np.nan, np.nan]
-        FINAL_COG_DICT["revert_to_org_tractor"] = True
-        FINAL_COG_DICT["aper_r2_mu_r_ellipse_tractor"] = np.nan
-        FINAL_COG_DICT["aper_r2_mu_r_island_tractor"] = np.nan
-        FINAL_COG_DICT["deblend_blob_dist_pix"] = np.nan
-        FINAL_COG_DICT["cog_segment_nseg"] = np.nan
-        FINAL_COG_DICT["cog_segment_nseg_smooth"] = np.nan
-        FINAL_COG_DICT["cog_segment_on_blob"] = False
-        FINAL_COG_DICT["num_trac_source_no_isolate"] = np.nan
-        FINAL_COG_DICT["num_trac_source_isolate"] = np.nan
-        FINAL_COG_DICT["aperfrac_in_image_data_r4"] = np.nan
-        FINAL_COG_DICT["simple_photo_mags"] =  [np.nan, np.nan, np.nan]
-        FINAL_COG_DICT["simple_photo_island_dist_pix"] =  np.nan
-        FINAL_COG_DICT["simplest_photo_aper_frac_in_image"] =  np.nan
-
-        FINAL_COG_DICT["tractor_brightest_source_mags_no_isolate"] = [np.nan, np.nan, np.nan]
-        FINAL_COG_DICT["tractor_brightest_source_mags_w_isolate"] = [np.nan, np.nan, np.nan]
-        
-        return FINAL_COG_DICT
+        return make_empty_final_cog_dict()
 
     
     

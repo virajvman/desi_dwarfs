@@ -600,20 +600,28 @@ def get_main_blob_sources(i, ra, dec, tgid, zred, file_path, cutouts_dir, brickn
             save_rgb_single_panel(total_model, file_path, image_name="tractor_main_segment_galaxy_model")
         else:
             print(f"The parent source catalog existed for {tgid}, but no sources remain after parent mask.")
-            
+
             #there were no sources to subtract and so we can save an empty array!
             np.save(f"{file_path}/tractor_parent_galaxy_model.npy", np.zeros((3, width, width))  )
-            
+
             np.save(f"{file_path}/tractor_main_segment_model.npy", np.zeros((3, width, width))  )
-            
+
+            #run_cogs loads tractor_parent_sources_model.npy unconditionally when
+            #parent_galaxy_sources.fits is non-empty; write a zero model here so
+            #that load never FileNotFounds on this no-matched-sources branch.
+            np.save(f"{file_path}/tractor_parent_sources_model.npy", np.zeros((3, width, width))  )
+
             pass
 
     else:
         print(f"The parent source catalog file did not exist for {tgid}! Skipping tractor model generation")
 
         np.save(f"{file_path}/tractor_parent_galaxy_model.npy", np.zeros((3, width, width))  )
-            
+
         np.save(f"{file_path}/tractor_main_segment_model.npy", np.zeros((3, width, width))  )
+
+        #see note above: keep the filename run_cogs expects present as a zero model.
+        np.save(f"{file_path}/tractor_parent_sources_model.npy", np.zeros((3, width, width))  )
     
     return
 
@@ -639,19 +647,29 @@ def filter_existing_sources(dwarf_cat, output_files, overwrite):
 
 def worker(args):
     i, dwarf_cat, func, cutouts_dir = args
-    func(
-        i,
-        dwarf_cat["RA"][i],
-        dwarf_cat["DEC"][i],
-        dwarf_cat["TARGETID"][i],
-        dwarf_cat["Z"][i],
-        dwarf_cat["FILE_PATH"][i],
-        cutouts_dir,
-        dwarf_cat["BRICKNAME"][i],
-        dwarf_cat["IMAGE_SIZE_PIX"][i],
-        testing=False
-    )
-    return 1  # for progress counting
+    # Isolate per-object failures: without this, one bad object (missing
+    # source_cat_f.fits, malformed catalog, zero-psfsize raise, etc.) raised
+    # through imap_unordered and tore down the entire pool, aborting a 40k-object
+    # run. Log and skip instead so the rest of the sample still completes.
+    try:
+        func(
+            i,
+            dwarf_cat["RA"][i],
+            dwarf_cat["DEC"][i],
+            dwarf_cat["TARGETID"][i],
+            dwarf_cat["Z"][i],
+            dwarf_cat["FILE_PATH"][i],
+            cutouts_dir,
+            dwarf_cat["BRICKNAME"][i],
+            dwarf_cat["IMAGE_SIZE_PIX"][i],
+            testing=False
+        )
+        return 1  # processed
+    except Exception as e:
+        print(f"WORKER ERROR: TARGETID {dwarf_cat['TARGETID'][i]} "
+              f"(brick {dwarf_cat['BRICKNAME'][i]}, file {dwarf_cat['FILE_PATH'][i]}): "
+              f"{type(e).__name__}: {e}", flush=True)
+        return 0  # failed-but-skipped
 
 
 def parse_tgids(value):

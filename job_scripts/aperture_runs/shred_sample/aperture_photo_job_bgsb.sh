@@ -40,7 +40,12 @@ END_NAME=""
 OVERWRITE_PHOTOMETRY=true
 TRACTOR_PHOTO_ARGS=(-end_name "$END_NAME")
 if [ "$OVERWRITE_PHOTOMETRY" = true ]; then
-    TRACTOR_PHOTO_ARGS+=(-overwrite_photometry)
+    # -overwrite_photometry: skip the catalog-incremental TARGETID filter.
+    # -overwrite: also force regeneration of per-object tractor model .npy files
+    #   (filter_existing_sources skips objects whose models exist when this is
+    #   off). A full overwrite rerun needs BOTH, else tractor reuses stale models
+    #   with freshly regenerated aperture/COG outputs.
+    TRACTOR_PHOTO_ARGS+=(-overwrite_photometry -overwrite)
 fi
 
 # Command-line args
@@ -71,10 +76,10 @@ if [ "$RUN_SHIFTER" = true ]; then
     shifterimg pull docker:legacysurvey/legacypipe:DR10.3.4
     
     srun --cpu-bind=cores shifter --env=PYTHONUSERBASE=$HOME/.local-legacypipe --image docker:legacysurvey/legacypipe:DR10.3.4 \
-        python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -img_source -use_sample shred "${TRACTOR_PHOTO_ARGS[@]}" -overwrite
+        python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -img_source -use_sample shred "${TRACTOR_PHOTO_ARGS[@]}"
     
     srun --kill-on-bad-exit=1 --cpu-bind=cores shifter --env=PYTHONUSERBASE=$HOME/.local-legacypipe --image docker:legacysurvey/legacypipe:DR10.3.4 \
-        python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -parent_galaxy -bkg_source -blend_remove_source -use_sample shred "${TRACTOR_PHOTO_ARGS[@]}" -overwrite
+        python3 desi_dwarfs/code/tractor_model.py -sample $SAMPLE -parent_galaxy -bkg_source -blend_remove_source -use_sample shred "${TRACTOR_PHOTO_ARGS[@]}"
 fi
 
 
