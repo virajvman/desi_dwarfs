@@ -1,7 +1,7 @@
 #!/bin/bash -l
 
 #SBATCH --account=desi
-#SBATCH --qos=regular
+#SBATCH --qos=debug
 #SBATCH --constraint=cpu
 #SBATCH --mail-user=virajvm@stanford.edu
 #SBATCH --mail-type=ALL
@@ -9,7 +9,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=256
 #SBATCH --mem=0
-#SBATCH --time=01:00:00
+#SBATCH --time=00:30:00
 #SBATCH --job-name=lowz_shred
 #SBATCH --output=aperture_shred_lowz.log
 
@@ -37,7 +37,7 @@ RUN_SHIFTER=true
 
 # Match dwarf_photo_pipeline consolidated catalog for tractor incremental mode
 END_NAME=""
-OVERWRITE_PHOTOMETRY=false
+OVERWRITE_PHOTOMETRY=true
 TRACTOR_PHOTO_ARGS=(-end_name "$END_NAME")
 if [ "$OVERWRITE_PHOTOMETRY" = true ]; then
     TRACTOR_PHOTO_ARGS+=(-overwrite_photometry)

@@ -1,7 +1,7 @@
 '''
 In this function, we measure the fiber magnitude at the new centers of the objects?
 '''
-from photutils import CircularAperture, aperture_photometry
+from photutils.aperture import CircularAperture, aperture_photometry
 from desi_lowz_funcs import flux_to_mag
 
 

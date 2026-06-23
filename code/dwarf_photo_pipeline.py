@@ -22,7 +22,6 @@ from pathlib import Path
 import random, string
 from datetime import datetime
 import glob
-from shred_classifier import get_pcnn_data_inputs
 from aperture_cogs import make_empty_tractor_cog_dict
 
 def stack_results(results, key,verbose=False):
@@ -1600,6 +1599,7 @@ if __name__ == '__main__':
     # ##################
 
     if get_cnn_inputs and tgids_list is None and run_cog:
+        from shred_classifier import get_pcnn_data_inputs
         print("Getting the PCNN shred classifier input files")
         get_pcnn_data_inputs(sample_str, sample_cat_path = final_save_name, use_sample = use_sample)
 
