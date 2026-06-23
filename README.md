@@ -72,7 +72,11 @@ Core identifiers, coordinates, redshifts, stellar masses, photometry, and qualit
 | `MAG_G_TARGET` | float32 | mag | Tractor *g*-band magnitude of DESI target source (MW extinction corrected). For shredded sources, this is the uncorrected, shredded photometry |
 | `MAG_R_TARGET` | float32 | mag | Same as `MAG_G_TARGET` but for *r*-band |
 | `MAG_Z_TARGET` | float32 | mag | Same as `MAG_G_TARGET` but for *z*-band |
-| `SAMPLE` | str | | Single catalog label: typically `BGS_BRIGHT`, `BGS_FAINT`, `LOWZ`, `ELG`, or `OTHER` (QSO/SCND supplement). See [SAMPLE column note](#sample-column-single-label-per-row); multi-bit targets are not fully described by this one string. |
+| `IS_BGS_BRIGHT` | bool | | Whether the target is in the **BGS_BRIGHT** target list. From ZCAT `BGS_TARGET` (main survey) OR `SV{1,2,3}_BGS_TARGET`. Computed for every row; **non-exclusive** (a target can belong to several lists). See [target-list membership flags](#target-list-membership-flags). |
+| `IS_BGS_FAINT` | bool | | Whether the target is in the **BGS_FAINT** target list. From ZCAT `BGS_TARGET` (main survey) OR `SV{1,2,3}_BGS_TARGET`. Non-exclusive. |
+| `IS_LOWZ` | bool | | Whether the target is in the **LOWZ** secondary target list. From ZCAT `SCND_TARGET` (main survey) OR `SV{1,2,3}_SCND_TARGET` bits 15/16/17. Non-exclusive. |
+| `IS_ELG` | bool | | Whether the target is in the **ELG** target list. From ZCAT `DESI_TARGET` (main survey) OR `SV{1,2,3}_DESI_TARGET`. Non-exclusive. |
+| `IS_OTHER` | bool | | Whether the object entered the catalog via the **QSO/SCND** hidden-dwarf-candidate branch (provenance flag, mirrors `IN_SGA_2020`). Not a targeting-bit membership flag. See [OTHER sample](#other-sample-is_other). |
 | `DWARF_MASKBIT` | int32 | | Bitwise mask for cleaning cuts. See [bitmask descriptions](#dwarf_maskbit-descriptions) |
 | `MSTAR_MASKBIT` | int32 | | Bitwise mask for the `LOG_MSTAR_M24` derivation. See [MSTAR_MASKBIT descriptions](#mstar_maskbit-descriptions) |
 | `MAG_TYPE` | str | | Photometry method used for `MAG_G/R/Z`. See [MAG_TYPE descriptions](#mag-type-descriptions) |
@@ -93,7 +97,7 @@ Core identifiers, coordinates, redshifts, stellar masses, photometry, and qualit
 
 <br>
 
-Redshift catalog columns, targeting bits, and observation metadata. **Targeting bits** (`DESI_TARGET`, `BGS_TARGET`, SV-era columns, etc.) are the authoritative place to test bit membership if `SAMPLE` on MAIN is too coarse or if a `TARGETID` could belong to several samples in the raw targeting data. Rows match **MAIN** by `TARGETID` and order.
+Redshift catalog columns, targeting bits, and observation metadata. **Targeting bits** (`DESI_TARGET`, `BGS_TARGET`, `SCND_TARGET`, SV-era columns, etc.) are the authoritative raw source of bit membership; the MAIN `IS_BGS_BRIGHT` / `IS_BGS_FAINT` / `IS_LOWZ` / `IS_ELG` flags are derived directly from them. Use these ZCAT columns for any finer-grained bit membership not captured by those flags. Rows match **MAIN** by `TARGETID` and order.
 
 | Name | Type | Units | Description |
 | :--- | :--- | :---: | :---------- |
@@ -497,11 +501,13 @@ Example code demonstrating how to read the HDF5 file and visualize the spectra i
 
 ### Additional Notes
 
-<a name="sample-column-single-label-per-row"></a>
+<a name="target-list-membership-flags"></a>
 
-#### SAMPLE column (single label per row)
+#### Target-list membership flags (`IS_*`)
 
-The **`SAMPLE`** field on **MAIN** is a **single convenience label** per row, not a full description of every DESI targeting bit that may be set on that `TARGETID`. In DESI, the same target can carry multiple program bits (e.g. overlap between BGS bright/faint, or BGS and ELG). The catalog pipeline assigns one string using **survey construction rules** (stacking subsample inputs, LOWZ de-duplication against other branches before merge). When writing the combined FITS, **`combine_hdus`** enforces **one row per `TARGETID`** (first occurrence in stack order kept) and sets **`SAMPLE`** for **BGS_BRIGHT** / **BGS_FAINT** / **ELG** rows from **ZCAT** targeting bits with priority **BGS_BRIGHT** > **BGS_FAINT** > **ELG** (main survey + SV masks, same spirit as `construct_dwarf_galaxy_catalogs.py`). **LOWZ** entries stay **LOWZ**. Objects on the QSO/SCND supplement path are labeled **`OTHER`** when included (via `load_and_filter_qso_scnd_candidates` in `consolidate_photometry.py`); that branch of the pipeline is not fully finalized. **Do not** assume that `SAMPLE` exhaustively encodes multi-bit membership; use **ZCAT** bits for that.
+DESI targets are **not mutually exclusive**: the same `TARGETID` can carry multiple program bits (e.g. BGS bright/faint overlap, or BGS *and* LOWZ). Rather than a single label, MAIN therefore carries **independent boolean flags** — `IS_BGS_BRIGHT`, `IS_BGS_FAINT`, `IS_LOWZ`, `IS_ELG` — each derived **purely from the ZCAT targeting bits** (main survey **OR** SV1–SV3) and computed for **every** row. A target in both BGS_BRIGHT and LOWZ simply has both `IS_BGS_BRIGHT` and `IS_LOWZ` set; there is no priority ordering. These flags are added by `combine_hdus` (`_add_target_membership_flags` in `consolidate_photometry.py`), which also enforces **one row per `TARGETID`** (first occurrence in stack order kept).
+
+`IS_OTHER` is different: it is a **provenance** flag (mirroring `IN_SGA_2020`), set when the object entered the catalog via the QSO/SCND hidden-dwarf-candidate branch (`load_and_filter_qso_scnd_candidates`) — *not* a targeting-bit membership. SGA-origin objects remain identifiable via `IN_SGA_2020`. The four bit flags plus these two provenance flags fully replace the former single `SAMPLE` label.
 
 If you need **your own** sample definition (e.g. all targets with the ELG bit set regardless of this catalog’s single label), use the **ZCAT** extension: it includes **`DESI_TARGET`**, **`BGS_TARGET`**, **`MWS_TARGET`**, **`SCND_TARGET`**, and the **SV1–SV3** `*_DESI_TARGET` / `*_BGS_TARGET` / `*_MWS_TARGET` / `*_SCND_TARGET` columns, row-aligned with **MAIN** by `TARGETID`. Combine those bitmasks with `desitarget` (or your own masks) the same way you would on the spectroscopic zcatalog. For **custom DESI sample selection**, treat these **ZCAT** columns as the authoritative TARGET bitmasks on each row (same as zcatalog usage).
 
@@ -574,7 +580,9 @@ See Manwadkar et al. 2026a for details.
 
 </details>
 
-### OTHER sample (`SAMPLE = "OTHER"`)
+<a name="other-sample-is_other"></a>
 
-Rows with `SAMPLE = "OTHER"` are dwarf galaxies selected from **QSO** and **SCND** DESI targets that are **not** already in the primary dwarf sample (**BGS_BRIGHT**, **BGS_FAINT**, **LOWZ**, **ELG**). The discovery table is built with [`code/construct_other_dwarf_catalog.py`](code/construct_other_dwarf_catalog.py): the same maskbit, proper-motion, FRACFLUX (“shred”), RCHISQ, and SIGMA_GOOD cuts as before, plus **`NOBS_G` / `NOBS_R` / `NOBS_Z` exposure cuts** matching the primary INT_V2 pipeline, then NAM + independent distance updates, **`LOGM_M24_FIDU`**, sweeps, and bright-star flags. Intermediate output is **`iron_other_qso_scnd_candidates_INT_V2.fits`** (and the legacy combined file **`hidden_dwarf_candidates_qso_mws_scnd.fits`**); nebular correction follows the same **`iron_*_INT_V2_NEBCORR.fits`** pattern as other samples. When merging into the release catalog, [`load_and_filter_qso_scnd_candidates`](code/consolidate_photometry.py) deduplicates by `TARGETID`, **drops MWS**, matches FastSpecFit, and requires emission-line flux SNR cuts on Hα, Hβ, and [OIII] 5007.
+### OTHER sample (`IS_OTHER = True`)
+
+Rows with `IS_OTHER = True` are dwarf galaxies selected from **QSO** and **SCND** DESI targets that are **not** already in the primary dwarf sample (**BGS_BRIGHT**, **BGS_FAINT**, **LOWZ**, **ELG**). The discovery table is built with [`code/construct_other_dwarf_catalog.py`](code/construct_other_dwarf_catalog.py): the same maskbit, proper-motion, FRACFLUX (“shred”), RCHISQ, and SIGMA_GOOD cuts as before, plus **`NOBS_G` / `NOBS_R` / `NOBS_Z` exposure cuts** matching the primary INT_V2 pipeline, then NAM + independent distance updates, **`LOGM_M24_FIDU`**, sweeps, and bright-star flags. Intermediate output is **`iron_other_qso_scnd_candidates_INT_V2.fits`** (and the legacy combined file **`hidden_dwarf_candidates_qso_mws_scnd.fits`**); nebular correction follows the same **`iron_*_INT_V2_NEBCORR.fits`** pattern as other samples. When merging into the release catalog, [`load_and_filter_qso_scnd_candidates`](code/consolidate_photometry.py) deduplicates by `TARGETID`, **drops MWS**, matches FastSpecFit, and requires emission-line flux SNR cuts on Hα, Hβ, and [OIII] 5007.
 
