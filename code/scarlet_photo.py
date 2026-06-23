@@ -18,8 +18,8 @@ from scarlet.display import AsinhMapping
 from photutils.aperture import aperture_photometry
 import os
 import sys
-import joblib
 import scipy.optimize as opt
+from aperture_photo import _load_gmm
 from astropy import units as u
 from astropy.coordinates import SkyCoord
 import random
@@ -1394,8 +1394,7 @@ def run_scarlet_pipe(input_dict):
         
         ##below part is not needed everytime! Can just directly load the dictionary of conf levels
         file_index = np.where( source_redshift > gmm_file_zgrid )[0][-1]
-        #load the relevant gmm file
-        gmm = joblib.load("/pscratch/sd/v/virajvm/redo_photometry_plots/gmm_color_models/gmm_model_idx_%d.pkl"%file_index)
+        gmm = _load_gmm(file_index)
     
         # Create a grid for evaluation
         xmin, xmax = -1, 2

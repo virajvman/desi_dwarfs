@@ -2,12 +2,27 @@
 
 import os
 import sys
+import warnings
 import joblib
 import pickle
 import random
 import argparse
 import concurrent.futures
 from io import BytesIO
+
+from sklearn.exceptions import InconsistentVersionWarning
+
+warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
+
+_GMM_MODEL_DIR = "/pscratch/sd/v/virajvm/redo_photometry_plots/gmm_color_models"
+_gmm_cache = {}
+
+
+def _load_gmm(file_index):
+    if file_index not in _gmm_cache:
+        path = f"{_GMM_MODEL_DIR}/gmm_model_idx_{file_index}.pkl"
+        _gmm_cache[file_index] = joblib.load(path)
+    return _gmm_cache[file_index]
 
 import numpy as np
 import scipy.optimize as opt
@@ -460,8 +475,7 @@ def run_aperture_pipe(input_dict):
     if do_i_run:
         # try:    
         file_index = np.where( source_redshift > gmm_file_zgrid )[0][-1]
-        #load the relevant gmm file
-        gmm = joblib.load("/pscratch/sd/v/virajvm/redo_photometry_plots/gmm_color_models/gmm_model_idx_%d.pkl"%file_index)
+        gmm = _load_gmm(file_index)
     
         # Create a grid for evaluation
         xmin, xmax = -0.5, 2

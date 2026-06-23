@@ -615,10 +615,12 @@ if __name__ == '__main__':
     import warnings
     from astropy.units import UnitsWarning
     from astropy.wcs import FITSFixedWarning
+    from sklearn.exceptions import InconsistentVersionWarning
     import numpy as np
     np.seterr(invalid='ignore')
     warnings.simplefilter('ignore', category=UnitsWarning)
     warnings.simplefilter('ignore', FITSFixedWarning)
+    warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
     warnings.filterwarnings("ignore", message="Warning: converting a masked element to nan")
 
     rootdir = '/global/u1/v/virajvm/'
