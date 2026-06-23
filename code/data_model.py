@@ -195,7 +195,8 @@ main_datamodel = {
     "DWARF_MASKBIT": {
         "unit": None,
         "description": (
-            "Bitwise mask to apply various cleaning cuts. Low continuum SNR in "
+            "Bitwise mask to apply various cleaning cuts. Bit 19 = junk spectrum "
+            "(SNR_B/R/Z < 0 in at least two of the three arms). Low continuum SNR in "
             "emission-subtracted fiber photometry (mass pipeline) is recorded in "
             "MSTAR_MASKBIT, not here. See bitmask descriptions in README."
         ),
@@ -206,7 +207,10 @@ main_datamodel = {
         "description": (
             "Bitwise mask for the LOG_MSTAR_M24 derivation: bit 0 = low continuum SNR "
             "(nebular-subtracted g/r fiber photometry, threshold SNR 10); "
-            "bit 1 = M_g,0 < -18.5 after corrections. "
+            "bit 1 = M_g,0 < -18.5 after corrections; "
+            "bit 2 = unreliable nebular correction (|DELTA_MAG_G_NEB| or "
+            "|DELTA_MAG_R_NEB| > 2). Bits 0 and 2 both route the mass onto the "
+            "fallback path (aggregate MAG_G/MAG_R + Z_CMB + g_kcorr, no delta-mag chain). "
             "Copied with LOG_MSTAR_M24 from PROPERTY_SOURCE_TARGETID during associated-fiber consolidation."
         ),
         "dtype": "int32"

@@ -555,8 +555,13 @@ def compute_emission_subtracted_photo_errors(
 
     Updates the multi-extension FITS catalog at *cat_path*:
       - MAIN HDU: adds LOG_MSTAR_M24_ERR; sets MSTAR_MASKBIT bit 0 (low continuum
-        SNR in nebular-subtracted g/r fiber photometry, threshold 10); refits
-        bright bits as before
+        SNR in nebular-subtracted g/r fiber photometry, threshold 10) and
+        bit 2 (|DELTA_MAG_{G,R}_NEB| > 2, unreliable nebular correction). Both
+        route the row onto the fallback mass path (raw MAG_G/MAG_R + Z_CMB +
+        g_kcorr, no delta-mag chain) and refit the M_g < -18.5 bright bits
+        (MSTAR_MASKBIT bit 1, DWARF_MASKBIT bit 17) from the fallback magnitude.
+        Also sets DWARF_MASKBIT bit 19 (junk spectrum: SNR_{B,R,Z} < 0 in >= 2
+        of the three arms).
       - FASTSPEC HDU: adds MAG_G_FIBER_NOEMI, MAG_R_FIBER_NOEMI,
         MAG_G_FIBER_NOEMI_ERR, MAG_R_FIBER_NOEMI_ERR
     """
@@ -748,6 +753,56 @@ def compute_emission_subtracted_photo_errors(
     if not compute_missing:
         low_cont_snr_mask &= ~missing_mask
 
+    # ── 6b. Bad nebular correction: |DELTA_MAG_{G,R}_NEB| > 2 ─────────
+    # An implausibly large nebular emission correction to the total g/r
+    # photometry (>2 mag in either band) means the delta-mag chain is not
+    # trustworthy. These rows are routed onto the SAME fallback mass path as
+    # the low continuum-SNR rows (raw MAG_G/MAG_R + Z_CMB + g_kcorr, no
+    # delta-mag chain) and flagged with MSTAR_MASKBIT bit 2.
+    neb_delta_tab = _load_nebcorr_delta_mag_table(verbose=False)
+    bad_neb_mask = np.zeros(n_objects, dtype=bool)
+    if neb_delta_tab is not None:
+        neb_tids = np.asarray(neb_delta_tab["TARGETID"])
+        neb_tid_to_row = {int(t): k for k, t in enumerate(neb_tids)}
+        dneb_g_src = np.asarray(neb_delta_tab["DELTA_MAG_G_NEB"], dtype=np.float64)
+        dneb_r_src = np.asarray(neb_delta_tab["DELTA_MAG_R_NEB"], dtype=np.float64)
+        neb_rows = np.array([neb_tid_to_row.get(int(t), -1) for t in targetids])
+        neb_matched = neb_rows >= 0
+        dneb_g = np.full(n_objects, np.nan)
+        dneb_r = np.full(n_objects, np.nan)
+        dneb_g[neb_matched] = dneb_g_src[neb_rows[neb_matched]]
+        dneb_r[neb_matched] = dneb_r_src[neb_rows[neb_matched]]
+        # NaN deltas never satisfy abs() > 2, so missing corrections are not flagged.
+        bad_neb_mask = (np.abs(dneb_g) > 2.0) | (np.abs(dneb_r) > 2.0)
+    else:
+        print("  WARNING: no NEBCORR table found; MSTAR_MASKBIT bit 2 "
+              "(bad nebular correction) not evaluated.")
+    if not compute_missing:
+        bad_neb_mask &= ~missing_mask
+
+    # Both low-SNR and bad-nebular rows take the fallback mass path.
+    fallback_mask = low_cont_snr_mask | bad_neb_mask
+    n_bad_neb = int(bad_neb_mask.sum())
+    print(f"Bad nebular correction (|DELTA_MAG_NEB| > 2, fallback mass): "
+          f"{n_bad_neb} / {n_objects} objects")
+
+    # ── 6c. Junk spectrum: SNR < 0 in >= 2 of the B/R/Z arms ─────────
+    snr_neg_mask = np.zeros(n_objects, dtype=bool)
+    if all(c in fspec_cat.colnames for c in ("SNR_B", "SNR_R", "SNR_Z")):
+        snr_b = np.asarray(fspec_cat["SNR_B"], dtype=np.float64)
+        snr_r = np.asarray(fspec_cat["SNR_R"], dtype=np.float64)
+        snr_z = np.asarray(fspec_cat["SNR_Z"], dtype=np.float64)
+        # NaN < 0 is False, so NaN arms do not count toward the >= 2 tally.
+        n_neg_arms = ((snr_b < 0).astype(int) + (snr_r < 0).astype(int)
+                      + (snr_z < 0).astype(int))
+        snr_neg_mask = n_neg_arms >= 2
+    else:
+        print("  WARNING: SNR_B/R/Z not in FASTSPEC HDU; DWARF_MASKBIT bit 19 "
+              "(junk spectrum) not evaluated.")
+    n_snr_neg = int(snr_neg_mask.sum())
+    print(f"Junk spectrum (SNR < 0 in >= 2 of B/R/Z arms, DWARF_MASKBIT bit 19): "
+          f"{n_snr_neg} / {n_objects} objects")
+
     if results_cache_path is not None and compute_missing:
         os.makedirs(emi_cache_dir, exist_ok=True)
         np.savez(results_cache_path,
@@ -781,12 +836,12 @@ def compute_emission_subtracted_photo_errors(
     if "LOG_MSTAR_M24" in main_cat.colnames:
         mstar_dtype = main_cat["LOG_MSTAR_M24"].dtype
         lm = np.asarray(main_cat["LOG_MSTAR_M24"], dtype=np.float64).copy()
-        lm[low_cont_snr_mask] = np.asarray(log_mstar_fallback, dtype=np.float64)[
-            low_cont_snr_mask]
+        lm[fallback_mask] = np.asarray(log_mstar_fallback, dtype=np.float64)[
+            fallback_mask]
         main_cat["LOG_MSTAR_M24"] = lm.astype(mstar_dtype)
 
     err_arr = np.asarray(main_cat["LOG_MSTAR_M24_ERR"], dtype=np.float64).copy()
-    err_arr[low_cont_snr_mask] = 0.0
+    err_arr[fallback_mask] = 0.0
     # Force LOG_MSTAR_M24_ERR = 0 for rows we deliberately did not compute
     # (compute_missing=False); get_stellar_mass_mia would otherwise propagate
     # the NaN mag errors into NaN log_mstar_err for these rows.
@@ -820,19 +875,28 @@ def compute_emission_subtracted_photo_errors(
             (np.asarray(main_cat["DWARF_MASKBIT"], dtype=np.int64) >> 17) & 1
         ) << 1
 
-    low = low_cont_snr_mask
+    # Every fallback row (low-SNR OR bad-nebular) gets its M_g < -18.5 bright
+    # cut recomputed from the fallback magnitude rather than the delta-mag mass.
+    low = fallback_mask
     if dwarf_maskbits is not None:
         dwarf_maskbits[low] &= ~np.int64(1 << 17)
     mstar_maskbits[low] &= ~np.int64(1 << 1)
     too_bright_fb = low & np.isfinite(mg_fallback) & (mg_fallback < -18.5)
     if dwarf_maskbits is not None:
         dwarf_maskbits[too_bright_fb] |= np.int64(1 << 17)
-        main_cat["DWARF_MASKBIT"] = dwarf_maskbits.astype(
-            main_cat["DWARF_MASKBIT"].dtype)
     mstar_maskbits[too_bright_fb] |= np.int64(1 << 1)
 
     # ── 7b. MSTAR_MASKBIT bit 0: low continuum SNR (nebular-subtracted g/r) ──
     mstar_maskbits[low_cont_snr_mask] |= np.int64(1) << 0
+
+    # ── 7c. MSTAR_MASKBIT bit 2: unreliable nebular correction (|DELTA_MAG_NEB|>2) ──
+    mstar_maskbits[bad_neb_mask] |= np.int64(1) << 2
+
+    # ── 7d. DWARF_MASKBIT bit 19: junk spectrum (SNR<0 in >=2 of B/R/Z arms) ──
+    if dwarf_maskbits is not None:
+        dwarf_maskbits[snr_neg_mask] |= np.int64(1) << 19
+        main_cat["DWARF_MASKBIT"] = dwarf_maskbits.astype(
+            main_cat["DWARF_MASKBIT"].dtype)
 
     main_cat["MSTAR_MASKBIT"] = mstar_maskbits.astype(np.int32)
     if "DWARF_MASKBIT" in main_cat.colnames:
@@ -845,6 +909,10 @@ def compute_emission_subtracted_photo_errors(
     if verbose:
         print(f"  MSTAR_MASKBIT bit 0 (low continuum SNR, threshold 10): flagged "
               f"{n_low_snr}/{n_objects} objects")
+        print(f"  MSTAR_MASKBIT bit 2 (bad nebular correction, |DELTA_MAG_NEB|>2): "
+              f"flagged {n_bad_neb}/{n_objects} objects")
+        print(f"  DWARF_MASKBIT bit 19 (junk spectrum, SNR<0 in >=2 arms): "
+              f"flagged {n_snr_neg}/{n_objects} objects")
 
     # table_to_hdu avoids BytesIO→open→.copy() on VLAs (e.g. ASSOCIATED_TARGETIDS),
     # which can raise "Could not find heap data" for variable-length columns.
@@ -898,7 +966,8 @@ def compute_emission_subtracted_photo_errors(
         raise
 
     print(f"Updated {cat_path}:")
-    print(f"  MAIN HDU: added LOG_MSTAR_M24_ERR; low-SNR fallback LOG_MSTAR_M24; "
-          f"MSTAR_MASKBIT (bits 0, 1 as applicable); DWARF/MSTAR bright bits refit for low-SNR rows")
+    print(f"  MAIN HDU: added LOG_MSTAR_M24_ERR; fallback LOG_MSTAR_M24 for low-SNR "
+          f"+ bad-nebular rows; MSTAR_MASKBIT (bits 0, 1, 2 as applicable); "
+          f"DWARF_MASKBIT bit 19 (junk spectrum); DWARF/MSTAR bright bits refit for fallback rows")
     print(f"  FASTSPEC HDU: added MAG_G_FIBER_NOEMI, MAG_R_FIBER_NOEMI, MAG_G_FIBER_NOEMI_ERR, MAG_R_FIBER_NOEMI_ERR")
     print("=" * 60)

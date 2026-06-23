@@ -64,7 +64,7 @@ Core identifiers, coordinates, redshifts, stellar masses, photometry, and qualit
 | `LUMI_DIST_MPC` | float32 | Mpc | Fiducial luminosity distance |
 | `DIST_SOURCE` | str | | Source of the luminosity distance. One of: `NED_ZIND`, `VIRGO_SBF`, `VIRGO_EVCC`, `CF3_NAM`, `V_CMB` |
 | `LOG_MSTAR_SAGA` | float32 | $\log(M_\odot)$ | Log stellar mass using `LUMI_DIST_MPC` and the SAGA *gr*-based approximation |
-| `LOG_MSTAR_M24` | float32 | $\log(M_\odot)$ | Log stellar mass (de los Reyes et al. 2024 *gr* relation). Default: nebular/filter/k-corrected photometry with z=0 in the mass function. If `MSTAR_MASKBIT` bit 0 is set (low continuum SNR in fiber photometry), mass uses aggregate `MAG_G`/`MAG_R`, `LUMI_DIST_MPC`, and `Z_CMB` with polynomial *g*-band k-correction in `get_stellar_mass_mia` instead of that delta-mag path. |
+| `LOG_MSTAR_M24` | float32 | $\log(M_\odot)$ | Log stellar mass (de los Reyes et al. 2024 *gr* relation). Default: nebular/filter/k-corrected photometry with z=0 in the mass function. If `MSTAR_MASKBIT` bit 0 (low continuum SNR in fiber photometry) or bit 2 (unreliable nebular correction, \|`DELTA_MAG_{G,R}_NEB`\| > 2) is set, mass uses aggregate `MAG_G`/`MAG_R`, `LUMI_DIST_MPC`, and `Z_CMB` with polynomial *g*-band k-correction in `get_stellar_mass_mia` instead of that delta-mag path. |
 | `LOG_MSTAR_M24_ERR` | float64 | dex | Uncertainty from nebular correction errors in emission-subtracted fiber photometry. **Placeholder:** set to **0** for objects on the low-SNR fallback mass path (bit 0); a proper uncertainty for that path is not yet implemented. |
 | `MAG_G` | float32 | mag | *g*-band magnitude (MW extinction corrected). Same as Tractor photometry, except for galaxies reprocessed after being identified as likely shredded |
 | `MAG_R` | float32 | mag | Same as `MAG_G` but for *r*-band |
@@ -543,6 +543,7 @@ Each bit in `DWARF_MASKBIT` corresponds to a quality or cleaning flag. A value o
 | 16 | 65536 | Likely incorrect Redrock redshift, identified via UMAP/NMF spectral template anomaly detection |
 | 17 | 131072 | M_g &lt; &minus;18.5 at the survey redshift (or fallback distance for low continuum-SNR mass rows) after nebular + filter + k-corrections. |
 | 18 | 262144 | Visually inspected (VI) and confirmed to have an incorrect redshift; TARGETID listed in data/vi_bad_tgids.txt |
+| 19 | 524288 | Junk spectrum: FastSpecFit per-camera S/N `SNR_B`/`SNR_R`/`SNR_Z` &lt; 0 in at least two of the three arms. Per-fiber flag (kept from the row itself during associated-fiber consolidation). |
 
 </details>
 
@@ -553,12 +554,13 @@ Each bit in `DWARF_MASKBIT` corresponds to a quality or cleaning flag. A value o
 
 <a name="mstar_maskbit-descriptions"></a>
 
-Each bit in `MSTAR_MASKBIT` describes the stellar-mass pipeline used for `LOG_MSTAR_M24` (photometry, distance, and nebular/filter/k corrections tied to that fiber). Objects with bit 0 use a **fallback** mass from aggregate `MAG_G`/`MAG_R`, `LUMI_DIST_MPC`, and `Z_CMB` (no delta-mag chain). After associated-fiber consolidation, `MSTAR_MASKBIT`, `LOG_MSTAR_M24`, and `LOG_MSTAR_M24_ERR` are copied together from the property-source row so flags stay aligned with the adopted mass.
+Each bit in `MSTAR_MASKBIT` describes the stellar-mass pipeline used for `LOG_MSTAR_M24` (photometry, distance, and nebular/filter/k corrections tied to that fiber). Objects with bit 0 **or bit 2** use a **fallback** mass from aggregate `MAG_G`/`MAG_R`, `LUMI_DIST_MPC`, and `Z_CMB` (no delta-mag chain). After associated-fiber consolidation, `MSTAR_MASKBIT`, `LOG_MSTAR_M24`, and `LOG_MSTAR_M24_ERR` are copied together from the property-source row so flags stay aligned with the adopted mass.
 
 | Bit | Value | Description |
 | :-: | ----: | :---------- |
 | 0 | 1 | Low continuum SNR in emission-subtracted *g* and *r* fiber photometry (mag error ≥ 1.0857/10, i.e. implied SNR &lt; 10 in those bands), from `compute_emission_subtracted_photo_errors` |
-| 1 | 2 | M_g &lt; −18.5 at the survey redshift: `MAG_G` + `LUMI_DIST_MPC` + `g_kcorr`(`g−r`, `Z_CMB`). For rows with bit 0, this replaces the catalog-build bright cut; other rows match the delta-mag–based cut in `DWARF_MASKBIT` bit 17 at ingest. |
+| 1 | 2 | M_g &lt; −18.5 at the survey redshift: `MAG_G` + `LUMI_DIST_MPC` + `g_kcorr`(`g−r`, `Z_CMB`). For rows with bit 0 or bit 2, this replaces the catalog-build bright cut; other rows match the delta-mag–based cut in `DWARF_MASKBIT` bit 17 at ingest. |
+| 2 | 4 | Unreliable nebular correction: \|`DELTA_MAG_G_NEB`\| or \|`DELTA_MAG_R_NEB`\| &gt; 2 mag. The nebular emission subtraction is implausibly large, so the delta-mag chain is discarded and the mass is taken from the same fallback path as bit 0. |
 
 </details>
 

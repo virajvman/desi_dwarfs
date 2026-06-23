@@ -194,10 +194,10 @@ COLUMNS_TO_CONSOLIDATE = [
 ]
 
 # Bits 0-11, 13-15, and 17 depend on photometry and are inherited from the
-# property source. Bits 12 (near SGA outskirts) and 16 (wrong Redrock) are
-# fiber-specific (depend on per-fiber RA/DEC and per-fiber spectrum) and are
-# kept from the row itself.
-FIBER_BITS_MASK = np.int64((1 << 12) | (1 << 16))
+# property source. Bits 12 (near SGA outskirts), 16 (wrong Redrock), and
+# 19 (junk spectrum: SNR<0 in >=2 arms) are fiber-specific (depend on per-fiber
+# RA/DEC and per-fiber spectrum) and are kept from the row itself.
+FIBER_BITS_MASK = np.int64((1 << 12) | (1 << 16) | (1 << 19))
 PHOTO_BITS_MASK = np.int64((((1 << 16) - 1) | (1 << 17)) & ~FIBER_BITS_MASK)
 
 
