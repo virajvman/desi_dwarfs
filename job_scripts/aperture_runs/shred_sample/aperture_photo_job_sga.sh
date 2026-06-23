@@ -46,6 +46,15 @@ fi
 # Command-line args
 BASE_ARGS="-sample $SAMPLE -min 0 -max 100000 -run_parr -ncores 128 -overwrite -nchunks 5 -no_cnn_cut -use_sample sga"
 
+# Propagate the full-overwrite toggle to the photometry pipeline too. Without
+# it, dwarf_photo_pipeline.py runs in incremental mode and exits early on every
+# object already in the output catalog ("No new objects to process"), skipping
+# make_cats/run_aper -- so the downstream tractor step then crashes on the
+# missing source_cat_f.fits it expects.
+if [ "$OVERWRITE_PHOTOMETRY" = true ]; then
+    BASE_ARGS="$BASE_ARGS -overwrite_photometry"
+fi
+
 # ------------------------------
 # Run steps
 # ------------------------------
