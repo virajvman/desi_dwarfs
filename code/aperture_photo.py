@@ -443,12 +443,15 @@ def run_aperture_pipe(input_dict):
                     "save_summary_png": None,
                     "closest_star_norm_dist": closest_star_norm_dist,
                     "lie_on_segment_island": False,
-                    "aper_frac_mask_badpix": np.nan, 
-                    "img_frac_mask_badpix":  np.nan
+                    "aper_frac_mask_badpix": np.nan,
+                    "img_frac_mask_badpix":  np.nan,
+                    "psfsize_g": np.nan,
+                    "psfsize_r": np.nan,
+                    "psfsize_z": np.nan,
                 }
 
             return output_dict
-            
+
         except:
             do_i_run = True
     if overwrite == True:
@@ -584,10 +587,13 @@ def run_aperture_pipe(input_dict):
                         "closest_star_norm_dist": closest_star_norm_dist,
                         "lie_on_segment_island": lie_on_segment_island,
                         "first_min_dist_island_pix" : min_dist_pix,
-                        "aper_frac_mask_badpix": np.nan, 
-                        "img_frac_mask_badpix":  np.nan
+                        "aper_frac_mask_badpix": np.nan,
+                        "img_frac_mask_badpix":  np.nan,
+                        "psfsize_g": np.nan,
+                        "psfsize_r": np.nan,
+                        "psfsize_z": np.nan,
                     }
- 
+
                 return output_dict
 
 
@@ -798,7 +804,21 @@ def run_aperture_pipe(input_dict):
         separations = source_cat_f["separations"].data
         source_cat_obs = source_cat_f[np.argmin(separations)]
 
-        #Due to some mistake in the LOWZ source catalog, and how the overlapping region was handled, for LOWZ the separations can be 
+        #PSF size (arcsec FWHM) of the matched central Tractor source. A value of
+        #0 (or masked/missing) means the sweep had no PSF measurement, which we
+        #store as NaN. psfsize varies smoothly across the small cutout, so the
+        #central source's value is representative of the whole object.
+        def _central_psfsize(band):
+            try:
+                v = float(source_cat_obs[f"psfsize_{band}"])
+            except (TypeError, ValueError):
+                return np.nan
+            return v if v > 0 else np.nan
+        central_psfsize_g = _central_psfsize("g")
+        central_psfsize_r = _central_psfsize("r")
+        central_psfsize_z = _central_psfsize("z")
+
+        #Due to some mistake in the LOWZ source catalog, and how the overlapping region was handled, for LOWZ the separations can be
         #non-zero in the overlapping region
         if np.min(separations) > 1:
             print("---")
@@ -1397,8 +1417,11 @@ def run_aperture_pipe(input_dict):
                 "closest_star_norm_dist": closest_star_norm_dist,
                 "lie_on_segment_island": lie_on_segment_island,
                 "first_min_dist_island_pix" : min_dist_pix,
-                "aper_frac_mask_badpix": aper_frac_mask_badpix, 
+                "aper_frac_mask_badpix": aper_frac_mask_badpix,
                 "img_frac_mask_badpix":  img_frac_mask_badpix,
+                "psfsize_g": central_psfsize_g,
+                "psfsize_r": central_psfsize_r,
+                "psfsize_z": central_psfsize_z,
             }
         
 

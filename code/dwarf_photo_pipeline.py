@@ -1171,8 +1171,11 @@ if __name__ == '__main__':
                                    "save_path": "SAVE_PATH",
                                    "lie_on_segment_island": "APER_SOURCE_ON_ORG_BLOB" ,
                                    "save_summary_png": "SAVE_SUMMARY_APER_PATH",
-                                   "aper_frac_mask_badpix": "APER_ORG_R3_FRAC_MASK_PIX", 
-                                   "img_frac_mask_badpix": "IMAGE_MASK_PIX_FRAC", 
+                                   "aper_frac_mask_badpix": "APER_ORG_R3_FRAC_MASK_PIX",
+                                   "img_frac_mask_badpix": "IMAGE_MASK_PIX_FRAC",
+                                   "psfsize_g": "PSFSIZE_G",
+                                   "psfsize_r": "PSFSIZE_R",
+                                   "psfsize_z": "PSFSIZE_Z",
                                         }
                 
                 #looping over the keys!!
@@ -1454,7 +1457,9 @@ if __name__ == '__main__':
                                     "num_trac_source_isolate" : "NUM_TRACTOR_SOURCES_ISOLATE",
                                     "simple_photo_island_dist_pix" :"SIMPLE_BLOB_DIST_PIX" ,
                                     "simplest_photo_aper_frac_in_image" : "SIMPLE_APER_R4_FRAC_IN_IMG" ,
-                                    "aperfrac_in_image_data_r4":  "APERFRAC_R4_IN_IMG_DATA_NO_ISOLATE"
+                                    "aperfrac_in_image_data_r4":  "APERFRAC_R4_IN_IMG_DATA_NO_ISOLATE",
+                                    "aper_radec_cen": "APER_RADEC_CEN_ISOLATE",
+                                    "aper_radec_cen_no_isolate": "APER_RADEC_CEN_NO_ISOLATE"
                                         }
     
                 #looping over the keys!!

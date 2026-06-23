@@ -9,7 +9,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=256
 #SBATCH --mem=0
-#SBATCH --time=01:00:00
+#SBATCH --time=08:00:00
 #SBATCH --job-name=sga_run
 #SBATCH --output=aperture_shred_sga.log
 
@@ -37,7 +37,7 @@ RUN_SHIFTER=true
 
 # Match dwarf_photo_pipeline consolidated catalog for tractor incremental mode
 END_NAME=""
-OVERWRITE_PHOTOMETRY=false
+OVERWRITE_PHOTOMETRY=true
 TRACTOR_PHOTO_ARGS=(-end_name "$END_NAME")
 if [ "$OVERWRITE_PHOTOMETRY" = true ]; then
     TRACTOR_PHOTO_ARGS+=(-overwrite_photometry)
