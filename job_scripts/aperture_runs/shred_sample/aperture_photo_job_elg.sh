@@ -30,7 +30,7 @@ export HDF5_USE_FILE_LOCKING=FALSE
 # Configurable flags
 # ------------------------------
 SAMPLE="ELG"
-MAKE_CATS=true      # set true/false
+MAKE_CATS=false      # set true/false
 RUN_APER=true
 RUN_COG=true
 RUN_SHIFTER=true
