@@ -1,32 +1,18 @@
 import numpy as np
-import astropy.io.fits as fits
 import matplotlib as mpl
-import matplotlib.pyplot as plt
-import astropy.units as u
 import os
 import sys
-import scipy.optimize as opt
-from astropy import units as u
-from astropy.coordinates import SkyCoord
 import argparse
-from astropy.io import fits
-from astropy.wcs import WCS
-from astropy.table import Table, vstack, join, hstack
+from astropy.table import Table, vstack, hstack
 import multiprocessing as mp
 from tqdm import tqdm, trange
 url_prefix = 'https://www.legacysurvey.org/viewer/'
-import requests
 from io import BytesIO
-import matplotlib.patches as patches
-from astropy.table import Column
 from aperture_photo import run_aperture_pipe
 from aperture_cogs import run_cog_pipe
 # from get_sga_distances import get_sga_info
 from desi_lowz_funcs import save_subimage, fetch_psf, generate_random_string, add_paths_to_catalog, get_stellar_mass
 import cutout_store
-from desiutil import brick
-import fitsio
-from easyquery import Query, QueryMaker
 import shutil
 from process_tractors import get_nearby_source_catalog, are_more_bricks_needed, return_sources_wneigh_bricks, read_source_pzs, read_source_cat, remove_source_cat_duplicates
 from functools import partial

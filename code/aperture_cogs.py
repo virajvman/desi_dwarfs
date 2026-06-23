@@ -10,21 +10,15 @@ Basic steps are following what SGA catalog did:
 '''
 
 from scipy.ndimage import gaussian_filter
-from scipy import ndimage as ndi
 from desi_lowz_funcs import make_subplots, sdss_rgb, process_img
 import numpy as np
 from photutils.aperture import aperture_photometry, EllipticalAperture
-from photutils.morphology import data_properties
-from astropy import units as u
-from matplotlib.colors import LogNorm
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 import pickle
 from astropy.table import Table
 from matplotlib.colors import Normalize
-from photutils.background import Background2D, MedianBackground
-from photutils.segmentation import detect_sources
-from photutils.segmentation import make_2dgaussian_kernel
+from photutils.segmentation import detect_sources, make_2dgaussian_kernel
 from astropy.convolution import convolve
 import matplotlib.patches as patches
 from isolate_galaxy_mask import get_isolate_galaxy_mask

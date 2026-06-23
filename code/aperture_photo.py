@@ -1,51 +1,36 @@
 ##In this script, we redo the photometry for shredded objects 
 
-from photutils.background import Background2D, MedianBackground
 import os
 import sys
 import joblib
-import scipy.optimize as opt
-from photutils.aperture import ApertureStats
-import numpy as np
-from tqdm import trange
-import multiprocessing as mp
-from tqdm import tqdm
-from astropy.io import fits
-from astropy.table import Table, vstack, join
-import astropy.coordinates as coord
-from scipy.ndimage import binary_dilation
-from astropy.table import Column
-from astropy import units as u
-from astropy.coordinates import SkyCoord
-import matplotlib.pyplot as plt
-import matplotlib as mpl
-from matplotlib.colors import LogNorm
-import mastcasjobs
-from astropy.io import fits
-from astropy.wcs import WCS
-from photutils.aperture import aperture_photometry, SkyEllipticalAperture, CircularAperture, EllipticalAperture
-import matplotlib.patches as patches
-from matplotlib.patches import Circle
-from photutils.segmentation import detect_sources, deblend_sources
-import matplotlib.cm as cm
-url_prefix = 'https://www.legacysurvey.org/viewer/'
-# Third-party imports 
-import requests
-from io import BytesIO
-from astropy.io import fits
-import matplotlib.colors as mcolors
-from matplotlib.collections import PatchCollection
-from easyquery import Query, QueryMaker
-reduce_compare = QueryMaker.reduce_compare
+import pickle
 import random
 import argparse
 import concurrent.futures
-import pickle
-from photutils.segmentation import make_2dgaussian_kernel
-from astropy.convolution import convolve
-from photutils.background import StdBackgroundRMS, MADStdBackgroundRMS
-from astropy.stats import SigmaClip
+from io import BytesIO
+
+import numpy as np
+import scipy.optimize as opt
+from scipy.ndimage import binary_dilation
 from scipy.stats import skew, kurtosis
+
+from astropy import units as u
+from astropy.coordinates import SkyCoord
+from astropy.table import vstack
+from astropy.convolution import convolve
+from astropy.stats import SigmaClip
+
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import matplotlib.patches as patches
+import matplotlib.colors as mcolors
+from matplotlib.colors import LogNorm
+
+from photutils.aperture import aperture_photometry, CircularAperture
+from photutils.background import MADStdBackgroundRMS
+from photutils.segmentation import detect_sources, deblend_sources, make_2dgaussian_kernel
+
+url_prefix = 'https://www.legacysurvey.org/viewer/'
 from desi_lowz_funcs import get_elliptical_aperture, measure_elliptical_aperture_area_fraction_masked
 from desi_lowz_funcs import flux_to_mag
 
