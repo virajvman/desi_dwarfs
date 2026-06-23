@@ -78,7 +78,7 @@ Core identifiers, coordinates, redshifts, stellar masses, photometry, and qualit
 | `MAG_TYPE` | str | | Photometry method used for `MAG_G/R/Z`. See [MAG_TYPE descriptions](#mag-type-descriptions) |
 | `PHOTOMETRY_UPDATED` | bool | | Whether photometry was updated from original target Tractor photometry |
 | `R50_R` | float32 | arcsec | Half-light radius in *r*-band |
-| `SHAPE_PARAMS` | float32 (2,) | | Galaxy shape parameters: *b/a* ratio, position angle (degrees) |
+| `SHAPE_PARAMS` | float32 (2,) | | Galaxy shape `[b/a, PA]`: axis ratio and major-axis position angle in **degrees East of North, range [0, 180)**. Folded to this single convention across all photometry types; the raw Tractor `PHI` (TRACTOR HDU, `[−90, 90]`) is the same orientation modulo 180°. |
 | `IN_SGA_2020` | bool | | Whether Tractor `MASKBITS=12` is set (bright-galaxy neighbor association in imaging) |
 | `ASSOCIATED_TARGETIDS` | object | | List of associated TARGETIDs (variable-length per row) |
 | `DWARF_PRIMARY_TARGETID` | int64 | | TARGETID of the primary fiber, chosen as the brightest `MAG_R_TARGET` among associated fibers |
@@ -185,7 +185,7 @@ Original Tractor photometry and morphological parameters from the DESI Legacy Su
 | `SERSIC_IVAR` | float32 | | Inverse variance of the Sersic index |
 | `BA` | float32 | | Axis ratio (*b/a*) of the best-fit galaxy model |
 | `TYPE` | str | | Tractor morphological type |
-| `PHI` | float32 | deg | Position angle of the major axis |
+| `PHI` | float32 | deg | Raw Tractor major-axis position angle, `0.5·arctan2(SHAPE_E2, SHAPE_E1)`, **range [−90, 90]** (DR10 ellipticity convention). Same on-sky orientation as the MAIN-HDU `SHAPE_PARAMS` PA, but the two differ by 180° where PA ∈ [90, 180); use `SHAPE_PARAMS[:,1]` for the science PA in [0, 180). |
 | `NOBS_G` | int16 | | Number of images at the central pixel in *g*-band |
 | `NOBS_R` | int16 | | Number of images at the central pixel in *r*-band |
 | `NOBS_Z` | int16 | | Number of images at the central pixel in *z*-band |
@@ -328,8 +328,8 @@ Reprocessed photometry for sources whose photometry was updated. This extension 
 | `COG_DECREASE_MAX_MAG_NO_ISOLATE` | float32 (3,) | | Magnitude decrease during maximum consecutive COG decrease (without isolate mask) |
 | `APER_CEN_RADEC_ISOLATE` | float32 (2,) | deg | Aperture centroid (RA, Dec) (with isolate mask) |
 | `APER_CEN_RADEC_NO_ISOLATE` | float32 (2,) | deg | Aperture centroid (RA, Dec) (without isolate mask) |
-| `APER_PARAMS_ISOLATE` | float32 (3,) | pixels, ratio, deg | Aperture parameters: semi-major axis (pixels), *b/a* ratio, position angle (with isolate mask) |
-| `APER_PARAMS_NO_ISOLATE` | float32 (3,) | pixels, ratio, deg | Aperture parameters: semi-major axis (pixels), *b/a* ratio, position angle (without isolate mask) |
+| `APER_PARAMS_ISOLATE` | float32 (3,) | pixels, ratio, rad | Aperture parameters: semi-major axis (pixels), *b/a* ratio, position angle in **radians** (raw photutils pixel-frame orientation; converted to East-of-North degrees when consolidated into `SHAPE_PARAMS`) (with isolate mask) |
+| `APER_PARAMS_NO_ISOLATE` | float32 (3,) | pixels, ratio, rad | Aperture parameters: semi-major axis (pixels), *b/a* ratio, position angle in **radians** (raw photutils pixel-frame orientation; converted to East-of-North degrees when consolidated into `SHAPE_PARAMS`) (without isolate mask) |
 | `APER_SOURCE_ON_ORG_BLOB` | bool | | Whether DESI source lies on the unsmoothed detection blob |
 | `NEAREST_STAR_NORM_DIST` | float32 | | Distance to nearest star in units of the star masking radius |
 | `NEAREST_STAR_MAX_MAG` | float32 | mag | Brightest magnitude (across BP, RP, or G) of the nearest star |

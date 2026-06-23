@@ -147,17 +147,50 @@ main_datamodel = {
         "blank_value": np.nan,
         "dtype": "float32"
     },
-    "SAMPLE": {
+    "IS_BGS_BRIGHT": {
         "unit": None,
         "description": (
-            "Single convenience label: typically BGS_BRIGHT, BGS_FAINT, LOWZ, ELG, or OTHER. "
-            "At catalog assembly (combine_hdus), duplicate TARGETIDs are collapsed to one row "
-            "(first in stack order); rows with SAMPLE in BGS_BRIGHT, BGS_FAINT, or ELG are "
-            "reassigned from ZCAT targeting bits with priority BGS_BRIGHT > BGS_FAINT > ELG "
-            "(main+SV masks). LOWZ and OTHER are unchanged. Use ZCAT bit columns for full "
-            "multi-bit membership."
+            "Boolean: target belongs to the BGS_BRIGHT target list. Derived from ZCAT "
+            "targeting bits (BGS_TARGET main survey OR SV{1,2,3}_BGS_TARGET), evaluated "
+            "for every row. Non-exclusive: a target may belong to multiple lists."
         ),
-        "dtype": "str"
+        "dtype": "bool"
+    },
+    "IS_BGS_FAINT": {
+        "unit": None,
+        "description": (
+            "Boolean: target belongs to the BGS_FAINT target list. Derived from ZCAT "
+            "targeting bits (BGS_TARGET main survey OR SV{1,2,3}_BGS_TARGET), evaluated "
+            "for every row. Non-exclusive."
+        ),
+        "dtype": "bool"
+    },
+    "IS_LOWZ": {
+        "unit": None,
+        "description": (
+            "Boolean: target belongs to the LOWZ secondary target list. Derived from "
+            "ZCAT SCND_TARGET (main survey) OR SV{1,2,3}_SCND_TARGET bits 15/16/17, "
+            "evaluated for every row. Non-exclusive."
+        ),
+        "dtype": "bool"
+    },
+    "IS_ELG": {
+        "unit": None,
+        "description": (
+            "Boolean: target belongs to the ELG target list. Derived from ZCAT "
+            "targeting bits (DESI_TARGET main survey OR SV{1,2,3}_DESI_TARGET), "
+            "evaluated for every row. Non-exclusive."
+        ),
+        "dtype": "bool"
+    },
+    "IS_OTHER": {
+        "unit": None,
+        "description": (
+            "Boolean: object entered the catalog via the QSO/SCND hidden-dwarf "
+            "candidate branch (provenance flag, formerly SAMPLE=='OTHER'); mirrors "
+            "IN_SGA_2020. Not a targeting-bit membership flag."
+        ),
+        "dtype": "bool"
     },
     "DWARF_MASKBIT": {
         "unit": None,
@@ -196,7 +229,7 @@ main_datamodel = {
     },
     "SHAPE_PARAMS": {
         "unit": None,
-        "description": "Galaxy shape parameters: b/a ratio, position angle",
+        "description": "Galaxy shape [b/a, PA]: axis ratio and major-axis position angle in degrees East of North, range [0,180). Folded to one convention across photometry types; raw Tractor PHI in [-90,90] is the same orientation mod 180.",
         "shape": (2,),
         "blank_value": np.nan,
         "dtype": "float32"
@@ -769,7 +802,7 @@ tractor_datamodel = {
 
     "PHI": {
         "unit": "deg",
-        "description": "Position angle of the major axis",
+        "description": "Raw Tractor major-axis position angle 0.5*arctan2(SHAPE_E2,SHAPE_E1) in deg, range [-90,90] (DR10 convention). Same orientation as SHAPE_PARAMS PA but differs by 180 deg for PA in [90,180); use SHAPE_PARAMS[:,1] for science PA in [0,180).",
         "blank_value": np.nan,
         "dtype": "float32",
     },
@@ -1230,7 +1263,7 @@ photo_datamodel = {
 
     "APER_PARAMS_ISOLATE": {
         "unit": None,
-        "description": "Aperture parameters: semi-major axis in pixels, b/a ratio, PA (with isolate mask)",
+        "description": "Aperture parameters: semi-major axis in pixels, b/a ratio, PA in radians (raw photutils pixel-frame orientation; converted to East-of-North deg in SHAPE_PARAMS) (with isolate mask)",
         "shape": (3,),
         "blank_value": np.nan,
         "dtype": "float32"
@@ -1239,7 +1272,7 @@ photo_datamodel = {
 
     "APER_PARAMS_NO_ISOLATE": {
         "unit": None,
-        "description": "Aperture parameters: semi-major axis in pixels, b/a ratio, PA (without isolate mask)",
+        "description": "Aperture parameters: semi-major axis in pixels, b/a ratio, PA in radians (raw photutils pixel-frame orientation; converted to East-of-North deg in SHAPE_PARAMS) (without isolate mask)",
         "shape": (3,),
         "blank_value": np.nan,
         "dtype": "float32"

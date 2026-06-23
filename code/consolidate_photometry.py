@@ -515,6 +515,14 @@ def consolidate_positions_and_shapes(catalog):
 
     phot_update_final[mask_trac_org] = 0
 
+    # Position-angle convention: fold PA to [0, 180) deg (East-of-North).
+    # The Tractor branch (TRACTOR_OG) carries raw catalog["PHI"] in [-90, 90]
+    # (DR10 phi = 0.5*arctan2(e2, e1)), while the aperture branches use
+    # 90 + degrees(theta), already in [0, 180). Folding mod 180 makes the whole
+    # column the same East-of-North angle in one range; NaNs and values already
+    # in [0, 180) are unchanged.
+    shape_final[:, 1] = shape_final[:, 1] % 180.0
+
     # Add to catalog, and over-writing the original RA,DEC columns. The original RA,DEC columns are stored in RA_TARGET, DEC_TARGET
     catalog["RA"] = ra_final
     catalog["DEC"] = dec_final
@@ -634,7 +642,8 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
         catalog["DWARF_MASKBIT"] = clean_maskbits
 
         #add the SHAPE_PARAMS column
-        org_aper_params = np.vstack([catalog["BA"].data,catalog["PHI"].data]).T.astype(np.float32)
+        #fold PA to [0, 180) deg East-of-North; raw PHI is the DR10 phi in [-90, 90]
+        org_aper_params = np.vstack([catalog["BA"].data, catalog["PHI"].data % 180.0]).T.astype(np.float32)
         catalog["SHAPE_PARAMS"] = org_aper_params
 
         catalog["R50_R"] = catalog["SHAPE_R"].data
@@ -694,10 +703,22 @@ def create_main_data_model(catalog, save_name, clean_cat=False):
     #then we loop over the columns to get the final subset of columns
     # Keep only columns present in main_datamodel
     print("Selecting the subset of columns for MAIN extension")
-    catalog_main = catalog[ [col for col in main_datamodel.keys() if col not in ["ASSOCIATED_TARGETIDS", "DWARF_PRIMARY_TARGETID", "DWARF_PRIMARY", "DIST_SOURCE","LOG_MSTAR_M24_ERR","PROPERTY_SOURCE_TARGETID", "DWARF_PRIMARY_TARGETID"] ] ]
-    
+    # Columns that are populated later (in combine_hdus / finalize_main_hdu) and so
+    # are not present yet at this per-sample stage; skip them here.
+    cols_added_later = [
+        "ASSOCIATED_TARGETIDS", "DWARF_PRIMARY_TARGETID", "DWARF_PRIMARY",
+        "DIST_SOURCE", "LOG_MSTAR_M24_ERR", "PROPERTY_SOURCE_TARGETID",
+        "IS_BGS_BRIGHT", "IS_BGS_FAINT", "IS_LOWZ", "IS_ELG", "IS_OTHER",
+    ]
+    selected_cols = [col for col in main_datamodel.keys() if col not in cols_added_later]
+    # SAMPLE is no longer part of main_datamodel, but must ride along as a transient
+    # column so combine_hdus can derive IS_OTHER from it before dropping it.
+    if "SAMPLE" in catalog.colnames:
+        selected_cols.append("SAMPLE")
+    catalog_main = catalog[selected_cols]
+
     for col in main_datamodel.keys():
-        if col not in ["ASSOCIATED_TARGETIDS", "DWARF_PRIMARY_TARGETID", "DWARF_PRIMARY", "DIST_SOURCE", "LOG_MSTAR_M24_ERR","PROPERTY_SOURCE_TARGETID", "DWARF_PRIMARY_TARGETID"]:
+        if col not in cols_added_later:
             print(f"Column : {col}")
             meta = main_datamodel[col]
     
@@ -1440,52 +1461,65 @@ def apply_post_emission_mstar_dwarf_cut(
         print("=" * 60)
 
 
-def _reassign_sample_from_zcat(main_tab, zcat_tab):
+def _add_target_membership_flags(main_tab, zcat_tab):
     """
-    Set MAIN.SAMPLE from ZCAT targeting bits (main survey + SV), same logic as
-    construct_dwarf_galaxy_catalogs.py. Priority: BGS_BRIGHT > BGS_FAINT > ELG.
+    Add boolean target-list membership flags to MAIN and drop the transient SAMPLE column.
 
-    Only rows with SAMPLE in {BGS_BRIGHT, BGS_FAINT, ELG} are updated. LOWZ, OTHER,
-    and other labels are left unchanged. Rows slated for update but with no matching
-    bit keep their current SAMPLE.
+    The four target-list flags are derived purely from ZCAT targeting bits (main
+    survey + SV), evaluated independently for every row (non-exclusive, no priority):
+
+      IS_BGS_BRIGHT, IS_BGS_FAINT -- BGS_TARGET / SV{1,2,3}_BGS_TARGET (bgs_mask)
+      IS_ELG                      -- DESI_TARGET / SV{1,2,3}_DESI_TARGET (desi_mask['ELG'])
+      IS_LOWZ                     -- SCND_TARGET / SV{1,2,3}_SCND_TARGET bits 15/16/17,
+                                     matching get_lowz_catalogs in
+                                     construct_dwarf_galaxy_catalogs.py.
+
+    IS_OTHER is provenance-based (transient SAMPLE == "OTHER", i.e. the QSO/SCND
+    hidden-dwarf-candidate branch), mirroring IN_SGA_2020. SAMPLE is removed
+    afterwards; downstream code should use these flags + IN_SGA_2020 instead.
     """
     _assert_targetid_aligned(main_tab, zcat_tab, "MAIN", "ZCAT")
 
     z = zcat_tab
-    iron_bgs = z["BGS_TARGET"]
-    bgsb_main = (iron_bgs & bgs_mask["BGS_BRIGHT"]) != 0
-    bgsb_sv = get_sv_bgs_mask(z, bgs_class="BGS_BRIGHT")
-    is_bgsb = bgsb_main | bgsb_sv
 
-    bgsf_main = (iron_bgs & bgs_mask["BGS_FAINT"]) != 0
-    bgsf_sv = get_sv_bgs_mask(z, bgs_class="BGS_FAINT")
-    is_bgsf = bgsf_main | bgsf_sv
+    iron_bgs = z["BGS_TARGET"]
+    is_bgsb = ((iron_bgs & bgs_mask["BGS_BRIGHT"]) != 0) | get_sv_bgs_mask(z, bgs_class="BGS_BRIGHT")
+    is_bgsf = ((iron_bgs & bgs_mask["BGS_FAINT"]) != 0) | get_sv_bgs_mask(z, bgs_class="BGS_FAINT")
 
     desi_tgt = z["DESI_TARGET"]
-    elg_main = (desi_tgt & desi_mask["ELG"]) != 0
-    elg_sv = get_sv_elg_mask(z)
-    is_elg = elg_main | elg_sv
+    is_elg = ((desi_tgt & desi_mask["ELG"]) != 0) | get_sv_elg_mask(z)
+
+    # LOWZ secondary program: SCND_TARGET bits 15/16/17 (main survey + SV1/2/3).
+    lowz_scnd_bits = (1 << 15) | (1 << 16) | (1 << 17)
+    is_lowz = (z["SCND_TARGET"] & lowz_scnd_bits) != 0
+    for svi in (1, 2, 3):
+        is_lowz = is_lowz | ((z[f"SV{svi}_SCND_TARGET"] & lowz_scnd_bits) != 0)
+
+    if "SAMPLE" not in main_tab.colnames:
+        raise KeyError(
+            "MAIN is missing the transient SAMPLE column needed to derive IS_OTHER; "
+            "ensure create_main_data_model preserved it."
+        )
+    is_other = np.asarray(main_tab["SAMPLE"], dtype=str) == "OTHER"
+
+    main_tab["IS_BGS_BRIGHT"] = np.asarray(is_bgsb, dtype=bool)
+    main_tab["IS_BGS_FAINT"] = np.asarray(is_bgsf, dtype=bool)
+    main_tab["IS_LOWZ"] = np.asarray(is_lowz, dtype=bool)
+    main_tab["IS_ELG"] = np.asarray(is_elg, dtype=bool)
+    main_tab["IS_OTHER"] = np.asarray(is_other, dtype=bool)
 
     n = len(main_tab)
-    reassigned = np.full(n, "", dtype=object)
-    reassigned[is_bgsb] = "BGS_BRIGHT"
-    reassigned[~is_bgsb & is_bgsf] = "BGS_FAINT"
-    reassigned[~is_bgsb & ~is_bgsf & is_elg] = "ELG"
-
-    samples = np.asarray(main_tab["SAMPLE"], dtype=str)
-    update_mask = np.isin(samples, ["BGS_BRIGHT", "BGS_FAINT", "ELG"])
-    apply_mask = update_mask & (reassigned != "")
-    no_bit = update_mask & (reassigned == "")
-    n_no_bit = int(np.sum(no_bit))
-    if n_no_bit > 0:
-        print(
-            f"  WARNING: {n_no_bit} rows with SAMPLE in BGS_BRIGHT/BGS_FAINT/ELG have no "
-            "BGS_BRIGHT/BGS_FAINT/ELG bit in ZCAT; leaving SAMPLE unchanged"
+    print(
+        "  Target-list membership flags (of {} rows): IS_BGS_BRIGHT={}, IS_BGS_FAINT={}, "
+        "IS_LOWZ={}, IS_ELG={}, IS_OTHER={}".format(
+            n,
+            int(main_tab["IS_BGS_BRIGHT"].sum()), int(main_tab["IS_BGS_FAINT"].sum()),
+            int(main_tab["IS_LOWZ"].sum()), int(main_tab["IS_ELG"].sum()),
+            int(main_tab["IS_OTHER"].sum()),
         )
+    )
 
-    out = samples.copy()
-    out[apply_mask] = reassigned[apply_mask]
-    main_tab["SAMPLE"] = out
+    main_tab.remove_columns("SAMPLE")
 
 
 def _targetid_dedup_keep_indices(targetids):
@@ -1596,10 +1630,11 @@ def combine_hdus(hdu_list, base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs
     Combine multiple HDUs (Astropy tables) into a single multi-extension FITS file.
 
     After stacking clean + shreds (+ optional extras) with identical row order for
-    MAIN, ZCAT, TRACTOR, and FASTSPEC, this function (1) reassigns MAIN ``SAMPLE``
-    from ZCAT targeting bits with priority BGS_BRIGHT > BGS_FAINT > ELG for rows
-    whose SAMPLE is BGS_BRIGHT, BGS_FAINT, or ELG; (2) deduplicates on TARGETID (first row
-    kept); (3) runs ``finalize_main_hdu`` on MAIN. LOWZ and OTHER are not relabeled.
+    MAIN, ZCAT, TRACTOR, and FASTSPEC, this function (1) adds boolean target-list
+    membership flags to MAIN (IS_BGS_BRIGHT, IS_BGS_FAINT, IS_LOWZ, IS_ELG from ZCAT
+    targeting bits -- non-exclusive, computed for every row -- plus provenance-based
+    IS_OTHER) and drops the transient SAMPLE column; (2) deduplicates on TARGETID
+    (first row kept); (3) runs ``finalize_main_hdu`` on MAIN.
 
     Parameters
     ----------
@@ -1656,8 +1691,9 @@ def combine_hdus(hdu_list, base_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs
             _assert_targetid_aligned(main_pre, stacked[sn], "MAIN", sn)
 
     n_before = len(main_pre)
-    print("combine_hdus: Reassigning SAMPLE from ZCAT targeting bits (BGS_BRIGHT > BGS_FAINT > ELG)")
-    _reassign_sample_from_zcat(stacked["MAIN"], stacked["ZCAT"])
+    print("combine_hdus: Adding target-list membership flags "
+          "(IS_BGS_BRIGHT/IS_BGS_FAINT/IS_LOWZ/IS_ELG/IS_OTHER) from ZCAT bits; dropping SAMPLE")
+    _add_target_membership_flags(stacked["MAIN"], stacked["ZCAT"])
 
     tids_pre = np.asarray(stacked["MAIN"]["TARGETID"])
     _, tid_counts = np.unique(tids_pre, return_counts=True)
@@ -2029,13 +2065,14 @@ def add_too_bright_maskbit(cat_path, bit=17, mag_cut=-18.5):
     print(f"DWARF_MASKBIT bit {bit} (Mg < {mag_cut}): "
           f"flagged {n_flagged}/{n_total} ({100.0 * n_flagged / n_total:.1f}%) total")
 
-    samples = np.asarray(main_cat["SAMPLE"], dtype=str)
-    for sample in sorted(set(samples)):
-        in_sample = samples == sample
+    for flag in ["IS_BGS_BRIGHT", "IS_BGS_FAINT", "IS_LOWZ", "IS_ELG", "IS_OTHER"]:
+        if flag not in main_cat.colnames:
+            continue
+        in_sample = np.asarray(main_cat[flag], dtype=bool)
         n_samp = int(in_sample.sum())
         n_flag = int((too_bright & in_sample).sum())
         pct = 100.0 * n_flag / n_samp if n_samp > 0 else 0.0
-        print(f"  {sample}: {n_flag}/{n_samp} ({pct:.1f}%)")
+        print(f"  {flag}: {n_flag}/{n_samp} ({pct:.1f}%)")
 
     main_hdu_new = fits.table_to_hdu(main_cat)
     main_hdu_new.name = "MAIN"
