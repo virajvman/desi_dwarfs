@@ -9,7 +9,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=256
 #SBATCH --mem=0
-#SBATCH --time=05:00:00
+#SBATCH --time=00:30:00
 #SBATCH --job-name=lowz_shred
 #SBATCH --output=aperture_shred_lowz.log
 
@@ -30,7 +30,7 @@ export HDF5_USE_FILE_LOCKING=FALSE
 # Configurable flags
 # ------------------------------
 SAMPLE="LOWZ"
-MAKE_CATS=false      # set true/false
+MAKE_CATS=true      # set true/false
 RUN_APER=true
 RUN_COG=true
 RUN_SHIFTER=true
