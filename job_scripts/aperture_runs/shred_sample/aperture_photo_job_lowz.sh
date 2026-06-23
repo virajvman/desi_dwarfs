@@ -1,7 +1,7 @@
 #!/bin/bash -l
 
 #SBATCH --account=desi
-#SBATCH --qos=debug
+#SBATCH --qos=regular
 #SBATCH --constraint=cpu
 #SBATCH --mail-user=virajvm@stanford.edu
 #SBATCH --mail-type=ALL
@@ -9,7 +9,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=256
 #SBATCH --mem=0
-#SBATCH --time=00:30:00
+#SBATCH --time=02:00:00
 #SBATCH --job-name=lowz_shred
 #SBATCH --output=aperture_shred_lowz.log
 
