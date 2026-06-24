@@ -39,7 +39,7 @@ Outputs (in RESULTS_DIR):
 
 import os
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import csv
 
 import numpy as np
 import matplotlib
@@ -47,9 +47,18 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import h5py
 import torch
-from astropy.table import Table
 
-from desi_lowz_funcs import print_stage
+
+def print_stage(line2print, ch='-', end_space=True):
+    """Banner line for organizational output. Inlined from desi_lowz_funcs so
+    this script stays free of the DESI software stack and can run under the
+    standalone NERSC `pytorch` module (which ships its own Python/numpy)."""
+    nl = len(line2print)
+    print(ch * nl)
+    print(line2print)
+    print(ch * nl)
+    if end_space:
+        print(' ')
 
 # ----------------------------------------------------------------------------
 # Configuration
@@ -153,6 +162,16 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     # Summary table at the K_GRID checkpoints
     # ------------------------------------------------------------------
+    # Save the per-component arrays the plots/diagnostics depend on *first*, so
+    # pca_scan_per_component.npz is guaranteed even if the summary step fails.
+    print_stage("Saving per-component arrays")
+    np.savez(f"{RESULTS_DIR}/pca_scan_per_component.npz",
+             S=S_np, S_null=S_null_np,
+             evr_train=evr_train, cum_evr_train=cum_evr_train,
+             evr_valid=evr_valid, cum_evr_valid=cum_evr_valid,
+             recon_mse_valid=recon_mse_valid,
+             first_below_null=first_below)
+
     print_stage("Saving summary")
     rows = []
     for k in K_GRID:
@@ -167,21 +186,22 @@ if __name__ == "__main__":
             "evr_valid_k": float(evr_valid[k - 1]),
             "n_above_null": int(np.sum(above_null[:k])),
         })
-    tab = Table(rows)
-    tab.write(f"{RESULTS_DIR}/pca_scan_summary.csv", overwrite=True)
-    print(tab)
+    colnames = list(rows[0].keys())
+    with open(f"{RESULTS_DIR}/pca_scan_summary.csv", "w", newline="") as f_csv:
+        writer = csv.DictWriter(f_csv, fieldnames=colnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    # Echo the summary table to the log.
+    print("  ".join(colnames))
+    for r in rows:
+        print("  ".join(f"{r[c]}" for c in colnames))
     print(f"\nFirst component below the noise floor: k = {first_below}")
 
+    # "k" already lives in colnames, so pass it once. (The old code also passed
+    # an explicit k= alongside **{...incl. 'k'...}, which raises
+    # TypeError: savez() got multiple values for keyword argument 'k'.)
     np.savez(f"{RESULTS_DIR}/pca_scan_summary.npz",
-             k=np.array([r["k"] for r in rows]),
-             **{c: np.array(tab[c]) for c in tab.colnames},
-             first_below_null=first_below)
-
-    np.savez(f"{RESULTS_DIR}/pca_scan_per_component.npz",
-             S=S_np, S_null=S_null_np,
-             evr_train=evr_train, cum_evr_train=cum_evr_train,
-             evr_valid=evr_valid, cum_evr_valid=cum_evr_valid,
-             recon_mse_valid=recon_mse_valid,
+             **{c: np.array([r[c] for r in rows]) for c in colnames},
              first_below_null=first_below)
 
     # ------------------------------------------------------------------
