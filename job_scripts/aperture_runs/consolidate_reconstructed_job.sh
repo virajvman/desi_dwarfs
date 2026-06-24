@@ -9,7 +9,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=256
 #SBATCH --mem=0
-#SBATCH --time=01:00:00
+#SBATCH --time=03:00:00
 #SBATCH --job-name=consolidate_recon
 #SBATCH --output=consolidate_reconstructed.log
 
@@ -51,9 +51,9 @@ if [ "$OVERWRITE_PHOTOMETRY" = true ]; then
     COMMON_ARGS+=(-overwrite_photometry)
 fi
 
-echo "=== Consolidating shred samples ==="
-srun --cpu-bind=cores python3 "${CODE_DIR}/consolidate_reconstructed.py" \
-    -sample "$SHRED_SAMPLES" -use_sample shred "${COMMON_ARGS[@]}"
+# echo "=== Consolidating shred samples ==="
+# srun --cpu-bind=cores python3 "${CODE_DIR}/consolidate_reconstructed.py" \
+    # -sample "$SHRED_SAMPLES" -use_sample shred "${COMMON_ARGS[@]}"
 
 echo "=== Consolidating SGA sample ==="
 srun --cpu-bind=cores python3 "${CODE_DIR}/consolidate_reconstructed.py" \
