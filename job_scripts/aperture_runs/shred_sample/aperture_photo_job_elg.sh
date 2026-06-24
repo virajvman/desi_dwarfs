@@ -9,7 +9,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=256
 #SBATCH --mem=0
-#SBATCH --time=10:00:00
+#SBATCH --time=15:00:00
 #SBATCH --job-name=elg_shred
 #SBATCH --output=aperture_shred_job_elg.log
 
@@ -49,7 +49,7 @@ if [ "$OVERWRITE_PHOTOMETRY" = true ]; then
 fi
 
 # Command-line args
-BASE_ARGS="-sample $SAMPLE -min 0 -max 100000 -run_parr -ncores 128 -overwrite -nchunks 5 -no_cnn_cut -use_sample shred"
+BASE_ARGS="-sample $SAMPLE -min 0 -max 100000 -run_parr -ncores 128 -overwrite -nchunks 350 -no_cnn_cut -use_sample shred"
 
 # Propagate the full-overwrite toggle to the photometry pipeline too. Without
 # it, dwarf_photo_pipeline.py runs in incremental mode and exits early on every
