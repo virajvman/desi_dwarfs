@@ -139,9 +139,15 @@ def _finite_pair(val):
 
 
 def _gal_pixel(wcs, gal_radec, fallback_xy):
-    """world->pixel (0-indexed) for the galaxy center, with a pixel fallback."""
+    """world->pixel (0-indexed) for the galaxy center, with a pixel fallback.
+
+    The stored cutout WCS is 3-D (the image is a ``(3, S, S)`` grz cube), so we
+    reduce it to its celestial 2-D subset before projecting -- otherwise astropy
+    rejects the 2-coordinate ``all_world2pix(ra, dec, 0)`` call.
+    """
     if gal_radec is not None:
-        x, y = wcs.all_world2pix(gal_radec[0], gal_radec[1], 0)
+        cel = wcs.celestial
+        x, y = cel.all_world2pix(gal_radec[0], gal_radec[1], 0)
         x, y = float(x), float(y)
         if np.isfinite(x) and np.isfinite(y):
             return x, y
