@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>recon_vi — reconstructed-cube VI</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="sidebar-head">Objects</div>
+      <div id="sidebar-list"></div>
+    </aside>
+
+    <main id="main">
+      <header id="topbar">
+        <div class="topbar-left">
+          <button id="btn-prev" class="nav">‹ Prev</button>
+          <span id="counter" class="counter">– / –</span>
+          <button id="btn-next" class="nav">Next ›</button>
+        </div>
+        <div class="topbar-mid">
+          <span class="kv">TARGETID <b id="targetid">—</b></span>
+          <span class="kv">brick <b id="brickname">—</b></span>
+          <span id="variant-badge" class="badge">—</span>
+          <span id="verdict-badge" class="badge v-none">—</span>
+        </div>
+        <div class="topbar-right">
+          <input id="jump-input" placeholder="index / TARGETID" />
+          <button id="btn-jump">Go</button>
+        </div>
+      </header>
+
+      <section id="panels">
+        <figure class="panel">
+          <figcaption>Input cutout <span class="hint">(click sources)</span></figcaption>
+          <canvas id="canvas-input" width="460" height="460"></canvas>
+        </figure>
+        <figure class="panel">
+          <figcaption>Current reconstruction <span class="hint">(before)</span></figcaption>
+          <canvas id="canvas-base" width="460" height="460"></canvas>
+        </figure>
+        <figure class="panel">
+          <figcaption>Fine-tuned <span class="hint">(live)</span></figcaption>
+          <canvas id="canvas-live" width="460" height="460"></canvas>
+        </figure>
+      </section>
+
+      <section id="controls">
+        <div class="row">
+          <button id="btn-remove" class="act danger">Remove from cube</button>
+          <button id="btn-add" class="act good">Add to cube</button>
+          <button id="btn-undo" class="act">Undo</button>
+          <button id="btn-reset" class="act">Reset to baseline</button>
+          <span id="sel-info" class="muted">0 selected</span>
+          <span class="grow"></span>
+          <span class="hint">scroll = zoom · drag = pan · hold <kbd>O</kbd> = overlay on all panels · <kbd>Shift</kbd>+click = target</span>
+        </div>
+        <div class="row legend">
+          <span class="lg"><i class="sw on"></i> in cube</span>
+          <span class="lg"><i class="sw out"></i> subtracted (dashed)</span>
+          <span class="lg"><i class="sw edit"></i> your edit (＋ added / － removed)</span>
+          <span class="lg"><i class="sw tgt"></i> target</span>
+        </div>
+        <div class="row">
+          <button id="btn-accept" class="verdict accept">Accept</button>
+          <button id="btn-unsure" class="verdict unsure">Unsure</button>
+          <button id="btn-reject" class="verdict reject">Reject</button>
+          <span id="status-line" class="muted">removed 0 · added 0 · changed 0</span>
+        </div>
+        <div class="row">
+          <textarea id="comment" placeholder="comment (autosaved)"></textarea>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="tooltip"></div>
+
+  <script src="/static/rgb.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
