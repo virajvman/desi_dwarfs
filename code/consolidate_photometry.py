@@ -1082,8 +1082,12 @@ def load_and_filter_qso_scnd_candidates(
     for sample in np.unique(cats["ORIGIN_SAMPLE"]):
         print(f"    {sample}: {np.sum(cats['ORIGIN_SAMPLE'] == sample)}")
 
-    # Set SAMPLE column to "OTHER"
-    cats["SAMPLE"] = np.full(len(cats), "OTHER", dtype=object)
+    # Set SAMPLE column to "OTHER".  Use a fixed-width numpy string (not
+    # dtype=object): SAMPLE is a transient column not in main_datamodel, so it
+    # bypasses the dtype-normalizing loop in create_main_data_model and would
+    # otherwise reach catalog_main.write() as an object column, which astropy
+    # serializes as an illegal variable-length "P5A()" format and rejects.
+    cats["SAMPLE"] = np.full(len(cats), "OTHER")
 
     ##add in SGA and other information!
 
