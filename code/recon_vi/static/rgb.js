@@ -1,24 +1,29 @@
-// rgb.js -- faithful JS port of tractor_model.sdss_rgb() + a float16 decoder.
+// rgb.js -- faithful JS port of desi_lowz_funcs.sdss_rgb() + a float16 decoder.
 //
 // The cubes are laid out (3, S, S) in band order [g, r, z] (matching every
 // np.array([... "g","r","z"]) in the pipeline). sdss_rgb maps:
-//   g (cube band 0) -> scale 2.5 -> RGB plane 2 (blue)
-//   r (cube band 1) -> scale 1.5 -> RGB plane 1 (green)
-//   z (cube band 2) -> scale 0.4 -> RGB plane 0 (red)
-// with m = 0.02, Q = 20, the mean taken over the 3 bands, then clip(0, 1).
-// This must match aperture_cogs/tractor_model.sdss_rgb exactly so the GUI's
-// fine-tuned panel is photometrically identical to the pipeline's stretch.
+//   g (cube band 0) -> scale 6.0 -> RGB plane 2 (blue)
+//   r (cube band 1) -> scale 3.4 -> RGB plane 1 (green)
+//   z (cube band 2) -> scale 2.2 -> RGB plane 0 (red)
+// with m = 0.03, Q = 20, the mean taken over the 3 bands, then clip(0, 1).
+//
+// CRITICAL: these scales/m are the FUNCTION DEFAULTS of sdss_rgb, NOT the
+// internal `rgbscales` fallback (g=2.5,r=1.5,z=0.4,m=0.02). aperture_cogs calls
+// sdss_rgb(total_model, ["g","r","z"]) with no `scales=`/`m=`, so the defaults
+// (scales=dict(g=(2,6.0), r=(1,3.4), z=(0,2.2)), m=0.03) win -- they overwrite
+// the fallback via rgbscales.update(scales). The GUI must use the SAME numbers
+// or every recon image renders ~2.4x too faint with the wrong color balance.
 
 (function (global) {
   "use strict";
 
-  var M = 0.02;
+  var M = 0.03;
   var Q = 20.0;
   var SQRTQ = Math.sqrt(Q);
   // (scale, rgbPlane) per band, in cube band order g, r, z.
-  var SCALE_G = 2.5, PLANE_G = 2;
-  var SCALE_R = 1.5, PLANE_R = 1;
-  var SCALE_Z = 0.4, PLANE_Z = 0;
+  var SCALE_G = 6.0, PLANE_G = 2;
+  var SCALE_R = 3.4, PLANE_R = 1;
+  var SCALE_Z = 2.2, PLANE_Z = 0;
 
   // Decode an IEEE-754 half (Uint16) to a JS number.
   function halfToFloat(h) {

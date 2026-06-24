@@ -21,7 +21,7 @@
           <button id="btn-next" class="nav">Next ›</button>
         </div>
         <div class="topbar-mid">
-          <span class="kv">TARGETID <b id="targetid">—</b></span>
+          <span class="kv">TARGETID <a id="targetid" class="tid-link" href="#" target="_blank" rel="noopener noreferrer">—</a></span>
           <span class="kv">brick <b id="brickname">—</b></span>
           <span id="variant-badge" class="badge">—</span>
           <span id="verdict-badge" class="badge v-none">—</span>
@@ -55,7 +55,12 @@
           <button id="btn-reset" class="act">Reset to baseline</button>
           <span id="sel-info" class="muted">0 selected</span>
           <span class="grow"></span>
-          <span class="hint">scroll = zoom · drag = pan · hold <kbd>O</kbd> = overlay on all panels · <kbd>Shift</kbd>+click = target</span>
+          <button id="btn-reset-view" class="act">Reset view</button>
+          <label class="muted" for="fov-input">FOV</label>
+          <input id="fov-input" inputmode="numeric"
+                 title="visible field of view in array pixels — type a value + Enter" />
+          <span class="muted">px</span>
+          <span class="hint">scroll = zoom · drag = pan · hold <kbd>O</kbd> = overlay · <kbd>Shift</kbd>+click = target</span>
         </div>
         <div class="row legend">
           <span class="lg"><i class="sw on"></i> in cube</span>

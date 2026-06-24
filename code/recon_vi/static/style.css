@@ -86,6 +86,12 @@ body {
 .counter { color: var(--fg-dim); min-width: 70px; text-align: center; }
 .kv { color: var(--fg-dim); }
 .kv b { color: var(--fg); font-weight: 700; }
+.kv a.tid-link {
+  color: var(--fg);
+  font-weight: 700;
+  text-decoration: none;
+}
+.kv a.tid-link:hover { color: var(--accent); text-decoration: underline; }
 
 .badge {
   padding: 2px 8px; border-radius: 10px; font-size: 0.8em;
@@ -114,6 +120,7 @@ input, textarea {
   border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px;
 }
 #jump-input { width: 130px; }
+#fov-input { width: 58px; text-align: right; }
 
 /* ---- panels ---- */
 #panels {

@@ -84,8 +84,7 @@ One dependency beyond the scientific stack:
 pip install flask          # numpy + h5py are already present
 
 cd /Users/.../desi_dwarfs/code
-python -m recon_vi.server --bundle bundle.h5 --out decisions.csv \
-    [--inspector yourname] [--port 8000]
+python -m recon_vi.server --bundle recon_vi/bundle.h5 --out recon_vi/decisions.csv
 ```
 
 (Equivalently `python recon_vi/server.py --bundle ...` — the module is

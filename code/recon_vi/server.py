@@ -223,6 +223,11 @@ def _to_str(v):
     return str(v)
 
 
+def _targetid_str(v):
+    """JSON-safe TARGETID: decimal string preserves full int64 in JS."""
+    return str(int(v))
+
+
 # ----------------------------------------------------------------------
 # App factory
 # ----------------------------------------------------------------------
@@ -250,7 +255,7 @@ def create_app(bundle_path, out_path, inspector=""):
                 status = "inspected" if dec.get("inspected") else ("edited" if edited else "")
             out.append({
                 "index": i,
-                "targetid": row["targetid"],
+                "targetid": _targetid_str(row["targetid"]),
                 "brickname": row["brickname"],
                 "toggle_disabled": row["toggle_disabled"],
                 "n_sources": row["n_sources"],
@@ -265,8 +270,9 @@ def create_app(bundle_path, out_path, inspector=""):
         if i < 0 or i >= len(bundle):
             return jsonify({"error": "index out of range"}), 404
         meta = bundle.metadata(i)
-        meta["targetid"] = bundle.index[i]["targetid"]
-        dec = store.get(meta["targetid"])
+        tgid = int(bundle.index[i]["targetid"])
+        meta["targetid"] = _targetid_str(tgid)
+        dec = store.get(tgid)
         if dec is not None:
             meta["decision"] = {
                 "removed_objids": _split(dec.get("removed_objids", "")),
@@ -294,7 +300,7 @@ def create_app(bundle_path, out_path, inspector=""):
         except (KeyError, ValueError) as exc:
             return jsonify({"error": str(exc)}), 400
         return jsonify({"ok": True, "row": {
-            "TARGETID": row["TARGETID"], "verdict": row["verdict"],
+            "TARGETID": _targetid_str(row["TARGETID"]), "verdict": row["verdict"],
             "inspected": row["inspected"],
             "n_sources_changed": row["n_sources_changed"],
         }})
@@ -315,6 +321,15 @@ def create_app(bundle_path, out_path, inspector=""):
         return jsonify({"first_undecided": first_undecided,
                         "last_decided": last_decided,
                         "n_objects": len(bundle)})
+
+    # Local dev tool: never let the browser cache the JS/CSS/HTML, so edits to
+    # static/ show up on a plain reload (no hard-refresh needed).
+    @app.after_request
+    def _no_cache(resp):
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+        return resp
 
     return app
 

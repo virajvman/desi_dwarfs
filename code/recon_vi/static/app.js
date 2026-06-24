@@ -8,6 +8,7 @@
   var PIXSCALE = 0.262;        // arcsec/pix (DR9/DR10 grz)
   var FOV = 200;               // fiducial viewport size in array pixels
   var MIN_HIT_PX = 8;          // min click tolerance (screen px)
+  var VIEWER_TID_BASE = "https://www.legacysurvey.org/viewer/desi-spectrum/dr1/targetid";
   // Membership/provenance palette (saturated so it pops on RGB, like the LS
   // viewer). Channels are kept orthogonal: COLOR = state, LINE STYLE = in/out
   // of cube (solid/dashed), BADGE = your session edits. Type stays on hover.
@@ -36,6 +37,7 @@
   var view = { scale: 1, ox0: 0, oy0: 0 };  // shared offscreen viewport
   var flashOn = false;
   var saveTimer = null;
+  var loadToken = 0;           // guards against out-of-order/stale object loads
 
   // ---- Init --------------------------------------------------------------
   function init() {
@@ -50,6 +52,7 @@
       btnUndo: $("btn-undo"), btnReset: $("btn-reset"),
       btnAccept: $("btn-accept"), btnUnsure: $("btn-unsure"), btnReject: $("btn-reject"),
       btnPrev: $("btn-prev"), btnNext: $("btn-next"),
+      btnResetView: $("btn-reset-view"), fov: $("fov-input"),
       jump: $("jump-input"), jumpGo: $("btn-jump"),
       comment: $("comment"), selinfo: $("sel-info"), status: $("status-line"),
       tooltip: $("tooltip"), verdictBadge: $("verdict-badge"),
@@ -68,6 +71,9 @@
     }).catch(function (e) { console.error(e); alert("Failed to load bundle: " + e); });
   }
 
+  function tidStr(v) { return String(v); }
+  function viewerUrl(tid) { return VIEWER_TID_BASE + tidStr(tid); }
+
   // ---- Sidebar -----------------------------------------------------------
   function buildSidebar() {
     var html = "";
@@ -75,7 +81,7 @@
       var o = objects[i];
       html += '<div class="sb-item" data-i="' + i + '" id="sb-' + i + '">' +
         '<span class="sb-idx">' + i + '</span>' +
-        '<span class="sb-tid">' + o.targetid + '</span>' +
+        '<span class="sb-tid">' + tidStr(o.targetid) + '</span>' +
         '<span class="sb-mark" id="sb-mark-' + i + '"></span></div>';
     }
     els.sidebar.innerHTML = html;
@@ -113,9 +119,11 @@
   // ---- Object loading ----------------------------------------------------
   function openObject(i) {
     if (i < 0 || i >= objects.length) return;
+    var token = ++loadToken;   // only the latest openObject is allowed to commit
     var metaP = fetch("/api/object/" + i).then(function (r) { return r.json(); });
     var arrP = fetch("/api/object/" + i + "/arrays").then(function (r) { return r.arrayBuffer(); });
     Promise.all([metaP, arrP]).then(function (res) {
+      if (token !== loadToken) return;   // a newer load superseded this one
       var meta = res[0], buffer = res[1];
       cur = buildState(i, meta, buffer);
       buildOffscreens();
@@ -124,7 +132,12 @@
       drawAll();
       refreshHeader();
       prefetch(i + 1);
-    }).catch(function (e) { console.error(e); });
+    }).catch(function (e) {
+      console.error("openObject(" + i + ") failed:", e);
+      if (token === loadToken) {
+        flashTooltip("Failed to load object " + i + ": " + (e && e.message ? e.message : e));
+      }
+    });
   }
 
   function prefetch(i) {
@@ -253,6 +266,48 @@
     view.oy0 = ogy - (cw / view.scale) / 2;
   }
 
+  // Visible field of view, in array pixels across the canvas width.
+  function currentFov() {
+    return panels.input.canvas.width / view.scale;
+  }
+
+  // FOV bounds (array px): can't zoom out past the whole cube, or in past a few px.
+  function fovBounds() {
+    var maxFov = cur ? cur.S : FOV;          // whole cube is the most you can see
+    return { min: Math.min(8, maxFov), max: maxFov };
+  }
+  // Clamp a zoom scale so the FOV stays within fovBounds().
+  function clampScale(s) {
+    var cw = panels.input.canvas.width, b = fovBounds();
+    return Math.max(cw / b.max, Math.min(cw / b.min, s));
+  }
+
+  // Refresh the FOV readout, but never clobber it while the user is typing in it.
+  function updateFovReadout() {
+    if (!cur || !els.fov || document.activeElement === els.fov) return;
+    els.fov.value = String(Math.round(currentFov()));
+  }
+
+  // Zoom to a given FOV (array px) about the current view center.
+  function setFov(f) {
+    if (!cur || !isFinite(f) || f <= 0) return;
+    var b = fovBounds();
+    f = Math.max(b.min, Math.min(b.max, f));
+    var cw = panels.input.canvas.width, ch = panels.input.canvas.height;
+    var cx = view.ox0 + (cw / view.scale) / 2;   // current center, offscreen coords
+    var cy = view.oy0 + (ch / view.scale) / 2;
+    view.scale = cw / f;
+    view.ox0 = cx - (cw / view.scale) / 2;
+    view.oy0 = cy - (ch / view.scale) / 2;
+    drawAll();
+  }
+
+  function resetViewToFiducial() {
+    if (!cur) return;
+    resetView();
+    drawAll();
+  }
+
   function arrayToCanvas(x, y) {
     var S = cur.S;
     var ox = x, oy = (S - 1) - y;
@@ -269,6 +324,7 @@
     drawPanel(panels.input, true);
     drawPanel(panels.base, flashOn);
     drawPanel(panels.live, flashOn);
+    updateFovReadout();
   }
 
   function drawPanel(panel, withOverlay) {
@@ -308,7 +364,7 @@
       ctx.globalAlpha = (inCube || isTarget || changed || isSel) ? 1.0 : 0.85;
       if (src.type === "PSF" || aScreen < 3) {
         ctx.beginPath();
-        ctx.arc(pos[0], pos[1], Math.max(4, aScreen), 0, 2 * Math.PI);
+        ctx.arc(pos[0], pos[1], Math.max(6, aScreen), 0, 2 * Math.PI);
         ctx.stroke();
       } else {
         drawEllipse(ctx, pos[0], pos[1], aScreen, src);
@@ -335,12 +391,18 @@
 
   function drawEllipse(ctx, cx, cy, aScreen, src) {
     var ee = Math.hypot(src.shape_e1, src.shape_e2);
-    var ba = (1 - ee) / (1 + ee);              // b/a
-    var theta = 0.5 * Math.atan2(src.shape_e2, src.shape_e1);
+    var ba = (1 - ee) / (1 + ee);              // b/a (Tractor ab = minor/major)
+    // Tractor PA (East of North), radians; == DR10 PHI = 0.5*atan2(e2,e1).
+    var pa = 0.5 * Math.atan2(src.shape_e2, src.shape_e1);
     var bScreen = aScreen * ba;
+    // Cutout WCS is north-up, east-left: pixel +x (right on screen) points west,
+    // so photutils theta (CCW from +x) = pi/2 + PA.  Canvas y runs downward, so
+    // draw with ctx.rotate(-thetaPix).  (Do NOT use desi_lowz_funcs' 90-PA formula;
+    // that is for sky dx/dy where +x is east, not for pixel coords.)
+    var thetaPix = Math.PI / 2 + pa;
     ctx.save();
     ctx.translate(cx, cy);
-    ctx.rotate(-theta);   // y is flipped on canvas; sign adjustable if mirrored
+    ctx.rotate(-thetaPix);
     ctx.beginPath();
     ctx.ellipse(0, 0, Math.max(2, aScreen), Math.max(1.5, bScreen), 0, 0, 2 * Math.PI);
     ctx.stroke();
@@ -473,7 +535,7 @@
     if (!cur) return;
     var d = deltas();
     var payload = {
-      TARGETID: cur.meta.targetid, BRICKNAME: cur.meta.brickname,
+      TARGETID: tidStr(cur.meta.targetid), BRICKNAME: cur.meta.brickname,
       removed_objids: d.removed, added_objids: d.added,
       verdict: cur.verdict || "", comment: els.comment.value || "",
       toggle_disabled: cur.meta.toggle_disabled,
@@ -516,7 +578,7 @@
         String(asIdx) === v) { openObject(asIdx); return; }
     // else treat as TARGETID
     for (var i = 0; i < objects.length; i++) {
-      if (String(objects[i].targetid) === v) { openObject(i); return; }
+      if (tidStr(objects[i].targetid) === v) { openObject(i); return; }
     }
     flashTooltip("No index/TARGETID " + v);
   }
@@ -525,7 +587,9 @@
   function refreshHeader() {
     var c = cur;
     els.counter.textContent = (c.i + 1) + " / " + objects.length;
-    els.targetid.textContent = c.meta.targetid;
+    var tid = tidStr(c.meta.targetid);
+    els.targetid.textContent = tid;
+    els.targetid.href = viewerUrl(tid);
     els.brickname.textContent = c.meta.brickname;
     els.variant.textContent = c.meta.toggle_disabled ? "view-only (z<0.005)" : c.meta.recon_variant;
     els.variant.className = "badge " + (c.meta.toggle_disabled ? "v-disabled" : "v-iso");
@@ -579,7 +643,7 @@
     var py = (ev.clientY - rect.top) * (ev.currentTarget.height / rect.height);
     var before = [px / view.scale + view.ox0, py / view.scale + view.oy0];
     var factor = ev.deltaY < 0 ? 1.15 : 1 / 1.15;
-    view.scale *= factor;
+    view.scale = clampScale(view.scale * factor);
     view.ox0 = before[0] - px / view.scale;
     view.oy0 = before[1] - py / view.scale;
     drawAll();
@@ -623,12 +687,17 @@
     els.btnReject.addEventListener("click", function () { setVerdict("remove"); });
     els.btnPrev.addEventListener("click", function () { go(-1); });
     els.btnNext.addEventListener("click", function () { go(1); });
+    els.btnResetView.addEventListener("click", resetViewToFiducial);
+    els.fov.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { setFov(parseFloat(els.fov.value)); els.fov.blur(); }
+    });
+    els.fov.addEventListener("blur", updateFovReadout);
     els.jumpGo.addEventListener("click", jumpTo);
     els.jump.addEventListener("keydown", function (e) { if (e.key === "Enter") jumpTo(); });
     els.comment.addEventListener("blur", function () { cur.dirty = true; scheduleSave(true); });
 
     window.addEventListener("keydown", function (e) {
-      if (e.target === els.comment || e.target === els.jump) return;
+      if (e.target === els.comment || e.target === els.jump || e.target === els.fov) return;
       if ((e.key === "o" || e.key === "O") && !flashOn) { flashOn = true; drawAll(); }
     });
     window.addEventListener("keyup", function (e) {
