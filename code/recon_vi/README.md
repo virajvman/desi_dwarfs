@@ -65,7 +65,10 @@ default `1e-4`), `-limit N` (debug: first N rows only).
 contain `tractor_models/`, `parent_galaxy_sources.fits`,
 `parent_galaxy_sources_isolate_FINAL.fits`, `final_reconstruct_galaxy_subfunction.npy`
 (and for z<0.005 the no-isolate cube). These live on **purgeable pscratch** — run
-the export before they are purged.
+the export before they are purged. The export also reads `noise_per_band_rms.npy`
+(the pipeline's per-band bkg RMS, for the masked-hole infill) and stores it as the
+`noise_rms_grz` group attr; if absent it is re-estimated from the input cutout, and
+if that fails too the infill is simply disabled for that object.
 
 **Missing files → that object is skipped** (the run never aborts) and logged to a
 sidecar `bundle_skipped.csv` next to the output, with a final count printed.
@@ -132,7 +135,16 @@ alongside `objid · mag_r · separation · in cube/subtracted · edited`.
    live panel recomputes and the selection clears.
 3. **Undo** reverts the last Add/Remove; **Reset to baseline** snaps back to the
    isolate-FINAL set.
-4. Scroll = zoom, drag = pan (all panels synced). Hold **`O`** to flash the
+4. **Infill** (button or **`i`**) fills the masked holes in the **Fine-tuned**
+   panel with background-consistent noise `N(0, σ_band)` (σ = the pipeline's
+   per-band bkg RMS). The pipeline already zeroes pixels >5σ below background, so
+   over-subtraction scars are masked holes too and get filled here. **On by
+   default** and recorded per object, so it is reproduced in the final cube (see
+   below); turn it **off** for objects where a masked footprint is itself worth
+   seeing. Greyed out for objects whose bundle has no σ. Works on view-only
+   (z<0.005) objects too. The base ("Current reconstruction") panel always stays
+   raw, so the toggle reads as a direct before→after.
+5. Scroll = zoom, drag = pan (all panels synced). Hold **`O`** to flash the
    overlay onto the reconstruction panels too.
 
 **Verdict (mouse-only, auto-advances):** **Accept** / **Unsure** / **Reject**.
@@ -162,10 +174,35 @@ the fine-tuned cube exactly later.
 | `inspected` | true once a verdict is set |
 | `comment` | free text |
 | `toggle_disabled` | true for z<0.005 view-only objects |
+| `infill_masked` | true if masked holes should be filled with bkg noise in the final cube (default true) |
 | `timestamp` | ISO-8601 UTC |
 | `inspector` | from `--inspector` |
 
 The CSV is rewritten atomically (temp + `os.replace`) on every save.
+
+### Reproducing the masked-hole infill in the final cube
+
+When `infill_masked` is true, the final reconstructed cube should fill its
+still-empty masked holes (pixels `==0` in all three bands **after** the source
+edits) with `N(0, σ_band)` flux noise, using the per-band bkg RMS shipped in the
+bundle as the `noise_rms_grz` group attr (= the pipeline's `noise_per_band_rms.npy`):
+
+```python
+def apply_infill(cube, sigma_grz, targetid):
+    """cube = science_cube − Σremoved_models + Σadded_models, shape (3, S, S)."""
+    holes = (cube == 0).all(axis=0)           # still-empty AFTER compositing
+    rng = np.random.default_rng(int(targetid) & 0xFFFFFFFF)
+    out = cube.copy()
+    for b in range(3):
+        out[b][holes] = rng.normal(0.0, sigma_grz[b], int(holes.sum()))
+    return out
+```
+
+Defining the holes *after* compositing means any source you re-added (now nonzero
+in its footprint) keeps its model and only the genuinely empty masked region gets
+noise. The fill is **statistically** reproducible, not bit-exact: the GUI preview
+and this Python draw both sample `N(0, σ_band)` (seeded by `TARGETID`) but with
+different RNGs — there is no "correct" pixel value for noise, so any draw is valid.
 
 ---
 

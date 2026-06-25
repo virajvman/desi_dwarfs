@@ -149,6 +149,9 @@ input, textarea {
 .act.good:hover { background: #173524; }
 .act.danger { border-color: #6b3330; }
 .act.danger:hover { background: #341a18; }
+/* infill toggle: on = green-tinted (default), off = dim */
+#btn-infill.on { color: var(--good); border-color: #2c6b48; background: #11271b; }
+#btn-infill.off { color: var(--fg-dim); border-color: var(--line); background: var(--bg-3); }
 .verdict { padding: 6px 18px; font-weight: 700; }
 .verdict.accept { color: var(--good); border-color: #2c6b48; }
 .verdict.accept:hover { background: #173524; }

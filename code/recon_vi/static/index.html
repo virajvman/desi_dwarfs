@@ -53,6 +53,8 @@
           <button id="btn-add" class="act good">Add to cube</button>
           <button id="btn-undo" class="act">Undo</button>
           <button id="btn-reset" class="act">Reset to baseline</button>
+          <button id="btn-infill" class="act on"
+                  title="fill masked holes with background-consistent noise (hotkey: i)">Infill: on</button>
           <span id="sel-info" class="muted">0 selected</span>
           <span class="grow"></span>
           <button id="btn-reset-view" class="act">Reset view</button>
@@ -60,7 +62,7 @@
           <input id="fov-input" inputmode="numeric"
                  title="visible field of view in array pixels — type a value + Enter" />
           <span class="muted">px</span>
-          <span class="hint">scroll = zoom · drag = pan · hold <kbd>O</kbd> = overlay · <kbd>Shift</kbd>+click = target</span>
+          <span class="hint">scroll = zoom · drag = pan · hold <kbd>O</kbd> = overlay · <kbd>i</kbd> = infill · <kbd>Shift</kbd>+click = target</span>
         </div>
         <div class="row legend">
           <span class="lg"><i class="sw on"></i> in cube</span>

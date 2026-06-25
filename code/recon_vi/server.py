@@ -42,7 +42,7 @@ STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 CSV_FIELDS = (
     "TARGETID", "BRICKNAME", "removed_objids", "added_objids",
     "n_sources_changed", "verdict", "inspected", "comment",
-    "toggle_disabled", "timestamp", "inspector",
+    "toggle_disabled", "infill_masked", "timestamp", "inspector",
 )
 VALID_VERDICTS = ("accept", "unsure", "remove", "")
 
@@ -70,6 +70,9 @@ class DecisionStore:
                     continue
                 row["inspected"] = str(row.get("inspected", "")).strip().lower() in ("1", "true", "yes")
                 row["toggle_disabled"] = str(row.get("toggle_disabled", "")).strip().lower() in ("1", "true", "yes")
+                # default ON: a row predating this column means "infill" (absent -> True)
+                _inf = str(row.get("infill_masked", "")).strip().lower()
+                row["infill_masked"] = True if _inf == "" else _inf in ("1", "true", "yes")
                 try:
                     row["n_sources_changed"] = int(row.get("n_sources_changed", 0) or 0)
                 except ValueError:
@@ -96,6 +99,7 @@ class DecisionStore:
                     "inspected": int(bool(r.get("inspected", False))),
                     "comment": r.get("comment", ""),
                     "toggle_disabled": int(bool(r.get("toggle_disabled", False))),
+                    "infill_masked": int(bool(r.get("infill_masked", True))),
                     "timestamp": r.get("timestamp", ""),
                     "inspector": r.get("inspector", self.inspector),
                 })
@@ -119,6 +123,7 @@ class DecisionStore:
                 "inspected": bool(verdict),
                 "comment": str(payload.get("comment", "") or ""),
                 "toggle_disabled": bool(payload.get("toggle_disabled", False)),
+                "infill_masked": bool(payload.get("infill_masked", True)),
                 "timestamp": datetime.datetime.now(datetime.timezone.utc)
                              .strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "inspector": self.inspector,
@@ -182,6 +187,14 @@ class Bundle:
                         "shape_e2": float(d.attrs["shape_e2"]),
                     })
             sources.sort(key=lambda s: s["objid"])
+            nr = g.attrs.get("noise_rms_grz")
+            if nr is None:
+                noise = [None, None, None]   # old bundle w/o the attr -> infill off
+            else:
+                nr = np.asarray(nr, dtype=np.float64).ravel()
+                # JSON has no NaN -> emit null for unusable bands (JS reads infill off)
+                noise = [(float(nr[k]) if (k < nr.size and np.isfinite(nr[k])) else None)
+                         for k in range(3)]
             return {
                 "index": i,
                 "targetid": int(self.index[i]["targetid"]),
@@ -195,6 +208,7 @@ class Bundle:
                 "gal_ra": float(g.attrs["gal_ra"]),
                 "gal_dec": float(g.attrs["gal_dec"]),
                 "target_objid": int(g.attrs.get("target_objid", -1)),
+                "noise_rms_grz": noise,
                 "sources": sources,
             }
 
@@ -280,6 +294,7 @@ def create_app(bundle_path, out_path, inspector=""):
                 "verdict": dec.get("verdict", "") or "",
                 "comment": dec.get("comment", "") or "",
                 "inspected": bool(dec.get("inspected", False)),
+                "infill_masked": bool(dec.get("infill_masked", True)),
             }
         else:
             meta["decision"] = None

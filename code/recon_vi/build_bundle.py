@@ -61,6 +61,7 @@ NO_ISOLATE_CUBE = "final_reconstruct_galaxy_subfunction_no_isolate.npy"
 PARENT_SOURCES = "parent_galaxy_sources.fits"
 ISOLATE_FINAL = "parent_galaxy_sources_isolate_FINAL.fits"
 MODELS_SUBDIR = "tractor_models"
+NOISE_RMS_FILE = "noise_per_band_rms.npy"  # [sig_g, sig_r, sig_z] from aperture_photo.py
 
 
 def _model_filename(objid):
@@ -154,6 +155,45 @@ def _gal_pixel(wcs, gal_radec, fallback_xy):
     return float(fallback_xy[0]), float(fallback_xy[1])
 
 
+def _bkg_rms_fallback(cube):
+    """Per-band background RMS (g, r, z) when ``noise_per_band_rms.npy`` is
+    absent: MAD-std of 3-sigma-clipped pixels, an astropy-only approximation of
+    aperture_photo.py's ``MADStdBackgroundRMS`` + ``SigmaClip(sigma=3, maxiters=5)``.
+    Returns float32[3], NaN for any degenerate band."""
+    from astropy.stats import sigma_clip, mad_std
+    out = np.full(3, np.nan, dtype=np.float32)
+    for b in range(3):
+        band = np.asarray(cube[b], dtype=np.float64).ravel()
+        band = band[np.isfinite(band)]
+        if band.size == 0:
+            continue
+        clipped = sigma_clip(band, sigma=3.0, maxiters=5, masked=True)
+        val = mad_std(clipped, ignore_nan=True)
+        if np.isfinite(val) and val > 0:
+            out[b] = np.float32(val)
+    return out
+
+
+def _read_noise_rms(file_path, cutout):
+    """Per-band bkg RMS for the masked-hole infill. Prefer the pipeline's own
+    saved value (``noise_per_band_rms.npy`` = ``[sig_g, sig_r, sig_z]``, exactly
+    the ``MADStdBackgroundRMS`` used in aperture_photo.py); else approximate it
+    from the input cutout. float32[3], NaN where unavailable -> infill stays off
+    for that object in the GUI."""
+    path = os.path.join(file_path, NOISE_RMS_FILE)
+    if os.path.exists(path):
+        try:
+            arr = np.asarray(np.load(path), dtype=np.float32).ravel()
+            if arr.size >= 3 and np.all(np.isfinite(arr[:3])) and np.all(arr[:3] > 0):
+                return np.ascontiguousarray(arr[:3], dtype=np.float32)
+        except Exception:  # noqa: BLE001 -- corrupt/odd file -> recompute below
+            pass
+    try:
+        return _bkg_rms_fallback(cutout)
+    except Exception:  # noqa: BLE001 -- never abort a build over infill metadata
+        return np.full(3, np.nan, dtype=np.float32)
+
+
 def _build_object(row, rel_thresh):
     """Read everything the GUI needs for one catalog row.
 
@@ -185,7 +225,7 @@ def _build_object(row, rel_thresh):
                 return {"status": "skip", "targetid": tgid, "brickname": brick,
                         "reason": "no tractor_models/ and no no-isolate cube"}
             recon_cube = np.load(cube_path)
-            return _finish_view_only(tgid, brick, recon_cube,
+            return _finish_view_only(tgid, brick, file_path, recon_cube,
                                      noiso_cen or iso_cen)
 
         # ---- toggleable (z >= 0.005) ----------------------------------------
@@ -272,6 +312,7 @@ def _build_object(row, rel_thresh):
         wcs = cutout_store.get_wcs(cut["header"])
         gal_xpix, gal_ypix = _gal_pixel(wcs, iso_cen or noiso_cen, fallback_xy)
         gal_radec = iso_cen or noiso_cen or (float("nan"), float("nan"))
+        noise_rms = _read_noise_rms(file_path, cut["image"])
 
         return {
             "status": "ok",
@@ -282,6 +323,7 @@ def _build_object(row, rel_thresh):
             "box_size": S,
             "input_cutout": np.ascontiguousarray(cut["image"], dtype=np.float32),
             "science_cube": np.ascontiguousarray(science_cube, dtype=np.float32),
+            "noise_rms_grz": noise_rms,
             "sources": sources,
             "gal_xpix": gal_xpix,
             "gal_ypix": gal_ypix,
@@ -295,7 +337,7 @@ def _build_object(row, rel_thresh):
                 "traceback": traceback.format_exc()}
 
 
-def _finish_view_only(tgid, brick, recon_cube, gal_radec):
+def _finish_view_only(tgid, brick, file_path, recon_cube, gal_radec):
     if recon_cube.ndim != 3 or recon_cube.shape[0] != 3:
         return {"status": "skip", "targetid": tgid, "brickname": brick,
                 "reason": "bad no-isolate cube shape {}".format(recon_cube.shape)}
@@ -307,6 +349,7 @@ def _finish_view_only(tgid, brick, recon_cube, gal_radec):
                 "reason": "no-isolate: cutout read failed: {}".format(exc)}
     wcs = cutout_store.get_wcs(cut["header"])
     gx, gy = _gal_pixel(wcs, gal_radec, ((S - 1) / 2.0, (S - 1) / 2.0))
+    noise_rms = _read_noise_rms(file_path, cut["image"])
     return {
         "status": "ok",
         "targetid": tgid,
@@ -316,6 +359,7 @@ def _finish_view_only(tgid, brick, recon_cube, gal_radec):
         "box_size": S,
         "input_cutout": np.ascontiguousarray(cut["image"], dtype=np.float32),
         "recon_cube": np.ascontiguousarray(recon_cube, dtype=np.float32),
+        "noise_rms_grz": noise_rms,
         "sources": [],
         "gal_xpix": gx, "gal_ypix": gy,
         "gal_ra": (gal_radec[0] if gal_radec else float("nan")),
@@ -340,6 +384,8 @@ def _write_object(h5, rec, cube_dtype):
     g.attrs["gal_dec"] = float(rec["gal_dec"])
     g.attrs["target_objid"] = int(rec["target_objid"])
     g.attrs["n_sources"] = len(rec["sources"])
+    # per-band bkg RMS [sig_g, sig_r, sig_z] for masked-hole infill (NaN -> off)
+    g.attrs["noise_rms_grz"] = np.ascontiguousarray(rec["noise_rms_grz"], dtype=np.float32)
 
     kw = dict(compression="gzip", compression_opts=4)
     g.create_dataset("input_cutout",

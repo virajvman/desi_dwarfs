@@ -21,6 +21,50 @@
     flash: "#9aa0ff",
   };
 
+  // ---- Masked-hole infill: seeded background-noise field ------------------
+  // Masked pixels in the science/recon cube are exactly 0 in all three bands.
+  // When infill is on, the live panel fills those holes with N(0, sigma_band)
+  // flux noise (sigma = the pipeline's per-band bkg RMS, shipped in the bundle).
+  // The field is seeded by TARGETID so it is stable across edits/reloads. This
+  // is a STATISTICAL match to the downstream Python re-draw, not bit-exact --
+  // both draw N(0, sigma_band); see README ("reproducible procedure").
+  function hash32(str) {
+    var h = 2166136261 >>> 0;
+    for (var i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    return h >>> 0;
+  }
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      var t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  // (3,S,S) flux noise field, band b ~ N(0, sigma[b]). Returns null if sigma is
+  // unusable for any band (NaN / <=0) -> infill unavailable for this object.
+  function makeNoiseField(S, sigma, tid) {
+    if (!sigma) return null;
+    for (var k = 0; k < 3; k++) {
+      if (sigma[k] == null || !isFinite(sigma[k]) || sigma[k] <= 0) return null;
+    }
+    var N = S * S, field = new Float32Array(3 * N);
+    for (var b = 0; b < 3; b++) {
+      var rng = mulberry32((hash32(tid) ^ Math.imul(b + 1, 0x9E3779B9)) >>> 0);
+      var off = b * N, sig = sigma[b];
+      for (var i = 0; i < N; i += 2) {        // Box-Muller, two normals per pass
+        var u1 = rng(); if (u1 < 1e-12) u1 = 1e-12;
+        var r = Math.sqrt(-2 * Math.log(u1)), th = 2 * Math.PI * rng();
+        field[off + i] = sig * r * Math.cos(th);
+        if (i + 1 < N) field[off + i + 1] = sig * r * Math.sin(th);
+      }
+    }
+    return field;
+  }
+
   // ---- DOM ---------------------------------------------------------------
   var $ = function (id) { return document.getElementById(id); };
   var panels = {
@@ -49,7 +93,7 @@
       counter: $("counter"), targetid: $("targetid"), brickname: $("brickname"),
       variant: $("variant-badge"),
       btnRemove: $("btn-remove"), btnAdd: $("btn-add"),
-      btnUndo: $("btn-undo"), btnReset: $("btn-reset"),
+      btnUndo: $("btn-undo"), btnReset: $("btn-reset"), btnInfill: $("btn-infill"),
       btnAccept: $("btn-accept"), btnUnsure: $("btn-unsure"), btnReject: $("btn-reject"),
       btnPrev: $("btn-prev"), btnNext: $("btn-next"),
       btnResetView: $("btn-reset-view"), fov: $("fov-input"),
@@ -172,6 +216,14 @@
       meta.decision.added_objids.forEach(function (o) { currentOn[parseInt(o, 10)] = true; });
     }
 
+    // masked-hole infill state (default ON; unavailable if no usable bkg sigma)
+    var noiseField = makeNoiseField(S, meta.noise_rms_grz, tidStr(meta.targetid));
+    var infillAvailable = !!noiseField;
+    var infill = infillAvailable;
+    if (meta.decision && typeof meta.decision.infill_masked === "boolean") {
+      infill = infillAvailable && meta.decision.infill_masked;
+    }
+
     return {
       i: i, meta: meta, S: S,
       baseCube: baseCube, cutout: cutout,
@@ -179,6 +231,7 @@
       baselineOn: baselineOn, currentOn: currentOn,
       selection: {}, undoStack: [],
       verdict: verdict, comment: comment,
+      noiseField: noiseField, infillAvailable: infillAvailable, infill: infill,
       liveImageData: null, baseImageData: null, cutoutImageData: null,
       dirty: false,
     };
@@ -231,9 +284,18 @@
   }
 
   function renderLive() {
-    var c = cur, S = c.S;
+    var c = cur, S = c.S, N = S * S;
     var octx = offCtx(S);
-    var live = c.meta.toggle_disabled ? c.baseCube : composite();
+    // copy baseCube for view-only so the infill fill never mutates the base panel
+    var live = c.meta.toggle_disabled ? new Float32Array(c.baseCube) : composite();
+    if (c.infill && c.infillAvailable && c.noiseField) {
+      var nf = c.noiseField;
+      for (var p = 0; p < N; p++) {   // fill pixels still masked (0 in all 3 bands)
+        if (live[p] === 0 && live[N + p] === 0 && live[2 * N + p] === 0) {
+          live[p] = nf[p]; live[N + p] = nf[N + p]; live[2 * N + p] = nf[2 * N + p];
+        }
+      }
+    }
     c.liveImageData = ReconRGB.sdssRgbImageData(live, S, octx);
     panels.live.off = imageDataToCanvas(c.liveImageData, S);
   }
@@ -502,6 +564,36 @@
     scheduleSave(false);
   }
 
+  // ---- Masked-hole infill toggle ----------------------------------------
+  function toggleInfill() {
+    if (!cur) return;
+    if (!cur.infillAvailable) {
+      flashTooltip("No background σ for this object — infill unavailable");
+      return;
+    }
+    cur.infill = !cur.infill;
+    cur.dirty = true;
+    renderLive();
+    drawAll();
+    updateInfillBtn();
+    scheduleSave(false);
+  }
+  function updateInfillBtn() {
+    var b = els.btnInfill;
+    if (!b) return;
+    if (!cur || !cur.infillAvailable) {
+      b.textContent = "Infill: n/a";
+      b.className = "act off";
+      b.disabled = true;
+      b.title = "no background σ in the bundle for this object";
+      return;
+    }
+    b.disabled = false;
+    b.textContent = "Infill: " + (cur.infill ? "on" : "off");
+    b.className = "act " + (cur.infill ? "on" : "off");
+    b.title = "fill masked holes with background-consistent noise (hotkey: i)";
+  }
+
   // ---- Deltas / status ---------------------------------------------------
   function deltas() {
     var removed = [], added = [];
@@ -539,6 +631,7 @@
       removed_objids: d.removed, added_objids: d.added,
       verdict: cur.verdict || "", comment: els.comment.value || "",
       toggle_disabled: cur.meta.toggle_disabled,
+      infill_masked: !!cur.infill,
     };
     return fetch("/api/decision", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -598,6 +691,7 @@
     [els.btnRemove, els.btnAdd, els.btnUndo, els.btnReset].forEach(function (b) {
       b.disabled = disabled;
     });
+    updateInfillBtn();   // independent of toggle_disabled; gated on bkg σ instead
     updateSelInfo();
     highlightSidebar(c.i);
   }
@@ -682,6 +776,7 @@
     els.btnAdd.addEventListener("click", function () { setSelected(true); });
     els.btnUndo.addEventListener("click", undo);
     els.btnReset.addEventListener("click", resetBaseline);
+    els.btnInfill.addEventListener("click", toggleInfill);
     els.btnAccept.addEventListener("click", function () { setVerdict("accept"); });
     els.btnUnsure.addEventListener("click", function () { setVerdict("unsure"); });
     els.btnReject.addEventListener("click", function () { setVerdict("remove"); });
@@ -699,6 +794,7 @@
     window.addEventListener("keydown", function (e) {
       if (e.target === els.comment || e.target === els.jump || e.target === els.fov) return;
       if ((e.key === "o" || e.key === "O") && !flashOn) { flashOn = true; drawAll(); }
+      if (e.key === "i" || e.key === "I") { toggleInfill(); }
     });
     window.addEventListener("keyup", function (e) {
       if (e.key === "o" || e.key === "O") { flashOn = false; drawAll(); }
