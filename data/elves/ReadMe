@@ -1,0 +1,284 @@
+J/ApJ/933/47       The ELVES survey photometric results       (Carlsten+, 2022)
+================================================================================
+The Exploration of Local VolumE Satellites (ELVES) survey: a nearly
+volume-limited sample of nearby dwarf satellite systems.
+    Carlsten S.G., Greene J.E., Beaton R.L., Danieli S., Greco J.P.
+   <Astrophys. J., 933, 47 (2022)>
+   =2022ApJ...933...47C
+================================================================================
+ADC_Keywords: Galaxies, dwarf; Photometry, ugriz; Magnitudes, absolute;
+              Surveys; Ultraviolet; Local group
+Keywords: Dwarf galaxies ; Low surface brightness galaxies ; Local Group ;
+          Galaxy groups
+
+Abstract:
+    We present the final sample of the Exploration of Local VolumE
+    Satellites (ELVES) survey, a survey of the dwarf satellites of a
+    nearly volume-limited sample of Milky Way (MW)-like hosts in the Local
+    Volume. Hosts are selected simply via a cut in luminosity
+    (M_Ks_{<}-22.1mag) and distance (D<12Mpc). We cataloged the satellites
+    of 25 of the 31 such hosts, with another five taken from the
+    literature. All hosts are surveyed out to at least 150 projected kpc
+    (~R_vir_/2), with the majority surveyed to 300kpc (~R_vir_).
+    Satellites are detected using a consistent semiautomated algorithm
+    specialized for low surface brightness dwarfs. As shown through
+    extensive tests with injected galaxies, the catalogs are complete to
+    M_V_~-9mag and {mu}_0,V_~26.5mag/arcsec^2^. Candidates are confirmed
+    to be real satellites through distance measurements including
+    redshift, tip of the red giant branch, and surface brightness
+    fluctuations. Across all 30 surveyed hosts, there are 338 confirmed
+    satellites with M_V_{<}-9mag, with a further 106 candidates awaiting
+    distance measurement. For the vast majority of these, we provide
+    consistent multiband Sersic photometry. We show that satellite
+    abundance correlates with host mass, with the MW being quite typical
+    among comparable systems, and that satellite quenched fraction rises
+    steeply with decreasing satellite mass, mirroring the quenched
+    fraction for the MW and M31. The ELVES survey represents a massive
+    increase in the statistics of surveyed systems with known
+    completeness, and the provided catalogs are a unique data set to
+    explore various aspects of small-scale structure and dwarf galaxy
+    evolution.
+
+Description:
+    The Exploration of Local VolumE Satellites (ELVES) survey is a survey
+    to detect and characterize low-mass, dwarf satellite galaxies around
+    nearby, massive hosts in the Local Volume). This work represents the
+    final results of the photometric part of the survey.
+
+    The full ELVES survey is an extension of our earlier survey presented
+    in Carlsten+ (2020ApJ...891..144C & 2021ApJ...908..109C). That work
+    presented a set of local volume (LV; D<12Mpc) hosts surveyed with
+    archival Canada-France-Hawaii Telescope (CFHT)/MegaCam data. The ELVES
+    sample is considerably expanded by using the extremely wide field
+    DECaLS imaging data sets.
+
+    We also used Gemini/GMOS data from programs FT-2020A-060,
+    US-2020B-037, and US-2021B-0018 (PI: S. Carlsten).
+
+File Summary:
+--------------------------------------------------------------------------------
+ FileName    Lrecl  Records  Explanations
+--------------------------------------------------------------------------------
+ReadMe          80        .  This file
+table6.dat     113      251  Confirmed dwarf satellite distance results
+table7.dat      83      196  Rejected background contaminants distance results
+table8.dat      53      106  Unconfirmed/possible candidate satellites
+table9.dat     159      444  Satellite photometry
+table10.dat     93      271  GALEX photometry for confirmed satellites
+--------------------------------------------------------------------------------
+
+See also:
+ B/cfht  : Log of CFHT Exposures (CADC, 1979-)
+ VIII/73 : HI Parkes All Sky Survey Catalogue (HIPASS) (Meyer+, 2004)
+ VII/233 : The 2MASS Extended sources (IPAC/UMass, 2003-2006)
+ VII/292 : DESI Legacy Imaging Surveys DR8 (Duncan, 2022)
+ I/355   : Gaia DR3 Part 1. Main source (Gaia Collaboration, 2022)
+ J/AJ/126/2152    : Cluster And Infall Region Nearby Survey. I (Rines+, 2003)
+ J/AJ/127/2031    : Catalog of neighboring galaxies (Karachentsev+, 2004)
+ J/ApJS/173/185   : GALEX UV atlas of nearby galaxies (Gil de Paz+, 2007)
+ J/AJ/133/504     : Galaxies around CenA/M83 complex (Karachentsev+, 2007)
+ J/ApJS/173/293   : UV-Optical galaxy color-magnitude diagram I. (Wyder+, 2007)
+ J/ApJS/178/247   : H{alpha} and [NII] survey in local 11 Mpc (Kennicutt+, 2008)
+ J/ApJ/681/197    : ACS Virgo Cluster Survey. XV (Peng+, 2008)
+ J/AJ/138/332     : LEDA CMD/tip of the red giant branch (Jacobs+, 2009)
+ J/ApJS/182/216   : Surface photometry of Virgo ellipticals (Kormendy+, 2009)
+ J/ApJ/706/599    : H{alpha} and UV SFR in the local volume (Lee+, 2009)
+ J/AJ/138/338     : Arecibo Legacy Fast ALFA Survey. IX. (Stierwalt+, 2009)
+ J/ApJS/192/6     : A GALEX UV imaging survey of nearby galaxies (Lee+, 2011)
+ J/ApJ/758/11     : Bayesian distances to M31 satellites (Conn+, 2012)
+ J/ApJS/199/26    : The 2MASS Redshift Survey (2MRS) (Huchra+, 2012)
+ J/AJ/144/4       : Dwarf galaxies in the Local Group (McConnachie+, 2012)
+ J/AJ/146/46      : Star Formation Rate in nearby galaxies (Karachentsev+, 2013)
+ J/AJ/145/101     : Updated nearby galaxy catalog (Karachentsev+, 2013)
+ J/MNRAS/445/881  : LVL global optical photometry (Cook+, 2014)
+ J/MNRAS/445/899  : LVL SEDs and physical properties (Cook+, 2014)
+ J/ApJ/813/L15    : Dwarf galaxies in Fornax cluster from NGFS (Munoz+, 2015)
+ J/ApJ/833/167    : PAndAS view of Andromeda satellites. II. (Martin+, 2016)
+ J/AJ/152/50      : Cosmicflows-3 catalog (CF3) (Tully+, 2016)
+ J/ApJ/843/16     : Galaxy groups within 3500km/s (Kourkchi+, 2017)
+ J/ApJ/855/142    : Next Generation Fornax Survey II. (Eigenthaler+, 2018)
+ J/ApJ/857/104    : Low surface brightness galaxies from HSC-SSP (Greco+, 2018)
+ J/ApJ/861/49     : ALFALFA extragalactic HI source catalog (Haynes+, 2018)
+ J/ApJ/868/55     : Structure of M31 halo. II. PAndAS (McConnachie+, 2018)
+ J/A+A/615/A96    : VI photometry in 3 dwarf galaxies (Mueller+, 2018)
+ J/ApJS/235/23    : LEGUS galaxies1 observations (Sabbi+, 2018)
+ J/A+A/620/A165   : Fornax Deep Survey with VST. IV. dwarf gal. (Venhola+, 2018)
+ J/MNRAS/478/5336 : z-low satellite galaxies in COSMOS survey (Xi+, 2018)
+ J/ApJS/244/24    : A z=0 Multiwavelength Galaxy Synthesis. I. (Leroy+, 2019)
+ J/A+A/629/L2     : [TT2009] 25 vicinity VI photometry (Mueller+, 2019)
+ J/A+A/629/A18    : Deep VI phot. of 15 dwarf galaxy candidates (Mueller+, 2019)
+ J/ApJS/240/1     : SMUDGes. I. The Coma Cluster (Zaritsky+, 2019)
+ J/ApJ/893/47     : MW satellite census. I. DES & PS1 (Drlica-Wagner+, 2020)
+ J/ApJ/890/128    : NGVS. XIV. Virgo cluster members (Ferrarese+, 2020)
+ J/MNRAS/491/1901 : Dwarf gal. in the MATLAS low-density fields (Habas+, 2020)
+ J/ApJ/902/39     : GBT HI obs. of ultradiffuse galaxies (Karunakaran+, 2020)
+ J/MNRAS/494/2600 : Immediate Milky Way's neighbours (Neuzil+, 2020)
+ J/ApJ/906/96     : Dwarfs gal. in DC Justice League Simul. (Applebaum+, 2021)
+ J/ApJ/909/211    : HST obs. of MADCASH-1 and MADCASH-2 (Carlin+, 2021)
+ J/ApJ/922/267    : Dwarf galaxies photometry & structures (Carlsten+, 2021)
+ J/ApJ/907/85     : SAGA Survey. II. Satellite systems around gal. (Mao+, 2021)
+ J/A+A/645/A92    : Dwarf spheroidal galaxies in CenA group (Mueller+, 2021)
+ J/MNRAS/500/2049 : The quiescent fraction of isolated LSBGs (Prole+, 2021)
+ J/ApJ/913/53     : Gas content of dwarf gal. within 2Mpc of MW (Putman+, 2021)
+ J/A+A/647/A100   : Fornax Deep Survey with VST. XI. (Su+, 2021)
+ J/ApJS/252/18    : Low-surface-brightness gal. from DES Y3 (Tanoglidis+, 2021)
+ J/A+A/659/A92    : HydraI galaxy cluster dwarf catalog (HCDC) (La Marca+, 2022)
+ http://www.legacysurvey.org/ : DESI Legacy Imaging Surveys homepage
+
+Byte-by-byte Description of file: table6.dat
+--------------------------------------------------------------------------------
+   Bytes Format Units   Label      Explanations
+--------------------------------------------------------------------------------
+   1- 14 A14    ---     Name       Dwarf galaxy name
+  16- 22 F7.3   deg     RAdeg      [11.78/288] Right Ascension (J2000)
+  24- 30 F7.3   deg     DEdeg      [-64.3/56] Declination (J2000)
+  32- 38 A7     ---     Host       Host galaxy name
+  40- 44 F5.2   Mpc     D-Host     [3.5/12] Host distance
+  46- 50 F5.2   Mpc     D-SBF      [3.3/13]? Surface brightness fluctuation
+                                    (SBF) distance
+  52- 56 F5.2   Mpc     lb2Dist    [1.8/11.5]? Lower 2{sigma} bound on Dist
+  58- 62 F5.2   Mpc     lb1Dist    [2.7/12]? Lower 1{sigma} bound on Dist
+  64- 68 F5.2   Mpc     ub1Dist    [4.3/15]? Upper 1{sigma} bound on Dist
+  70- 74 F5.2   Mpc     ub2Dist    [5.5/18]? Upper 2{sigma} bound on Dist
+  76- 80 F5.2   ---     SNR        [3.2/83]? SBF Signal-to-noise ratio
+  82- 89 A8     ---     Tel        SBF Source (1)
+  91- 95 A5     ---     Conf       Confirmation criteria exception (G1)
+  97-100 I4     km/s    vrec       [140/1353]? Recessional velocity
+ 102-105 A4     ---   r_vrec       Source for vrec (G2)
+ 107-111 F5.2   Mpc     D-trgb     [3/11]? Distance, tip of the red giant branch
+ 113-113 A1     ---   r_D-trgb     Source for D-trgb (G2)
+--------------------------------------------------------------------------------
+Note (1): Even though we have deeper Gemini/GMOS, Magellan/IMACS, and
+    Subaru/HSC data for many dwarfs for surface brightness fluctuation
+    (SBF), we do not present the photometry from those data in an attempt
+    to limit the number of filter systems used.
+--------------------------------------------------------------------------------
+
+Byte-by-byte Description of file: table7.dat
+--------------------------------------------------------------------------------
+   Bytes Format Units   Label   Explanations
+--------------------------------------------------------------------------------
+   1- 14 A14    ---     Name    Dwarf galaxy name
+  16- 22 F7.3   deg     RAdeg   [7.8/289] Right Ascension (J2000)
+  24- 30 F7.3   deg     DEdeg   [-65/57] Declination (J2000)
+  32- 38 A7     ---     Host    Host galaxy name
+  40- 44 F5.2   Mpc     D-Host  [3.5/12] Host distance
+  46- 50 F5.2   Mpc     D-SBF   [3.7/25]? SBF lower 2{sigma} bound on distance
+  52- 59 A8     ---     Tel     SBF Source
+  61- 65 A5     ---     Conf    Confirmation criteria exception; see Section 5.3
+                                 (only 1 occurrence =True) (G1)
+  67- 70 I4     km/s    vrec    [307/5600]? Recessional velocity
+  72- 75 A4     ---   r_vrec    Source for vrec (G2)
+  77- 77 A1     ---   l_D-trgb  Limit flag on D-trgb
+  78- 81 F4.2   Mpc     D-trgb  [3.8/9.7]? Distance, tip of the red giant branch
+      83 A1     ---   r_D-trgb  Source for D-trgb (G2)
+--------------------------------------------------------------------------------
+
+Byte-by-byte Description of file: table8.dat
+--------------------------------------------------------------------------------
+   Bytes Format Units Label      Explanations
+--------------------------------------------------------------------------------
+   1- 14 A14    ---   Name       Dwarf galaxy name
+  16- 22 F7.3   deg   RAdeg      [9/289] Right Ascension (J2000)
+  24- 30 F7.3   deg   DEdeg      [-65/57] Declination (J2000)
+  32- 38 A7     ---   Host       Host galaxy name
+  40- 44 F5.2   Mpc   D-Host     [3.5/11.9] Host distance
+  46- 53 A8     ---   Tel        SBF Source for attempt
+--------------------------------------------------------------------------------
+
+Byte-by-byte Description of file: table9.dat
+--------------------------------------------------------------------------------
+   Bytes Format Units         Label  Explanations
+--------------------------------------------------------------------------------
+  1-  14 A14    ---           Name   Dwarf galaxy name
+ 16-  22 A7     ---           Host   Host galaxy name
+ 24-  31 F8.4   deg           RAdeg  Right Ascension (J2000)
+ 33-  40 F8.4   deg           DEdeg  Declination (J2000)
+ 42-  46 F5.1   kpc           Rproj  [5.5/370] Projected, on-sky separation
+                                      from host
+ 48-  52 F5.2   mag           gmag   [9.4/21.5]? g-band magnitude
+ 54-  57 F4.2   mag         e_gmag   [0.01/0.7]? Uncertainty in gmag
+ 59-  63 F5.2   mag           rimag  [8.9/21]? R/i-band magnitude
+ 65-  68 F4.2   mag         e_rimag  [0.01/0.5]? Uncertainty in rimag
+ 70-  75 F6.2   mag           gMag   [-19.4/-8.7]? Absolute g-band magnitude
+ 77-  82 F6.2   mag           VMag   [-21/-9] Absolute V-band magnitude
+ 84-  87 F4.2   mag         e_VMag   [0.01/0.7]? Uncertainty in VMag
+ 89-  93 F5.2   [Msun]        logMs  [4.9/10.7] Log, stellar mass
+ 95-  98 F4.2   [Msun]      e_logMs  [0.1/0.37]? Uncertainty in logMs
+100- 104 F5.2   mag/arcsec2   mu0V   [11/28]? Central V-band surface brightness
+106- 109 F4.2   mag/arcsec2 e_mu0V   [0/0.8]? Uncertainty in mu0V
+111- 117 F7.1   pc            re     [110/13338]? Effective radius
+119- 123 F5.1   pc          e_re     [0.1/685]? Uncertainty in re
+125- 129 A5     ---           ETG    Morphological classification, early-type
+                                      (True) or late-type (False)
+131- 135 A5     ---           Conf   Flag indicating whether candidate has been
+                                      confirmed with a distance measurement
+137- 140 F4.2   ---           Psat   [0/1] Likelihood of unconfirmed
+                                      satellite (1)
+142- 143 A2     ---           Filt   Filter list confirming bands ("gi" or "gr")
+147- 155 A9     ---           Tel    Telescope
+157- 159 A3     ---           Bad    Bad photometry flag
+--------------------------------------------------------------------------------
+Note (1): Psat estimates the likelihood of the unconfirmed satellites being
+    true satellites based on the candidates luminosity and surface
+    brightness, see Sec. 5.6
+--------------------------------------------------------------------------------
+
+Byte-by-byte Description of file: table10.dat
+--------------------------------------------------------------------------------
+   Bytes Format Units   Label   Explanations
+--------------------------------------------------------------------------------
+   1- 14 A14    ---     Name    Dwarf galaxy name
+  16- 22 A7     ---     Host    Host galaxy name
+  24- 31 F8.4   deg     RAdeg   [11.8/288] Right Ascension (J2000)
+  33- 40 F8.4   deg     DEdeg   [-64.3/71.5] Declination (J2000)
+  42- 42 A1     ---   l_NUVmag  Limit flag on NUVmag (1)
+  43- 47 F5.2   ---     NUVmag  [12.4/24.2] GALEX FUV magnitude (1)
+  49- 52 F4.2   ---   e_NUVmag  [0.05/0.8]? Uncertainty in NUVmag (1)
+  54- 54 A1     ---   l_FUVmag  Limit flag on FUVmag (1)
+  55- 59 F5.2   ---     FUVmag  [12.5/24.5] GALEX FUV magnitude (1)
+  61- 64 F4.2   ---   e_FUVmag  [0.05/0.7]? Uncertainty in FUVmag (1)
+  66- 93 A28    ---     GALEX   GALEX imaging dataset in the MAST archive
+--------------------------------------------------------------------------------
+Note (1): For dwarfs with a detection with S/N<2, a 2{sigma} lower limit
+    to the UV magnitude is given and the error value is null.
+--------------------------------------------------------------------------------
+
+Global notes:
+Note (G1): Galaxies marked "True" by this flag are exceptions to the usual
+    confirmation criteria, see text for details.
+Note (G2): Sources as follows:
+    a = Karachentsev et al. (2013, J/AJ/145/101)
+    b = Sand et al. (2014ApJ...793L...7S)
+    c = Toloba et al. (2016ApJ...816L...5T)
+    d = Muller et al. (2019, J/A+A/629/L2)
+    e = Meyer et al. (2004MNRAS.350.1195M  Cat. VIII/73)
+    f = Irwin et al. (2009ApJ...692.1447I)
+    g = Karachentsev et al. (2022AJ....163..234K)
+    h = Cohen et al. (2018ApJ...868...96C)
+    i = Sabbi et al. (2018, J/ApJS/235/23)
+    j = Tully et al. (2016, J/AJ/152/50)
+    k = Kim et al. (2020ApJ...905..104K)
+    l = Haynes et al. (2018, J/ApJ/861/49)
+    m = Karunakaran et al. (2020, J/ApJ/902/39)
+    n = Rines et al. (2003, J/AJ/126/2152)
+    o = Smercina et al. (2018ApJ...863..152S)
+    p = Tikhonov et al. (2015AstL...41..239T)
+    q = Danieli et al. (2017ApJ...837..136D)
+    r = Bennet et al. (2019ApJ...885..153B)
+    S = Simbad
+    t = Dalcanton et al. (2009ApJS..183...67D)
+    u = Dalcanton et al. (1997AJ....114..635D)
+--------------------------------------------------------------------------------
+
+History:
+    From electronic version of the journal
+
+References:
+    Carlsten et al.   Paper I.     2022ApJ...933...47C   This catalog
+    Carlsten et al.   Paper II.    2022ApJ...927...44C
+    Greene et al.     Paper III.   2023ApJ...949...94G
+    Danieli et al.    Paper IV.    2023ApJ...956....6D
+
+================================================================================
+(End)                    Prepared by [AAS], Emmanuelle Perret [CDS]  14-Nov-2023
