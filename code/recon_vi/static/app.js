@@ -161,11 +161,34 @@
   }
 
   // ---- Object loading ----------------------------------------------------
+  // Fetch with r.ok checking and a small retry: the Flask dev server can drop
+  // or truncate a response under load (single 64 GB file), which used to surface
+  // as a generic "Failed to load object" and — because cur never advanced on
+  // failure — permanently wedge the Next button at the broken index. Transient
+  // reads now just recover.
+  function fetchOk(url, asBuffer, tries) {
+    tries = tries || 3;
+    return fetch(url).then(function (r) {
+      if (!r.ok) {
+        return r.text().then(function (t) {
+          throw new Error("HTTP " + r.status + ": " + (t || "").slice(0, 200));
+        });
+      }
+      return asBuffer ? r.arrayBuffer() : r.json();
+    }).catch(function (e) {
+      if (tries > 1) {
+        return new Promise(function (res) { setTimeout(res, 250); })
+          .then(function () { return fetchOk(url, asBuffer, tries - 1); });
+      }
+      throw e;
+    });
+  }
+
   function openObject(i) {
     if (i < 0 || i >= objects.length) return;
     var token = ++loadToken;   // only the latest openObject is allowed to commit
-    var metaP = fetch("/api/object/" + i).then(function (r) { return r.json(); });
-    var arrP = fetch("/api/object/" + i + "/arrays").then(function (r) { return r.arrayBuffer(); });
+    var metaP = fetchOk("/api/object/" + i, false);
+    var arrP = fetchOk("/api/object/" + i + "/arrays", true);
     Promise.all([metaP, arrP]).then(function (res) {
       if (token !== loadToken) return;   // a newer load superseded this one
       var meta = res[0], buffer = res[1];
@@ -179,15 +202,19 @@
     }).catch(function (e) {
       console.error("openObject(" + i + ") failed:", e);
       if (token === loadToken) {
-        flashTooltip("Failed to load object " + i + ": " + (e && e.message ? e.message : e));
+        // cur is left unchanged (we don't silently skip a broken object). Since
+        // cur.i is still the previous object, pressing Next/→ re-attempts this
+        // same index, so the message doubles as a retry hint.
+        flashTooltip("Failed to load object " + i + ": " +
+          (e && e.message ? e.message : e) + " — press Next/→ to retry");
       }
     });
   }
 
   function prefetch(i) {
     if (i < 0 || i >= objects.length) return;
-    fetch("/api/object/" + i).catch(function () {});
-    fetch("/api/object/" + i + "/arrays").catch(function () {});
+    fetchOk("/api/object/" + i, false).catch(function () {});
+    fetchOk("/api/object/" + i + "/arrays", true).catch(function () {});
   }
 
   function buildState(i, meta, buffer) {

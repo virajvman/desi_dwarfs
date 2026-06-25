@@ -27,6 +27,7 @@ GET  /api/resume            -> {first_undecided, last_decided}
 
 import os
 import csv
+import math
 import json
 import argparse
 import threading
@@ -176,15 +177,15 @@ class Bundle:
                         "bbox": [y0, x0], "h": h, "w": w,
                         "initial_membership": bool(d.attrs["initial_membership"]),
                         "type": _to_str(d.attrs["type"]),
-                        "xpix": float(d.attrs["xpix"]), "ypix": float(d.attrs["ypix"]),
-                        "separation": float(d.attrs["separation"]),
-                        "mag_g": float(d.attrs["mag_g"]),
-                        "mag_r": float(d.attrs["mag_r"]),
-                        "mag_z": float(d.attrs["mag_z"]),
-                        "sersic": float(d.attrs["sersic"]),
-                        "shape_r": float(d.attrs["shape_r"]),
-                        "shape_e1": float(d.attrs["shape_e1"]),
-                        "shape_e2": float(d.attrs["shape_e2"]),
+                        "xpix": _f(d.attrs["xpix"]), "ypix": _f(d.attrs["ypix"]),
+                        "separation": _f(d.attrs["separation"]),
+                        "mag_g": _f(d.attrs["mag_g"]),
+                        "mag_r": _f(d.attrs["mag_r"]),
+                        "mag_z": _f(d.attrs["mag_z"]),
+                        "sersic": _f(d.attrs["sersic"]),
+                        "shape_r": _f(d.attrs["shape_r"]),
+                        "shape_e1": _f(d.attrs["shape_e1"]),
+                        "shape_e2": _f(d.attrs["shape_e2"]),
                     })
             sources.sort(key=lambda s: s["objid"])
             nr = g.attrs.get("noise_rms_grz")
@@ -203,10 +204,10 @@ class Bundle:
                 "toggle_disabled": bool(g.attrs["toggle_disabled"]),
                 "box_size": S,
                 "cube_dtype": cube_dtype,
-                "gal_xpix": float(g.attrs["gal_xpix"]),
-                "gal_ypix": float(g.attrs["gal_ypix"]),
-                "gal_ra": float(g.attrs["gal_ra"]),
-                "gal_dec": float(g.attrs["gal_dec"]),
+                "gal_xpix": _f(g.attrs["gal_xpix"]),
+                "gal_ypix": _f(g.attrs["gal_ypix"]),
+                "gal_ra": _f(g.attrs["gal_ra"]),
+                "gal_dec": _f(g.attrs["gal_dec"]),
                 "target_objid": int(g.attrs.get("target_objid", -1)),
                 "noise_rms_grz": noise,
                 "sources": sources,
@@ -235,6 +236,16 @@ def _to_str(v):
     if isinstance(v, bytes):
         return v.decode("utf-8", "replace")
     return str(v)
+
+
+def _f(v):
+    """JSON-safe float: NaN/Inf -> None. Flask's jsonify serializes non-finite
+    floats as the literal tokens ``NaN``/``Infinity``, which are invalid JSON;
+    the browser's r.json() then throws and the whole object load fails (e.g. a
+    source with mag_z=NaN wedged objects 146/148). The frontend already renders
+    null as "—" and guards overlays with isFinite, so null is safe here."""
+    v = float(v)
+    return v if math.isfinite(v) else None
 
 
 def _targetid_str(v):
