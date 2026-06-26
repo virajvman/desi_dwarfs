@@ -590,29 +590,57 @@ def smooth_spectrum(wave, flux, ivar=None, mask=None, method="median", boxcar_A=
     return flux_out, good
 
 
-def spectrum_has_negative_continuum(wave, flux, ivar=None, boxcar_A=200.0, neg_thresh=-5.0):
+def spectrum_negative_continuum_stats(wave, flux, ivar=None, boxcar_A=200.0,
+                                      neg_thresh=-5.0, wave_max=4000.0):
     """
-    Median-smooth one spectrum on a ``boxcar_A`` Angstrom scale and test whether
-    any smoothed pixel falls below ``neg_thresh`` -- a signature of a strongly
-    negative continuum (sky-subtraction / normalization failure). This is the
-    per-spectrum test behind DWARF_MASKBIT bit 20.
+    Median-smooth one spectrum on a ``boxcar_A`` Angstrom scale and summarize how
+    negative the smoothed *blue* continuum is. These statistics feed
+    DWARF_MASKBIT bit 20 (suspect spectrum): an overwhelmingly negative blue
+    continuum is a signature of a sky-subtraction / normalization failure.
 
-    ``ivar`` is passed through to :func:`smooth_spectrum`, so pixels with
-    ivar <= 0 are gated out of the smoothing. Because a median over the
+    Only finite smoothed pixels with observed wavelength < ``wave_max`` are
+    considered. ``ivar`` is passed through to :func:`smooth_spectrum`, so pixels
+    with ivar <= 0 are gated out of the smoothing; because a median over the
     ``boxcar_A``-wide window is robust to a minority of gated pixels, sparse
-    sky-line masks leave the smoothed continuum intact, whereas wide contiguous
-    chip gaps go NaN locally and so are never flagged (by design).
+    sky-line masks leave the continuum intact while wide contiguous chip gaps go
+    NaN locally and are simply excluded from the statistics below.
+
+    The flagging decision (e.g. ``frac_neg_blue >= 0.75`` with
+    ``n_finite_blue >= 20``) is applied by the caller, so these raw statistics can
+    be cached once and re-thresholded later without re-smoothing.
+
+    Parameters
+    ----------
+    wave, flux : array, shape (n,)
+        Observed wavelength (Angstrom, increasing) and flux (1e-17 cgs).
+    ivar : array, optional
+        Inverse variance; pixels with ivar <= 0 are gated out.
+    boxcar_A : float
+        Median smoothing scale in Angstrom.
+    neg_thresh : float
+        A smoothed pixel counts as "negative" if it is below this value.
+    wave_max : float
+        Only pixels with observed wave < wave_max contribute (blue end).
 
     Returns
     -------
-    bool
-        True if the spectrum is flagged as a suspect (negative-continuum) spectrum.
+    n_finite_blue : int
+        Number of finite smoothed pixels with wave < wave_max.
+    frac_neg_blue : float
+        Fraction of those finite blue pixels whose smoothed flux is < neg_thresh.
+        NaN if n_finite_blue == 0.
     """
     smooth_spec, _ = smooth_spectrum(
         wave, flux, ivar=ivar, mask=None, method="median", boxcar_A=boxcar_A
     )
-    # NaN < neg_thresh evaluates False, so NaN-filled (gated) pixels never trigger.
-    return bool(np.any(smooth_spec < neg_thresh))
+    blue = np.asarray(wave, dtype=float) < wave_max
+    vals = smooth_spec[blue]
+    finite = np.isfinite(vals)
+    n_finite_blue = int(np.sum(finite))
+    if n_finite_blue == 0:
+        return 0, float("nan")
+    frac_neg_blue = float(np.sum(vals[finite] < neg_thresh) / n_finite_blue)
+    return n_finite_blue, frac_neg_blue
 
 
     

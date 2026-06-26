@@ -544,6 +544,7 @@ Each bit in `DWARF_MASKBIT` corresponds to a quality or cleaning flag. A value o
 | 17 | 131072 | M_g &lt; &minus;18.5 at the survey redshift (or fallback distance for low continuum-SNR mass rows) after nebular + filter + k-corrections. |
 | 18 | 262144 | Visually inspected (VI) and confirmed to have an incorrect redshift; TARGETID listed in data/vi_bad_tgids.txt |
 | 19 | 524288 | Junk spectrum: FastSpecFit per-camera S/N `SNR_B`/`SNR_R`/`SNR_Z` &lt; 0 in at least two of the three arms. Per-fiber flag (kept from the row itself during associated-fiber consolidation). |
+| 20 | 1048576 | Suspect spectrum: of the finite pixels of the observed coadd (median-smoothed on a 200 &Aring; scale, ivar&gt;0 only) with observed wavelength &lt; 4000 &Aring;, at least 75% lie below &minus;5 (in 10<sup>&minus;17</sup> erg s<sup>&minus;1</sup> cm<sup>&minus;2</sup> &Aring;<sup>&minus;1</sup>) &mdash; an overwhelmingly negative blue continuum / normalization failure. Requires &ge;20 such finite blue pixels; objects with fewer are not assessed. Per-fiber flag (kept from the row itself during associated-fiber consolidation). |
 
 </details>
 

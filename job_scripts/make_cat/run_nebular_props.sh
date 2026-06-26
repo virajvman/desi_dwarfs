@@ -9,7 +9,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=128
 #SBATCH --mem=256GB
-#SBATCH --time=02:00:00
+#SBATCH --time=01:00:00
 #SBATCH --mail-type=ALL
 #SBATCH --job-name=nebular_props
 #SBATCH --output=add_nebular_props.log
@@ -40,7 +40,13 @@ PUBLISH_DEST="${PUBLISH_DIR}/desi_dr1_dwarf_catalog.fits"
 # --use-informative-priors: with the 7-line SNR>5 te_mask the data constrain
 # the full 5D posterior, and Plan A keeps the ne-Te-Av covariance that Plan B's
 # independent-marginal feedback discards.
-python3 desi_dwarfs/code/add_nebular_props.py --line-flux-type FLUX --overwrite-te-cache \
+#
+# By default the per-TARGETID UltraNest fits are read from the cumulative cache
+# (te_fit_cache_ultranest_flux.fits) and only new/failed TARGETIDs are refit, so
+# routine resubmits skip the expensive sampling. To force a fresh fit for every
+# TARGETID in the te_mask (e.g. after changing the fit method, priors, or line
+# gating), add --overwrite-te-cache to the command below.
+python3 desi_dwarfs/code/add_nebular_props.py --line-flux-type FLUX \
     "${CATALOG}"
 
 # --- Publish the finished catalog to the group-readable CFS location ---------

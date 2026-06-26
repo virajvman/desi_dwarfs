@@ -197,10 +197,12 @@ main_datamodel = {
         "description": (
             "Bitwise mask to apply various cleaning cuts. Bit 19 = junk spectrum "
             "(SNR_B/R/Z < 0 in at least two of the three arms). Bit 20 = suspect "
-            "spectrum (200 A median-smoothed coadd flux < -5 in any ivar>0 pixel; "
-            "negative-continuum / normalization failure). Low continuum SNR in "
-            "emission-subtracted fiber photometry (mass pipeline) is recorded in "
-            "MSTAR_MASKBIT, not here. See bitmask descriptions in README."
+            "spectrum (>=75% of the finite 200 A median-smoothed pixels with "
+            "observed wave < 4000 A are < -5; overwhelmingly negative blue "
+            "continuum / normalization failure; needs >=20 finite blue pixels). "
+            "Low continuum SNR in emission-subtracted fiber photometry (mass "
+            "pipeline) is recorded in MSTAR_MASKBIT, not here. See bitmask "
+            "descriptions in README."
         ),
         "dtype": "int32"
     },

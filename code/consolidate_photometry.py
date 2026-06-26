@@ -19,7 +19,7 @@ warnings.filterwarnings(
 )
 from shred_photometry_maskbits import cog_mag_converge, cog_nan_mask, cog_curve_decrease, bad_colors, iffy_tractor_model
 from io import BytesIO
-from shred_photometry_maskbits import create_shred_maskbits_from_dict, print_maskbit_statistics, flag_weird_spectra, spectrum_has_negative_continuum
+from shred_photometry_maskbits import create_shred_maskbits_from_dict, print_maskbit_statistics, flag_weird_spectra, spectrum_negative_continuum_stats
 import os
 import glob
 import tempfile
@@ -2248,24 +2248,38 @@ def add_vi_bad_redshift_maskbit(cat_path, main_datamodel, bit=18, tgid_file=None
 _SHARED_SPEC_DATA = {}
 
 
-def _init_suspect_worker(wave, flux, ivar):
-    """Pool initializer: bind the shared (copy-on-write) spectra arrays."""
+def _init_suspect_worker(wave, flux, ivar, boxcar_A, neg_thresh, wave_max):
+    """Pool initializer: bind the shared (copy-on-write) spectra arrays plus the
+    smoothing / blue-region parameters baked into the cached statistics."""
     _SHARED_SPEC_DATA["wave"] = wave
     _SHARED_SPEC_DATA["flux"] = flux
     _SHARED_SPEC_DATA["ivar"] = ivar
+    _SHARED_SPEC_DATA["boxcar_A"] = boxcar_A
+    _SHARED_SPEC_DATA["neg_thresh"] = neg_thresh
+    _SHARED_SPEC_DATA["wave_max"] = wave_max
 
 
 def _process_suspect_chunk(row_indices):
     """Worker: smooth a chunk of spectra (by local row index into the shared
-    flux/ivar arrays) and return (row_indices, bool array). True where the
-    median-smoothed continuum dips below -5 in any ivar>0 pixel."""
+    flux/ivar arrays) and return (row_indices, n_finite_blue[], frac_neg_blue[]) --
+    the raw blue-continuum statistics for DWARF_MASKBIT bit 20. The flagging
+    decision (min_points + frac_thresh) is applied later from these stats."""
     wave = _SHARED_SPEC_DATA["wave"]
     flux = _SHARED_SPEC_DATA["flux"]
     ivar = _SHARED_SPEC_DATA["ivar"]
-    out = np.zeros(len(row_indices), dtype=bool)
+    boxcar_A = _SHARED_SPEC_DATA["boxcar_A"]
+    neg_thresh = _SHARED_SPEC_DATA["neg_thresh"]
+    wave_max = _SHARED_SPEC_DATA["wave_max"]
+    n_fin = np.zeros(len(row_indices), dtype=np.int32)
+    frac = np.full(len(row_indices), np.nan, dtype=np.float32)
     for k, r in enumerate(row_indices):
-        out[k] = spectrum_has_negative_continuum(wave, flux[r], ivar=ivar[r])
-    return row_indices, out
+        nf, fr = spectrum_negative_continuum_stats(
+            wave, flux[r], ivar=ivar[r],
+            boxcar_A=boxcar_A, neg_thresh=neg_thresh, wave_max=wave_max,
+        )
+        n_fin[k] = nf
+        frac[k] = fr
+    return row_indices, n_fin, frac
 
 
 def add_suspect_spectra_maskbit(
@@ -2278,34 +2292,54 @@ def add_suspect_spectra_maskbit(
     ncores=8,
     boxcar_A=200.0,
     neg_thresh=-5.0,
+    wave_max=4000.0,
+    frac_thresh=0.75,
+    min_points=20,
 ):
     """
-    Flag objects whose observed coadded spectrum has a strongly negative
-    continuum and set DWARF_MASKBIT bit ``bit`` (default 20). This is the
+    Flag objects whose observed coadded spectrum has an overwhelmingly negative
+    *blue* continuum and set DWARF_MASKBIT bit ``bit`` (default 20). This is the
     spectrum-level complement to bit 19 (junk spectrum, derived from FastSpecFit
-    per-arm SNR): here we read the actual spectra from ``spectra_h5_path``,
+    per-arm SNR): here we read the actual spectra from ``spectra_h5_path`` and
     median-smooth each on a ``boxcar_A`` Angstrom scale (gating out ivar<=0
-    pixels), and flag the spectrum if any smoothed pixel falls below
-    ``neg_thresh``. Like bits 16 and 18, it is set per-row on MAIN after
+    pixels). An object is flagged when, among the finite smoothed pixels with
+    observed wavelength < ``wave_max``, at least ``frac_thresh`` of them fall
+    below ``neg_thresh`` -- provided there are at least ``min_points`` such finite
+    blue pixels (otherwise the blue end is too masked to assess and the object is
+    left unflagged). Like bits 16 and 18, it is set per-row on MAIN after
     associated-fiber consolidation, so it is a per-fiber flag.
 
     Coverage
     --------
     Every MAIN TARGETID is expected to have a spectrum in the h5. If any are
     missing, a loud warning is printed (the h5 needs regenerating) but the run
-    continues; the missing objects simply receive no bit ``bit`` (they cannot be
-    assessed). This check is cheap and always runs.
+    continues; the missing objects simply receive no bit ``bit``. This check is
+    cheap and always runs.
 
     Caching
     -------
-    The per-TARGETID verdict is cached in ``cache_path`` (npz: ``targetids`` +
-    ``is_suspect``). With ``recompute=False`` (default) the cache is read and only
-    catalog TARGETIDs absent from the cache are smoothed (then merged back and
-    resaved), so steady-state reruns do ~zero work and -- crucially -- the
-    multi-GB FLUX/FLUX_IVAR arrays are never read from the h5 at all (only
-    TARGETID is, for the coverage check + lookup). With ``recompute=True`` the
+    Rather than the boolean verdict, the per-TARGETID *raw statistics* are cached
+    in ``cache_path`` (npz: ``targetids``, ``n_finite_blue``, ``frac_neg_blue``).
+    The verdict is derived at read time as
+    ``(n_finite_blue >= min_points) & (frac_neg_blue >= frac_thresh)``, so
+    re-tuning ``min_points`` / ``frac_thresh`` later re-derives flags straight
+    from the cache with **no re-smoothing**; only changing ``boxcar_A`` /
+    ``neg_thresh`` / ``wave_max`` (which are baked into the stats) requires
+    deleting the cache. ``frac_neg_blue`` is recorded even when
+    ``n_finite_blue < min_points`` (NaN only when ``n_finite_blue == 0``) so the
+    full distribution is available for offline criterion tuning.
+
+    With ``recompute=False`` (default) the cache is read and only catalog
+    TARGETIDs absent from the cache are smoothed (then merged back and resaved),
+    so steady-state reruns do ~zero work and the multi-GB FLUX/FLUX_IVAR arrays
+    are never read from the h5 (only TARGETID is). With ``recompute=True`` the
     cache is ignored, every in-catalog spectrum is re-smoothed, and the cache is
-    overwritten; do this after regenerating the spectra h5.
+    overwritten.
+
+    Note: this caches the raw statistics, NOT a criterion signature -- so after
+    changing ``boxcar_A`` / ``neg_thresh`` / ``wave_max`` you must delete the
+    cache file (or pass ``recompute=True``). The active criterion is printed each
+    run so a stale cache is obvious.
 
     Updates the MAIN HDU safely, preserving variable-length columns and all
     other HDUs.
@@ -2321,19 +2355,32 @@ def add_suspect_spectra_maskbit(
     spectra_h5_path : str
         Observed-frame coadd spectra h5 (datasets WAVE, FLUX, FLUX_IVAR, TARGETID).
     cache_path : str
-        Where the per-TARGETID verdict cache is stored / read.
+        Where the per-TARGETID statistics cache is stored / read.
     recompute : bool
         If True, ignore the cache and re-smooth every in-catalog spectrum.
     ncores : int
         Worker count for the fork-based smoothing pool (1 = serial).
     boxcar_A : float
-        Median smoothing scale in Angstrom (default 200).
+        Median smoothing scale in Angstrom (default 200). Baked into the cache.
     neg_thresh : float
-        Flag if any smoothed pixel is below this value (default -5).
+        A smoothed blue pixel counts as negative below this value (default -5).
+        Baked into the cache.
+    wave_max : float
+        Only observed wavelengths < this contribute (default 4000). Baked in.
+    frac_thresh : float
+        Flag if >= this fraction of finite blue pixels are < neg_thresh (default 0.75).
+        Applied at read time; re-tunable without re-smoothing.
+    min_points : int
+        Minimum finite blue pixels required to assess an object (default 20).
+        Applied at read time; re-tunable without re-smoothing.
     """
     print("=" * 60)
-    print(f"Flagging suspect spectra (negative continuum) -> DWARF_MASKBIT bit {bit}")
+    print(f"Flagging suspect spectra (negative blue continuum) -> DWARF_MASKBIT bit {bit}")
     print("=" * 60)
+    print(f"  Criterion: median smooth boxcar={boxcar_A:.0f} A (ivar-gated); flag if "
+          f">= {100.0 * frac_thresh:.0f}% of the finite smoothed pixels with observed "
+          f"wave < {wave_max:.0f} A are < {neg_thresh:g}, requiring >= {min_points} "
+          f"finite blue pixels.")
 
     # ── 1. Read MAIN TARGETIDs ───────────────────────────────────────
     main_cat = safe_read_table(cat_path, hdu="MAIN")
@@ -2375,20 +2422,28 @@ def add_suspect_spectra_maskbit(
     else:
         print(f"  Coverage OK: all {n_objects} MAIN TARGETIDs present in the h5.")
 
-    # ── 4. Load cached verdicts (tgid -> is_suspect) ─────────────────
-    cache = {}  # int tgid -> bool
+    # ── 4. Load cached statistics (tgid -> (n_finite_blue, frac_neg_blue)) ──
+    #       The boolean verdict is NOT cached; it is derived in step 7 from these
+    #       stats + the current min_points / frac_thresh.
+    cache = {}  # int tgid -> (int n_finite_blue, float frac_neg_blue)
     if recompute:
         print("  recompute=True: ignoring any existing cache; re-smoothing all in-catalog spectra.")
     elif os.path.exists(cache_path):
         cached = np.load(cache_path)
-        c_tids = np.asarray(cached["targetids"], dtype=np.int64)
-        c_susp = np.asarray(cached["is_suspect"], dtype=bool)
-        cache = {int(t): bool(s) for t, s in zip(c_tids, c_susp)}
-        print(f"  Loaded {len(cache)} cached verdicts from {cache_path}")
+        if "n_finite_blue" not in cached or "frac_neg_blue" not in cached:
+            print(f"  WARNING: {cache_path} is an outdated cache format "
+                  "(no n_finite_blue/frac_neg_blue); ignoring it and recomputing.")
+        else:
+            c_tids = np.asarray(cached["targetids"], dtype=np.int64)
+            c_nfin = np.asarray(cached["n_finite_blue"], dtype=np.int64)
+            c_frac = np.asarray(cached["frac_neg_blue"], dtype=float)
+            cache = {int(t): (int(n), float(fr))
+                     for t, n, fr in zip(c_tids, c_nfin, c_frac)}
+            print(f"  Loaded {len(cache)} cached statistics from {cache_path}")
     else:
         print(f"  No cache found at {cache_path}; computing from scratch.")
 
-    # ── 5. Which in-catalog, in-h5 TARGETIDs still need a verdict? ───
+    # ── 5. Which in-catalog, in-h5 TARGETIDs still need statistics? ──
     cat_in_h5_tids = targetids[in_h5]
     if recompute:
         to_compute = np.asarray(cat_in_h5_tids, dtype=np.int64)
@@ -2420,49 +2475,66 @@ def add_suspect_spectra_maskbit(
         chunk = 200
         chunks = [local_idx[i:i + chunk] for i in range(0, len(local_idx), chunk)]
 
-        verdict_sorted = np.zeros(len(sorted_rows), dtype=bool)
+        nfin_sorted = np.zeros(len(sorted_rows), dtype=np.int64)
+        frac_sorted = np.full(len(sorted_rows), np.nan, dtype=float)
+        worker_args = (wave, flux, ivar, boxcar_A, neg_thresh, wave_max)
         if ncores and ncores > 1:
             from multiprocessing import Pool
-            print(f"  Smoothing {len(sorted_rows)} spectra on {ncores} cores "
-                  f"(median, boxcar={boxcar_A:.0f} A, ivar-gated) ...")
+            print(f"  Smoothing {len(sorted_rows)} spectra on {ncores} cores ...")
             with Pool(processes=ncores,
                       initializer=_init_suspect_worker,
-                      initargs=(wave, flux, ivar)) as pool:
-                for ridx, out in pool.imap_unordered(_process_suspect_chunk, chunks):
-                    verdict_sorted[ridx] = out
+                      initargs=worker_args) as pool:
+                for ridx, nfin, frac in pool.imap_unordered(_process_suspect_chunk, chunks):
+                    nfin_sorted[ridx] = nfin
+                    frac_sorted[ridx] = frac
         else:
-            print(f"  Smoothing {len(sorted_rows)} spectra serially "
-                  f"(median, boxcar={boxcar_A:.0f} A, ivar-gated) ...")
-            _init_suspect_worker(wave, flux, ivar)
+            print(f"  Smoothing {len(sorted_rows)} spectra serially ...")
+            _init_suspect_worker(*worker_args)
             for ch in chunks:
-                ridx, out = _process_suspect_chunk(ch)
-                verdict_sorted[ridx] = out
+                ridx, nfin, frac = _process_suspect_chunk(ch)
+                nfin_sorted[ridx] = nfin
+                frac_sorted[ridx] = frac
 
-        # merge new verdicts into the cache
-        for t, v in zip(tgids_sorted, verdict_sorted):
-            cache[int(t)] = bool(v)
+        # merge new statistics into the cache
+        for t, nf, fr in zip(tgids_sorted, nfin_sorted, frac_sorted):
+            cache[int(t)] = (int(nf), float(fr))
 
         # save the merged cache
         os.makedirs(os.path.dirname(cache_path), exist_ok=True)
         all_tids = np.array(sorted(cache.keys()), dtype=np.int64)
-        all_susp = np.array([cache[int(t)] for t in all_tids], dtype=bool)
-        np.savez(cache_path, targetids=all_tids, is_suspect=all_susp)
-        print(f"  Cache updated: {len(all_tids)} total verdicts written to {cache_path}")
+        all_nfin = np.array([cache[int(t)][0] for t in all_tids], dtype=np.int32)
+        all_frac = np.array([cache[int(t)][1] for t in all_tids], dtype=np.float32)
+        np.savez(cache_path, targetids=all_tids,
+                 n_finite_blue=all_nfin, frac_neg_blue=all_frac)
+        print(f"  Cache updated: {len(all_tids)} total statistics written to {cache_path}")
     else:
-        print("  Nothing to smooth; using cached verdicts only "
+        print("  Nothing to smooth; using cached statistics only "
               "(FLUX/FLUX_IVAR not read).")
 
-    # ── 7. Build the suspect mask over MAIN rows ─────────────────────
-    #       (objects missing from the h5 have no verdict and stay False).
-    suspect_mask = np.array([cache.get(int(t), False) for t in targetids], dtype=bool)
+    # ── 7. Derive per-MAIN-row stats + suspect mask ──────────────────
+    #       Objects missing from the h5 have no entry -> sentinel (-1, NaN), so
+    #       they are neither flagged nor counted as "too few blue pixels".
+    nfin_arr = np.array([cache.get(int(t), (-1, np.nan))[0] for t in targetids], dtype=np.int64)
+    frac_arr = np.array([cache.get(int(t), (-1, np.nan))[1] for t in targetids], dtype=float)
+
+    with np.errstate(invalid="ignore"):
+        suspect_mask = (nfin_arr >= min_points) & (frac_arr >= frac_thresh)
+    # "too few blue pixels to assess": has a verdict (>=0) but below min_points.
+    too_few_mask = (nfin_arr >= 0) & (nfin_arr < min_points)
 
     # ── 8. Statistics ────────────────────────────────────────────────
     n_flag = int(np.sum(suspect_mask))
     pct = (100.0 * n_flag / n_objects) if n_objects else 0.0
     ex_flag = targetids[suspect_mask][:10].tolist()
-    print(f"  Suspect spectra (smoothed flux < {neg_thresh} in any ivar>0 pixel): "
-          f"{n_flag}/{n_objects} ({pct:.2f}%)")
+    print(f"  Suspect spectra (>= {100.0 * frac_thresh:.0f}% of finite blue pixels < "
+          f"{neg_thresh:g}, >= {min_points} blue pixels): {n_flag}/{n_objects} ({pct:.2f}%)")
     print(f"  first {min(10, n_flag)} flagged TARGETIDs: {ex_flag}")
+
+    n_few = int(np.sum(too_few_mask))
+    ex_few = targetids[too_few_mask][:10].tolist()
+    print(f"  Too few finite blue pixels (< {min_points}, NOT assessed): "
+          f"{n_few}/{n_objects}")
+    print(f"  first {min(10, n_few)} such TARGETIDs: {ex_few}")
 
     # ── 9. Update DWARF_MASKBIT ──────────────────────────────────────
     dwarf_maskbits = np.asarray(main_cat["DWARF_MASKBIT"], dtype=np.int64)
