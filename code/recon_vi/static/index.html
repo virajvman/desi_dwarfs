@@ -9,7 +9,11 @@
 <body>
   <div id="app">
     <aside id="sidebar">
-      <div class="sidebar-head">Objects</div>
+      <div class="sidebar-head">
+        <span>Objects</span>
+        <button id="btn-filter-accept" class="sb-filter"
+                title="show only accepted objects for a review pass (hotkey: f)">Accepted only</button>
+      </div>
       <div id="sidebar-list"></div>
     </aside>
 
@@ -62,7 +66,7 @@
           <input id="fov-input" inputmode="numeric"
                  title="visible field of view in array pixels — type a value + Enter" />
           <span class="muted">px</span>
-          <span class="hint">scroll = zoom · drag = pan · hold <kbd>O</kbd> = overlay · <kbd>i</kbd> = infill · <kbd>Shift</kbd>+click = target</span>
+          <span class="hint">scroll = zoom · drag = pan · hold <kbd>O</kbd> = overlay · <kbd>i</kbd> = infill · <kbd>f</kbd> = accepted-only · <kbd>Shift</kbd>+click = target</span>
         </div>
         <div class="row legend">
           <span class="lg"><i class="sw on"></i> in cube</span>

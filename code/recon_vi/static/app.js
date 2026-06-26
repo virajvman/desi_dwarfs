@@ -82,6 +82,8 @@
   var flashOn = false;
   var saveTimer = null;
   var loadToken = 0;           // guards against out-of-order/stale object loads
+  var filterMode = false;      // accepted-only review pass: view+nav overlay only
+  var filteredIndices = [];    // snapshot of raw indices with verdict==="accept"
 
   // ---- Init --------------------------------------------------------------
   function init() {
@@ -89,7 +91,7 @@
     panels.base.canvas = $("canvas-base");
     panels.live.canvas = $("canvas-live");
     els = {
-      sidebar: $("sidebar-list"),
+      sidebar: $("sidebar-list"), btnFilter: $("btn-filter-accept"),
       counter: $("counter"), targetid: $("targetid"), brickname: $("brickname"),
       variant: $("variant-badge"),
       btnRemove: $("btn-remove"), btnAdd: $("btn-add"),
@@ -160,6 +162,72 @@
     if (item) { item.classList.add("active"); item.scrollIntoView({ block: "nearest" }); }
   }
 
+  // ---- Accepted-only filter (view + navigation overlay) ------------------
+  // Frontend-only. `filteredIndices` is a SNAPSHOT of the raw indices i whose
+  // verdict==="accept", taken when the filter is turned on. Navigation and the
+  // sidebar then operate within this subset, while objects[] and the raw
+  // index<->TARGETID binding are left completely untouched -- so saves still hit
+  // the correct CSV row regardless of what's displayed. Snapshot (not live): an
+  // object downgraded mid-pass stays in the set until the filter is toggled
+  // off->on, so the list you're stepping through never shifts under you.
+  function computeAcceptedSnapshot() {
+    var out = [];
+    for (var i = 0; i < objects.length; i++) {
+      if (objects[i] && objects[i].verdict === "accept") out.push(i);
+    }
+    return out;
+  }
+
+  // Next index to navigate to from raw index i (subset-aware); -1 if none.
+  function nextNavIndex(i) {
+    if (filterMode) {
+      var pos = filteredIndices.indexOf(i);
+      return (pos !== -1 && pos + 1 < filteredIndices.length) ? filteredIndices[pos + 1] : -1;
+    }
+    return i + 1;
+  }
+
+  function applyFilterToSidebar() {
+    var inSet = {};
+    for (var k = 0; k < filteredIndices.length; k++) inSet[filteredIndices[k]] = true;
+    for (var i = 0; i < objects.length; i++) {
+      var item = $("sb-" + i);
+      if (item) item.classList.toggle("hidden", filterMode && !inSet[i]);
+    }
+  }
+
+  function updateFilterBtn() {
+    var b = els.btnFilter;
+    if (!b) return;
+    b.classList.toggle("on", filterMode);
+    b.textContent = filterMode ? "Accepted only ✓" : "Accepted only";
+  }
+
+  function toggleAcceptFilter() {
+    if (!filterMode) {
+      var snap = computeAcceptedSnapshot();
+      if (snap.length === 0) { flashTooltip("No accepted objects yet"); return; }
+      filterMode = true;
+      filteredIndices = snap;
+      applyFilterToSidebar();
+      updateFilterBtn();
+      // If the current object isn't accepted, jump to the first one that is.
+      if (!cur || filteredIndices.indexOf(cur.i) === -1) {
+        commitPending();
+        openObject(filteredIndices[0]);
+      } else {
+        refreshHeader();   // just refresh the "k / N accepted" counter
+      }
+    } else {
+      // Pure view change: stay on the current object, expand back to the full list.
+      filterMode = false;
+      filteredIndices = [];
+      applyFilterToSidebar();
+      updateFilterBtn();
+      refreshHeader();
+    }
+  }
+
   // ---- Object loading ----------------------------------------------------
   // Fetch with r.ok checking and a small retry: the Flask dev server can drop
   // or truncate a response under load (single 64 GB file), which used to surface
@@ -186,6 +254,10 @@
 
   function openObject(i) {
     if (i < 0 || i >= objects.length) return;
+    // A pending debounced save belongs to the object we're leaving; every nav
+    // path already commits it synchronously first, so kill the timer here so it
+    // can never fire against the object we're about to load.
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
     var token = ++loadToken;   // only the latest openObject is allowed to commit
     var metaP = fetchOk("/api/object/" + i, false);
     var arrP = fetchOk("/api/object/" + i + "/arrays", true);
@@ -198,7 +270,7 @@
       renderLive();
       drawAll();
       refreshHeader();
-      prefetch(i + 1);
+      prefetch(nextNavIndex(i));
     }).catch(function (e) {
       console.error("openObject(" + i + ") failed:", e);
       if (token === loadToken) {
@@ -652,23 +724,39 @@
 
   function doSave() {
     if (!cur) return;
+    // Neutralize any pending debounced save: once we save synchronously here, a
+    // later timer fire would re-run doSave against whatever `cur` is THEN (e.g.
+    // the next object after navigation), writing a spurious row for it.
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
     var d = deltas();
+    // Capture identity/state at call time: setVerdict fires doSave() and then
+    // immediately navigates, so by the time this POST resolves `cur` may already
+    // be the next object. Snapshotting here keeps the sidebar/objects[] update
+    // (and the TARGETID we send) bound to the row we are actually saving.
+    var savedI = cur.i;
+    var savedVerdict = cur.verdict || "";
+    var savedEdited = (d.removed.length + d.added.length) > 0;
     var payload = {
       TARGETID: tidStr(cur.meta.targetid), BRICKNAME: cur.meta.brickname,
       removed_objids: d.removed, added_objids: d.added,
-      verdict: cur.verdict || "", comment: els.comment.value || "",
+      verdict: savedVerdict, comment: els.comment.value || "",
       toggle_disabled: cur.meta.toggle_disabled,
       infill_masked: !!cur.infill,
     };
     return fetch("/api/decision", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
-    }).then(function (r) { return r.json(); }).then(function () {
-      var o = objects[cur.i];
-      o.verdict = cur.verdict || "";
-      o.edited = (d.removed.length + d.added.length) > 0;
-      o.status = cur.verdict ? "inspected" : (o.edited ? "edited" : "");
-      updateSidebarItem(cur.i);
+    }).then(function (r) { return r.json(); }).then(function (resp) {
+      if (resp && resp.error) {   // e.g. server-side TARGETID guard rejected the write
+        console.error("save rejected:", resp.error);
+        flashTooltip("Save rejected: " + resp.error);
+        return;
+      }
+      var o = objects[savedI];
+      o.verdict = savedVerdict;
+      o.edited = savedEdited;
+      o.status = savedVerdict ? "inspected" : (o.edited ? "edited" : "");
+      updateSidebarItem(savedI);
     }).catch(function (e) { console.error("save failed", e); });
   }
 
@@ -677,36 +765,78 @@
   }
 
   function setVerdict(v) {
+    if (!cur) return;   // buttons are live during the bootstrap window before cur loads
     cur.verdict = v;
     cur.dirty = true;
     updateSelInfo();
     doSave();
-    if (cur.i + 1 < objects.length) openObject(cur.i + 1);
+    advanceToNext();
   }
 
   // ---- Navigation --------------------------------------------------------
+  // Advance to the next object after a verdict. When filtered, step within the
+  // accepted snapshot; stopping (not falling through to hidden objects) at the
+  // end of the set.
+  function advanceToNext() {
+    var ni = nextNavIndex(cur.i);
+    if (ni < 0 || ni >= objects.length) {
+      if (filterMode) flashTooltip("End of accepted set");
+      return;
+    }
+    openObject(ni);
+  }
+
   function go(delta) {
+    if (!cur) return;
     commitPending();
+    if (filterMode) {
+      var pos = filteredIndices.indexOf(cur.i);
+      if (pos === -1) {   // cur fell outside the subset (shouldn't happen w/ snapshot)
+        openObject(filteredIndices[delta > 0 ? 0 : filteredIndices.length - 1]);
+        return;
+      }
+      var next = pos + delta;
+      if (next < 0 || next >= filteredIndices.length) {
+        flashTooltip(delta > 0 ? "End of accepted set" : "Start of accepted set");
+        return;
+      }
+      openObject(filteredIndices[next]);
+      return;
+    }
     openObject(cur.i + delta);
   }
   function jumpTo() {
     var v = (els.jump.value || "").trim();
     if (!v) return;
     commitPending();
+    var targetIdx = -1;
     var asIdx = parseInt(v, 10);
-    if (!isNaN(asIdx) && asIdx >= 0 && asIdx < objects.length &&
-        String(asIdx) === v) { openObject(asIdx); return; }
-    // else treat as TARGETID
-    for (var i = 0; i < objects.length; i++) {
-      if (tidStr(objects[i].targetid) === v) { openObject(i); return; }
+    if (!isNaN(asIdx) && asIdx >= 0 && asIdx < objects.length && String(asIdx) === v) {
+      targetIdx = asIdx;                       // raw bundle index (matches sidebar #)
+    } else {                                   // else treat as TARGETID
+      for (var i = 0; i < objects.length; i++) {
+        if (tidStr(objects[i].targetid) === v) { targetIdx = i; break; }
+      }
     }
-    flashTooltip("No index/TARGETID " + v);
+    if (targetIdx === -1) { flashTooltip("No index/TARGETID " + v); return; }
+    if (filterMode && filteredIndices.indexOf(targetIdx) === -1) {
+      flashTooltip("Not in accepted set — clear the filter (f) to open it");
+      return;
+    }
+    openObject(targetIdx);
   }
 
   // ---- Header / tooltip --------------------------------------------------
   function refreshHeader() {
     var c = cur;
-    els.counter.textContent = (c.i + 1) + " / " + objects.length;
+    if (!c) return;   // filter can be toggled (f) during the bootstrap window before cur loads
+    if (filterMode) {
+      var pos = filteredIndices.indexOf(c.i);
+      els.counter.textContent = (pos === -1 ? "–" : (pos + 1)) +
+        " / " + filteredIndices.length + " accepted";
+    } else {
+      els.counter.textContent = (c.i + 1) + " / " + objects.length;
+    }
     var tid = tidStr(c.meta.targetid);
     els.targetid.textContent = tid;
     els.targetid.href = viewerUrl(tid);
@@ -809,6 +939,7 @@
     els.btnReject.addEventListener("click", function () { setVerdict("remove"); });
     els.btnPrev.addEventListener("click", function () { go(-1); });
     els.btnNext.addEventListener("click", function () { go(1); });
+    els.btnFilter.addEventListener("click", toggleAcceptFilter);
     els.btnResetView.addEventListener("click", resetViewToFiducial);
     els.fov.addEventListener("keydown", function (e) {
       if (e.key === "Enter") { setFov(parseFloat(els.fov.value)); els.fov.blur(); }
@@ -820,8 +951,10 @@
 
     window.addEventListener("keydown", function (e) {
       if (e.target === els.comment || e.target === els.jump || e.target === els.fov) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;   // let OS/browser shortcuts through (e.g. Cmd/Ctrl+F find)
       if ((e.key === "o" || e.key === "O") && !flashOn) { flashOn = true; drawAll(); }
       if (e.key === "i" || e.key === "I") { toggleInfill(); }
+      if (e.key === "f" || e.key === "F") { toggleAcceptFilter(); }
     });
     window.addEventListener("keyup", function (e) {
       if (e.key === "o" || e.key === "O") { flashOn = false; drawAll(); }

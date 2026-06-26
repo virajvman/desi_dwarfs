@@ -6,6 +6,7 @@ import os
 import sys
 
 import numpy as np
+from scipy.ndimage import uniform_filter1d, median_filter
 from desi_lowz_funcs import save_table, get_useful_cat_colms, _n_or_more_gt, _n_or_more_lt, get_remove_flag
 from easyquery import Query, QueryMaker
 
@@ -515,7 +516,103 @@ def flag_weird_spectra(spec_cat, main_cat, fspec_cat):
 
     return weird_mask
 
-##maybe add one for a large fraction of spectra being negative??
+
+def smooth_spectrum(wave, flux, ivar=None, mask=None, method="median", boxcar_A=80.0):
+    """
+    Smooth a 1D spectrum on a (possibly masked) pixel grid.
+
+    Parameters
+    ----------
+    wave : array, shape (n,)
+        Wavelength in Angstrom, increasing.
+    flux : array, shape (n,)
+        Flux in coadd units (typically 1e-17 erg/s/cm2/A).
+    ivar : array, optional
+        Inverse variance. Pixels with ivar <= 0 are ignored.
+    mask : array, optional
+        Bad-pixel mask. Nonzero = bad (DESI SPECMASK convention).
+    method : {"median", "boxcar", "ivar_boxcar"}
+    boxcar_A : float
+        Smoothing scale in Angstrom.
+
+    Returns
+    -------
+    flux_smooth : array
+        Smoothed flux, same shape as input. Bad/input NaN pixels -> NaN.
+    good : bool array
+        Pixels used as valid input.
+    """
+    wave = np.asarray(wave, dtype=float)
+    flux = np.asarray(flux, dtype=float)
+
+    good = np.isfinite(flux)
+    if ivar is not None:
+        good &= np.asarray(ivar) > 0
+    if mask is not None:
+        good &= np.asarray(mask) == 0
+
+    flux_out = np.full_like(flux, np.nan, dtype=float)
+    if good.sum() < 5:
+        return flux_out, good
+
+    # Convert smoothing width in Angstrom to pixels (median spacing)
+    dw = np.median(np.diff(wave[good]))
+    if not np.isfinite(dw) or dw <= 0:
+        return flux_out, good
+    halfwin = max(1, int(round(0.5 * boxcar_A / dw)))
+
+    if method == "median":
+        # Fill bad pixels with NaN, median_filter ignores NaN in recent scipy
+        tmp = flux.astype(float).copy()
+        tmp[~good] = np.nan
+        flux_smooth = median_filter(tmp, size=2 * halfwin + 1, mode="nearest")
+        flux_out[good] = flux_smooth[good]
+
+    elif method in ("boxcar", "ivar_boxcar"):
+        tmp = flux.astype(float).copy()
+        tmp[~good] = 0.0
+        num = uniform_filter1d(tmp, size=2 * halfwin + 1, mode="nearest")
+        den = uniform_filter1d(good.astype(float), size=2 * halfwin + 1, mode="nearest")
+
+        if method == "ivar_boxcar" and ivar is not None:
+            w = np.zeros_like(flux)
+            w[good] = np.asarray(ivar)[good]
+            num = uniform_filter1d(flux * w, size=2 * halfwin + 1, mode="nearest")
+            den = uniform_filter1d(w, size=2 * halfwin + 1, mode="nearest")
+
+        with np.errstate(invalid="ignore", divide="ignore"):
+            flux_smooth = num / den
+        flux_out[good] = flux_smooth[good]
+
+    else:
+        raise ValueError(f"Unknown method={method}")
+
+    return flux_out, good
+
+
+def spectrum_has_negative_continuum(wave, flux, ivar=None, boxcar_A=200.0, neg_thresh=-5.0):
+    """
+    Median-smooth one spectrum on a ``boxcar_A`` Angstrom scale and test whether
+    any smoothed pixel falls below ``neg_thresh`` -- a signature of a strongly
+    negative continuum (sky-subtraction / normalization failure). This is the
+    per-spectrum test behind DWARF_MASKBIT bit 20.
+
+    ``ivar`` is passed through to :func:`smooth_spectrum`, so pixels with
+    ivar <= 0 are gated out of the smoothing. Because a median over the
+    ``boxcar_A``-wide window is robust to a minority of gated pixels, sparse
+    sky-line masks leave the smoothed continuum intact, whereas wide contiguous
+    chip gaps go NaN locally and so are never flagged (by design).
+
+    Returns
+    -------
+    bool
+        True if the spectrum is flagged as a suspect (negative-continuum) spectrum.
+    """
+    smooth_spec, _ = smooth_spectrum(
+        wave, flux, ivar=ivar, mask=None, method="median", boxcar_A=boxcar_A
+    )
+    # NaN < neg_thresh evaluates False, so NaN-filled (gated) pixels never trigger.
+    return bool(np.any(smooth_spec < neg_thresh))
 
 
     

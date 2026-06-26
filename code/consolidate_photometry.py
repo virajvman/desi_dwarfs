@@ -19,7 +19,7 @@ warnings.filterwarnings(
 )
 from shred_photometry_maskbits import cog_mag_converge, cog_nan_mask, cog_curve_decrease, bad_colors, iffy_tractor_model
 from io import BytesIO
-from shred_photometry_maskbits import create_shred_maskbits_from_dict, print_maskbit_statistics, flag_weird_spectra
+from shred_photometry_maskbits import create_shred_maskbits_from_dict, print_maskbit_statistics, flag_weird_spectra, spectrum_has_negative_continuum
 import os
 import glob
 import tempfile
@@ -2240,6 +2240,267 @@ def add_vi_bad_redshift_maskbit(cat_path, main_datamodel, bit=18, tgid_file=None
     print(f"Set DWARF_MASKBIT bit {bit} for {int(vi_mask.sum())} objects (MAIN HDU updated).")
 
 
+# ── Parallel smoothing infrastructure for add_suspect_spectra_maskbit ──────────
+# Mirrors the _SHARED_EMI_DATA / _init_emi_worker pattern in
+# mass_and_photo_corrections.py: the large H5 arrays are stashed in a module
+# global so fork-based workers share them via copy-on-write instead of pickling
+# them to every worker. Only small chunks of row indices cross the pool pipe.
+_SHARED_SPEC_DATA = {}
+
+
+def _init_suspect_worker(wave, flux, ivar):
+    """Pool initializer: bind the shared (copy-on-write) spectra arrays."""
+    _SHARED_SPEC_DATA["wave"] = wave
+    _SHARED_SPEC_DATA["flux"] = flux
+    _SHARED_SPEC_DATA["ivar"] = ivar
+
+
+def _process_suspect_chunk(row_indices):
+    """Worker: smooth a chunk of spectra (by local row index into the shared
+    flux/ivar arrays) and return (row_indices, bool array). True where the
+    median-smoothed continuum dips below -5 in any ivar>0 pixel."""
+    wave = _SHARED_SPEC_DATA["wave"]
+    flux = _SHARED_SPEC_DATA["flux"]
+    ivar = _SHARED_SPEC_DATA["ivar"]
+    out = np.zeros(len(row_indices), dtype=bool)
+    for k, r in enumerate(row_indices):
+        out[k] = spectrum_has_negative_continuum(wave, flux[r], ivar=ivar[r])
+    return row_indices, out
+
+
+def add_suspect_spectra_maskbit(
+    cat_path,
+    main_datamodel,
+    bit=20,
+    spectra_h5_path="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/data/desi_dr1_dwarf_catalog_spectra.h5",
+    cache_path="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/suspect_spectra_cache.npz",
+    recompute=False,
+    ncores=8,
+    boxcar_A=200.0,
+    neg_thresh=-5.0,
+):
+    """
+    Flag objects whose observed coadded spectrum has a strongly negative
+    continuum and set DWARF_MASKBIT bit ``bit`` (default 20). This is the
+    spectrum-level complement to bit 19 (junk spectrum, derived from FastSpecFit
+    per-arm SNR): here we read the actual spectra from ``spectra_h5_path``,
+    median-smooth each on a ``boxcar_A`` Angstrom scale (gating out ivar<=0
+    pixels), and flag the spectrum if any smoothed pixel falls below
+    ``neg_thresh``. Like bits 16 and 18, it is set per-row on MAIN after
+    associated-fiber consolidation, so it is a per-fiber flag.
+
+    Coverage
+    --------
+    Every MAIN TARGETID is expected to have a spectrum in the h5. If any are
+    missing, a loud warning is printed (the h5 needs regenerating) but the run
+    continues; the missing objects simply receive no bit ``bit`` (they cannot be
+    assessed). This check is cheap and always runs.
+
+    Caching
+    -------
+    The per-TARGETID verdict is cached in ``cache_path`` (npz: ``targetids`` +
+    ``is_suspect``). With ``recompute=False`` (default) the cache is read and only
+    catalog TARGETIDs absent from the cache are smoothed (then merged back and
+    resaved), so steady-state reruns do ~zero work and -- crucially -- the
+    multi-GB FLUX/FLUX_IVAR arrays are never read from the h5 at all (only
+    TARGETID is, for the coverage check + lookup). With ``recompute=True`` the
+    cache is ignored, every in-catalog spectrum is re-smoothed, and the cache is
+    overwritten; do this after regenerating the spectra h5.
+
+    Updates the MAIN HDU safely, preserving variable-length columns and all
+    other HDUs.
+
+    Parameters
+    ----------
+    cat_path : str
+        Path to the multi-extension FITS catalog.
+    main_datamodel : dict
+        Column metadata (dtype, description, unit, blank_value).
+    bit : int, optional
+        Bit index to set for suspect spectra (default 20).
+    spectra_h5_path : str
+        Observed-frame coadd spectra h5 (datasets WAVE, FLUX, FLUX_IVAR, TARGETID).
+    cache_path : str
+        Where the per-TARGETID verdict cache is stored / read.
+    recompute : bool
+        If True, ignore the cache and re-smooth every in-catalog spectrum.
+    ncores : int
+        Worker count for the fork-based smoothing pool (1 = serial).
+    boxcar_A : float
+        Median smoothing scale in Angstrom (default 200).
+    neg_thresh : float
+        Flag if any smoothed pixel is below this value (default -5).
+    """
+    print("=" * 60)
+    print(f"Flagging suspect spectra (negative continuum) -> DWARF_MASKBIT bit {bit}")
+    print("=" * 60)
+
+    # ── 1. Read MAIN TARGETIDs ───────────────────────────────────────
+    main_cat = safe_read_table(cat_path, hdu="MAIN")
+    targetids = np.asarray(main_cat["TARGETID"], dtype=np.int64)
+    n_objects = len(targetids)
+
+    # ── 2. Load h5 TARGETIDs only (cheap) for coverage + row lookup ──
+    #       A missing/unreadable h5 is the extreme case of "not all spectra
+    #       downloaded": warn loudly and continue WITHOUT setting the bit, rather
+    #       than crashing this end-of-pipeline step.
+    if not os.path.exists(spectra_h5_path):
+        B, E = "\033[1m", "\033[0m"
+        bar = "=" * 72
+        print(B + bar + E)
+        print(B + "  WARNING: SPECTRA H5 NOT FOUND -- REGENERATE IT" + E)
+        print(B + f"    {spectra_h5_path}" + E)
+        print(B + f"  -> skipping DWARF_MASKBIT bit {bit} (no objects flagged); continuing." + E)
+        print(B + bar + E)
+        return
+    with h5py.File(spectra_h5_path, "r") as f:
+        h5_tgids = np.asarray(f["TARGETID"][:], dtype=np.int64)
+    h5_tgid_to_row = {int(t): i for i, t in enumerate(h5_tgids)}
+
+    # ── 3. Coverage check (always): all MAIN TARGETIDs present in h5? ─
+    in_h5 = np.isin(targetids, h5_tgids)
+    n_missing = int(np.sum(~in_h5))
+    if n_missing > 0:
+        B, E = "\033[1m", "\033[0m"
+        bar = "=" * 72
+        ex_missing = targetids[~in_h5][:10].tolist()
+        print(B + bar + E)
+        print(B + "  WARNING: SPECTRA H5 INCOMPLETE -- REGENERATE IT" + E)
+        print(B + f"  {n_missing}/{n_objects} MAIN TARGETIDs have NO spectrum in:" + E)
+        print(B + f"    {spectra_h5_path}" + E)
+        print(B + f"  first {min(10, n_missing)} missing TARGETIDs: {ex_missing}" + E)
+        print(B + f"  -> these objects will NOT receive DWARF_MASKBIT bit {bit}." + E)
+        print(B + "  -> continuing anyway." + E)
+        print(B + bar + E)
+    else:
+        print(f"  Coverage OK: all {n_objects} MAIN TARGETIDs present in the h5.")
+
+    # ── 4. Load cached verdicts (tgid -> is_suspect) ─────────────────
+    cache = {}  # int tgid -> bool
+    if recompute:
+        print("  recompute=True: ignoring any existing cache; re-smoothing all in-catalog spectra.")
+    elif os.path.exists(cache_path):
+        cached = np.load(cache_path)
+        c_tids = np.asarray(cached["targetids"], dtype=np.int64)
+        c_susp = np.asarray(cached["is_suspect"], dtype=bool)
+        cache = {int(t): bool(s) for t, s in zip(c_tids, c_susp)}
+        print(f"  Loaded {len(cache)} cached verdicts from {cache_path}")
+    else:
+        print(f"  No cache found at {cache_path}; computing from scratch.")
+
+    # ── 5. Which in-catalog, in-h5 TARGETIDs still need a verdict? ───
+    cat_in_h5_tids = targetids[in_h5]
+    if recompute:
+        to_compute = np.asarray(cat_in_h5_tids, dtype=np.int64)
+    else:
+        to_compute = np.array(
+            [t for t in cat_in_h5_tids if int(t) not in cache], dtype=np.int64
+        )
+    print(f"  {len(to_compute)}/{len(cat_in_h5_tids)} in-h5 catalog TARGETIDs need smoothing "
+          f"({'forced recompute' if recompute else 'missing from cache'})")
+
+    # ── 6. Smooth the ones that need it (parallel); read FLUX/IVAR only
+    #       if there is actually something to compute. ────────────────
+    if len(to_compute) > 0:
+        compute_rows = np.array([h5_tgid_to_row[int(t)] for t in to_compute], dtype=np.int64)
+        # h5py fancy indexing needs ascending, unique row indices.
+        order = np.argsort(compute_rows)
+        sorted_rows = compute_rows[order]
+        tgids_sorted = to_compute[order]
+
+        print(f"  Reading {len(sorted_rows)} spectra from {spectra_h5_path} ...")
+        with h5py.File(spectra_h5_path, "r") as f:
+            wave = np.asarray(f["WAVE"][:], dtype=float)
+            flux = np.asarray(f["FLUX"][sorted_rows], dtype=np.float32)
+            ivar = np.asarray(f["FLUX_IVAR"][sorted_rows], dtype=np.float32)
+
+        # flux/ivar rows are in sorted_rows order; local index 0..n-1 aligns with
+        # tgids_sorted. Chunk the local indices for the worker pool.
+        local_idx = np.arange(len(sorted_rows))
+        chunk = 200
+        chunks = [local_idx[i:i + chunk] for i in range(0, len(local_idx), chunk)]
+
+        verdict_sorted = np.zeros(len(sorted_rows), dtype=bool)
+        if ncores and ncores > 1:
+            from multiprocessing import Pool
+            print(f"  Smoothing {len(sorted_rows)} spectra on {ncores} cores "
+                  f"(median, boxcar={boxcar_A:.0f} A, ivar-gated) ...")
+            with Pool(processes=ncores,
+                      initializer=_init_suspect_worker,
+                      initargs=(wave, flux, ivar)) as pool:
+                for ridx, out in pool.imap_unordered(_process_suspect_chunk, chunks):
+                    verdict_sorted[ridx] = out
+        else:
+            print(f"  Smoothing {len(sorted_rows)} spectra serially "
+                  f"(median, boxcar={boxcar_A:.0f} A, ivar-gated) ...")
+            _init_suspect_worker(wave, flux, ivar)
+            for ch in chunks:
+                ridx, out = _process_suspect_chunk(ch)
+                verdict_sorted[ridx] = out
+
+        # merge new verdicts into the cache
+        for t, v in zip(tgids_sorted, verdict_sorted):
+            cache[int(t)] = bool(v)
+
+        # save the merged cache
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        all_tids = np.array(sorted(cache.keys()), dtype=np.int64)
+        all_susp = np.array([cache[int(t)] for t in all_tids], dtype=bool)
+        np.savez(cache_path, targetids=all_tids, is_suspect=all_susp)
+        print(f"  Cache updated: {len(all_tids)} total verdicts written to {cache_path}")
+    else:
+        print("  Nothing to smooth; using cached verdicts only "
+              "(FLUX/FLUX_IVAR not read).")
+
+    # ── 7. Build the suspect mask over MAIN rows ─────────────────────
+    #       (objects missing from the h5 have no verdict and stay False).
+    suspect_mask = np.array([cache.get(int(t), False) for t in targetids], dtype=bool)
+
+    # ── 8. Statistics ────────────────────────────────────────────────
+    n_flag = int(np.sum(suspect_mask))
+    pct = (100.0 * n_flag / n_objects) if n_objects else 0.0
+    ex_flag = targetids[suspect_mask][:10].tolist()
+    print(f"  Suspect spectra (smoothed flux < {neg_thresh} in any ivar>0 pixel): "
+          f"{n_flag}/{n_objects} ({pct:.2f}%)")
+    print(f"  first {min(10, n_flag)} flagged TARGETIDs: {ex_flag}")
+
+    # ── 9. Update DWARF_MASKBIT ──────────────────────────────────────
+    dwarf_maskbits = np.asarray(main_cat["DWARF_MASKBIT"], dtype=np.int64)
+    dwarf_maskbits[suspect_mask] |= np.int64(1) << bit
+    main_cat["DWARF_MASKBIT"] = dwarf_maskbits
+
+    # ── 10. Apply main_datamodel metadata (recasts DWARF_MASKBIT int64 -> int32) ─
+    for col in main_datamodel.keys():
+        if col not in main_cat.colnames:
+            print(f"Skipping column: {col}")
+            continue
+        meta = main_datamodel[col]
+
+        desired_dtype = np.dtype(meta["dtype"])
+        if main_cat[col].dtype != desired_dtype:
+            main_cat[col] = main_cat[col].astype(desired_dtype)
+
+        if meta.get("description"):
+            main_cat[col].description = _fold_fits_str(meta["description"])
+
+        if meta.get("unit") is not None:
+            main_cat[col].unit = meta["unit"]
+
+        blank_val = meta.get("blank_value", None)
+        if blank_val is not None:
+            col_data = np.asarray(main_cat[col], dtype=float)
+            bad = np.isnan(col_data)
+            col_data[bad] = blank_val
+            main_cat[col] = col_data
+
+    main_hdu_new = fits.table_to_hdu(main_cat)
+    main_hdu_new.name = "MAIN"
+    main_hdu_new.add_checksum()
+    _replace_main_extension_atomic(cat_path, main_hdu_new)
+
+    print(f"Set DWARF_MASKBIT bit {bit} for {n_flag} objects (MAIN HDU updated).")
+
+
 # _load_nebcorr_delta_mag_table and add_delta_magDA_to_fastspec
 # are imported from mass_and_photo_corrections
 # MAG_*_MODEL_* columns are now written to the SPEC_DERIVED HDU by
@@ -2351,6 +2612,12 @@ if __name__ == '__main__':
     compute_missing_tgid_err = False
     process_qso_scnd = True
     process_post_hdu = True
+
+    # DWARF_MASKBIT bit 20 (suspect spectrum: negative smoothed continuum) is
+    # cached in suspect_spectra_cache.npz. Leave False to read cached verdicts
+    # (only newly-added TARGETIDs are smoothed); set True to force a full
+    # re-smooth and overwrite the cache, e.g. after regenerating the spectra h5.
+    recompute_suspect_spectra = False
 
     #make sure the get_fastspec_fit_catalog_V2 function is run before hand in case there are any new columns added
     process_fastspec=True
@@ -2579,6 +2846,14 @@ if __name__ == '__main__':
 
         #flag objects VI'd to have incorrect redshifts (manual complement to bit 16)
         add_vi_bad_redshift_maskbit(main_cat_outpath, main_datamodel)
+
+        #flag objects whose observed spectrum has a strongly negative continuum
+        #(200 A median-smoothed flux < -5 in any ivar>0 pixel) -> bit 20.
+        #Cached: only re-smooths when recompute_suspect_spectra=True.
+        add_suspect_spectra_maskbit(
+            main_cat_outpath, main_datamodel,
+            recompute=recompute_suspect_spectra,
+        )
 
 
     # Halpha SFR, fiber Mstar/SFR, strong-line metallicity and other

@@ -261,6 +261,10 @@ def create_app(bundle_path, out_path, inspector=""):
     app = Flask(__name__, static_folder=STATIC_DIR, static_url_path="/static")
     bundle = Bundle(bundle_path)
     store = DecisionStore(out_path, inspector=inspector)
+    # TARGETIDs known to the bundle. The decision guard rejects anything else, so
+    # a stray/garbage POST can never create a row for an object we aren't serving
+    # (the write is already TARGETID-keyed; this just makes a bad key loud).
+    bundle_targetids = set(int(r["targetid"]) for r in bundle.index)
 
     @app.route("/")
     def index_page():
@@ -321,6 +325,12 @@ def create_app(bundle_path, out_path, inspector=""):
     @app.route("/api/decision", methods=["POST"])
     def api_decision():
         payload = request.get_json(force=True)
+        try:
+            tgid = int(payload["TARGETID"])
+        except (KeyError, TypeError, ValueError):
+            return jsonify({"error": "missing or invalid TARGETID"}), 400
+        if tgid not in bundle_targetids:
+            return jsonify({"error": "TARGETID {} not in bundle".format(tgid)}), 400
         try:
             row = store.upsert(payload)
         except (KeyError, ValueError) as exc:

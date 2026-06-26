@@ -196,7 +196,9 @@ main_datamodel = {
         "unit": None,
         "description": (
             "Bitwise mask to apply various cleaning cuts. Bit 19 = junk spectrum "
-            "(SNR_B/R/Z < 0 in at least two of the three arms). Low continuum SNR in "
+            "(SNR_B/R/Z < 0 in at least two of the three arms). Bit 20 = suspect "
+            "spectrum (200 A median-smoothed coadd flux < -5 in any ivar>0 pixel; "
+            "negative-continuum / normalization failure). Low continuum SNR in "
             "emission-subtracted fiber photometry (mass pipeline) is recorded in "
             "MSTAR_MASKBIT, not here. See bitmask descriptions in README."
         ),

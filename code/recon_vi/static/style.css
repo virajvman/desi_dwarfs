@@ -57,8 +57,18 @@ body {
   padding: 10px 12px; color: var(--fg-dim);
   text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.82em;
   border-bottom: 1px solid var(--line);
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
 }
+/* accepted-only review-pass toggle (mirrors the infill toggle's on/off look) */
+.sb-filter {
+  text-transform: none; letter-spacing: 0; font-size: 1em;
+  padding: 2px 7px; border-radius: 6px; cursor: pointer;
+  background: var(--bg-3); color: var(--fg-dim); border: 1px solid var(--line);
+}
+.sb-filter:hover { border-color: var(--accent); }
+.sb-filter.on { color: var(--good); border-color: #2c6b48; background: #11271b; }
 #sidebar-list { overflow-y: auto; flex: 1; }
+.sb-item.hidden { display: none; }
 .sb-item {
   display: flex; align-items: center; gap: 6px;
   padding: 4px 10px; cursor: pointer; border-bottom: 1px solid #1b212a;
