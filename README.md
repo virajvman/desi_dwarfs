@@ -54,7 +54,7 @@ Core identifiers, coordinates, redshifts, stellar masses, photometry, and qualit
 | `HEALPIX` | int32 | | HEALPix index at NSIDE=64 in the NESTED scheme |
 | `Z` | float64 | | Redrock redshift (heliocentric) |
 | `DELTACHI2` | float64 | | Redrock delta-chi-squared |
-| `ZWARN` | int8 | | Redrock zwarning bit |
+| `ZWARN` | int32 | | Redrock zwarning bit |
 | `Z_CMB` | float64 | | Redrock redshift (CMB rest frame) |
 | `RA` | float64 | deg | Right Ascension of the galaxy. Same as target catalog, except for galaxies reprocessed after being identified as likely shredded |
 | `DEC` | float64 | deg | Declination of the galaxy. Same as target catalog, except for galaxies reprocessed after being identified as likely shredded |
@@ -63,7 +63,6 @@ Core identifiers, coordinates, redshifts, stellar masses, photometry, and qualit
 | `DESINAME` | str | | DESI object name |
 | `LUMI_DIST_MPC` | float32 | Mpc | Fiducial luminosity distance |
 | `DIST_SOURCE` | str | | Source of the luminosity distance. One of: `NED_ZIND`, `VIRGO_SBF`, `VIRGO_EVCC`, `CF3_NAM`, `V_CMB` |
-| `LOG_MSTAR_SAGA` | float32 | $\log(M_\odot)$ | Log stellar mass using `LUMI_DIST_MPC` and the SAGA *gr*-based approximation |
 | `LOG_MSTAR_M24` | float32 | $\log(M_\odot)$ | Log stellar mass (de los Reyes et al. 2024 *gr* relation). Default: nebular/filter/k-corrected photometry with z=0 in the mass function. If `MSTAR_MASKBIT` bit 0 (low continuum SNR in fiber photometry) or bit 2 (unreliable nebular correction, \|`DELTA_MAG_{G,R}_NEB`\| > 2) is set, mass uses aggregate `MAG_G`/`MAG_R`, `LUMI_DIST_MPC`, and `Z_CMB` with polynomial *g*-band k-correction in `get_stellar_mass_mia` instead of that delta-mag path. |
 | `LOG_MSTAR_M24_ERR` | float64 | dex | Uncertainty from nebular correction errors in emission-subtracted fiber photometry. **Placeholder:** set to **0** for objects on the low-SNR fallback mass path (bit 0); a proper uncertainty for that path is not yet implemented. |
 | `MAG_G` | float32 | mag | *g*-band magnitude (MW extinction corrected). Same as Tractor photometry, except for galaxies reprocessed after being identified as likely shredded |
@@ -87,6 +86,7 @@ Core identifiers, coordinates, redshifts, stellar masses, photometry, and qualit
 | `ASSOCIATED_TARGETIDS` | object | | List of associated TARGETIDs (variable-length per row) |
 | `DWARF_PRIMARY_TARGETID` | int64 | | TARGETID of the primary fiber, chosen as the brightest `MAG_R_TARGET` among associated fibers |
 | `DWARF_PRIMARY` | bool | | Whether this row is the primary fiber (`TARGETID == DWARF_PRIMARY_TARGETID`) |
+| `PROPERTY_SOURCE_TARGETID` | int64 | | TARGETID of the associated fiber whose galaxy-level properties (`MAG_G`/`R`/`Z`, `RA`, `DEC`, `R50_R`, `LOG_MSTAR_M24`, `LOG_MSTAR_M24_ERR`, `MSTAR_MASKBIT`, etc.) are adopted for this row. Chosen as the brightest `MAG_R` among the associated group |
 
 </details>
 
