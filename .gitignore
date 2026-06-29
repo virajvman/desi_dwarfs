@@ -19,3 +19,6 @@ IMAGE_CUTOUTS_HDF5_MIGRATION.md
 # recon_vi build prompt + local-only VI bundle artifacts
 code/recon_vi/PROMPT.md
 code/recon_vi/*.h5
+
+# scarlet_photo working design doc (local-only)
+code/scarlet_photo/DESIGN.md
