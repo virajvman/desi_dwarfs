@@ -179,12 +179,12 @@ if __name__ == "__main__":
     ax.plot(log_Z_Zsol, logC_sin_300, color=COLOR_SINGLE, ls="--", lw=1.0, alpha=0.6)
 
     ax.axhline(41.30, color="k", ls=":", lw=1, alpha=0.5)
-    ax.text(-2.175, 41.305, "KE12", color="k", alpha=0.5, fontsize=9,
+    ax.text(-2.175+0.25, 41.305, "KE12", color="k", alpha=0.5, fontsize=9,
             va="bottom")
 
     ax.set_xlabel(r"$\log_{10}(Z/Z_\odot)$")
     ax.set_ylabel(r"$\log_{10}\,C(Z_*)$ [erg/s]")
-    ax.set_xlim(-2.35, 0)
+    ax.set_xlim(-2, 0)
     ax.set_ylim(41.25, 42)
 
     for i in range(10):
@@ -192,8 +192,8 @@ if __name__ == "__main__":
         ax.fill_betweenx(y=[41.25, 41.5 + i*0.05], x1=-1.69+0.2, x2=-0.715+0.2, facecolor="k", edgecolor="none", alpha=0.01)
     
 
-    ax.text( -1.69 - 0.135 , 41.35,r"$M_{\star}\!=\!10^6 M_{\odot}$", color="k",rotation=90,fontsize = 8)
-    ax.text( -0.715 - 0.135 , 41.35,r"$10^{9.25} M_{\odot}$", color="k",rotation=90,fontsize = 8)
+    ax.text( -1.69 - 0.135 + 0.2 , 41.35-0.025,r"$M_{\star}\!=\!10^6 M_{\odot}$", color="k",rotation=90,fontsize = 8)
+    ax.text( -0.715 - 0.135 + 0.2 , 41.35-0.025,r"$10^{9.25} M_{\odot}$", color="k",rotation=90,fontsize = 8)
 
 
     legend_handles = [
