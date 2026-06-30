@@ -22,3 +22,7 @@ code/recon_vi/*.h5
 
 # scarlet_photo working design doc (local-only)
 code/scarlet_photo/DESIGN.md
+
+# ELG figure preview PNGs (regenerated from the .npz) + local-only findings brief
+code/plots/preview_*.png
+notebooks/catalog_paper/ELG_PECULIARITY_FINDINGS.md

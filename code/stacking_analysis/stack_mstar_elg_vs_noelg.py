@@ -22,10 +22,16 @@ Bootstrap/stacking logic is kept IDENTICAL to the finalized
 
 Per cell: stack only when the CATALOG count >= STACK_NLIM (gate on the catalog
 count only; once it passes, however many spectra matched are stacked, down to 1,
-via ``min_n_valid=1``). Sample selection is ``select_sample`` (load_catalog cuts
-+ ELG/NO_ELG membership + z + mass) -- the stricter H-alpha EW/boxflux detection
-cuts used by the haew_5pct EW product are deliberately NOT applied here, so the
-non-ELG population is not gutted.
+via ``min_n_valid=1``). Sample selection is ``select_sample``, expressed via the
+IS_* target-membership flags (the SAMPLE column has been dropped from the catalog):
+  - ELG    : IS_ELG & DWARF_PRIMARY & MAG_TYPE=="TRACTOR_OG" & 0.09 < z < 0.13
+             (== the notebook's main_elg_f)
+  - NO_ELG : (IS_BGS_BRIGHT | IS_BGS_FAINT | IS_LOWZ) & DWARF_PRIMARY, full z
+Both samples share a continuum-S/N gate (MAG_R_FIBER_NOEMI_ERR < 0.1); the Halpha-
+detection gate in the default load_catalog is bypassed here via
+``load_catalog(apply_halpha_cut=False)`` (a continuum stack does not need Halpha).
+The ELG z-slice yields a clean aperture-matched population; non-ELG keeps full z
+(the slice would gut BGS), so the comparison is asymmetric in z by design.
 
 The de-redshifted spectra are read from the SAME flux-conserving (``_noinvvar``)
 file as haew_5pct, so both products stack identically-rebinned spectra.
@@ -102,9 +108,24 @@ SAMPLE_SPECS = [
 # Stellar-mass bin edges (log Msun). 0.25 dex bins throughout.
 MSTAR_BINS = np.arange(6.0, 9.5 + 1e-6, 0.25)
 
-# Redshift range. Effectively no cut (we bin only in M*).
+# Redshift windows. The ELG sample is restricted to a narrow slice centered on
+# z=0.11 (z = 0.11 +/- 0.02), matching the notebook's main_elg_f -- a clean,
+# aperture-matched ELG population for the continuum-normalized stack. The non-ELG
+# (BGS+LOWZ) sample keeps the full range (BGS dwarfs sit at z << 0.11, so the
+# slice would gut them); the comparison is asymmetric in redshift by design.
+ELG_Z_MIN, ELG_Z_MAX = 0.09, 0.13
+NOELG_Z_MIN, NOELG_Z_MAX = 0.0, 0.5
+
+# Retained as the saved-metadata default; the actual per-sample window is resolved
+# at selection time via sample_z_window().
 Z_MIN_GLOBAL = 0.0
 Z_MAX_GLOBAL = 0.5
+
+# Continuum-S/N gate applied to BOTH samples (this is a continuum-normalized
+# product, so the Halpha-detection gate in the default load_catalog is bypassed
+# via load_catalog(apply_halpha_cut=False)): keep only galaxies whose emission-
+# removed r-band fiber magnitude error is below this (a well-measured continuum).
+RBAND_NOEMI_ERR_MAX = 0.1
 
 # Minimum number of CATALOG galaxies in a bin to attempt a stack. Gate is on
 # the catalog count only; once it passes, however many spectra matched are
@@ -233,8 +254,16 @@ def bin_seed_index(sample_idx, i_mstar, n_mstar):
     return sample_idx * n_mstar + i_mstar
 
 
+def sample_z_window(sample_name):
+    """(z_min, z_max) for a sample: narrow slice for ELG, full range for non-ELG."""
+    if sample_name == "ELG":
+        return ELG_Z_MIN, ELG_Z_MAX
+    return NOELG_Z_MIN, NOELG_Z_MAX
+
+
 def stack_one_bin(sub_cat, spectra_data, wave, sample_name, file_key,
-                  mstar_min, mstar_max, bin_index):
+                  mstar_min, mstar_max, bin_index,
+                  z_min=Z_MIN_GLOBAL, z_max=Z_MAX_GLOBAL):
     """Bootstrap-stack one (sample, mass) cell; return saved dict or None."""
     n_sub = len(sub_cat)
     if n_sub < STACK_NLIM:
@@ -320,8 +349,8 @@ def stack_one_bin(sub_cat, spectra_data, wave, sample_name, file_key,
         "file_key":     file_key,
         "mstar_min":    float(mstar_min),
         "mstar_max":    float(mstar_max),
-        "z_min":        Z_MIN_GLOBAL,
-        "z_max":        Z_MAX_GLOBAL,
+        "z_min":        z_min,
+        "z_max":        z_max,
         "n_galaxies":   int(n_sub),
         "n_matched":    int(n_matched),
         "tgids":        np.asarray(tgids_matched),
@@ -595,8 +624,12 @@ def main(resume=False, norm_mode="halpha"):
     # 1. Load catalog + spectra
     # -------------------------------------------------------------------------
     print("[1] Loading catalog ...")
-    tot_cat = load_catalog()
-    print(f"    Total galaxies after quality cuts: {len(tot_cat)}")
+    # Relaxed base cut (DWARF_MASKBIT only): this continuum-normalized product
+    # gates on continuum S/N (MAG_R_FIBER_NOEMI_ERR) in select_sample, not on
+    # Halpha. The default load_catalog Halpha gate is left intact for the
+    # Halpha-normalized products that depend on it.
+    tot_cat = load_catalog(apply_halpha_cut=False)
+    print(f"    Total galaxies after base cut: {len(tot_cat)}")
 
     # In continuum mode, derive the per-galaxy continuum r-band flux scalar from
     # the rest-frame, emission-removed model r-mag: F_r = 10^(-0.4*(mag - ZP)).
@@ -648,17 +681,21 @@ def main(resume=False, norm_mode="halpha"):
         for sample_idx, (sample_name, file_key) in enumerate(SAMPLE_SPECS):
             print(f"\n  --- {sample_name} ---")
 
+            z_lo, z_hi = sample_z_window(sample_name)
             sub_cat = select_sample(
                 tot_cat, sample_name,
-                z_min=Z_MIN_GLOBAL, z_max=Z_MAX_GLOBAL,
+                z_min=z_lo, z_max=z_hi,
                 logmstar_min=mstar_min, logmstar_max=mstar_max,
+                rband_noemi_err_max=RBAND_NOEMI_ERR_MAX,
             )
-            print(f"      N galaxies in bin: {len(sub_cat)}")
+            print(f"      N galaxies in bin: {len(sub_cat)} "
+                  f"(z in [{z_lo:.2f}, {z_hi:.2f}])")
 
             bin_index = bin_seed_index(sample_idx, i, n_mstar)
             results[file_key][i] = stack_one_bin(
                 sub_cat, spectra_data, wave, sample_name, file_key,
                 mstar_min, mstar_max, bin_index,
+                z_min=z_lo, z_max=z_hi,
             )
 
     # -------------------------------------------------------------------------

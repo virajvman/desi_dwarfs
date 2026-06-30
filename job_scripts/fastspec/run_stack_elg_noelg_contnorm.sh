@@ -57,7 +57,10 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 
 echo "=== [1/2] Bootstrap stacking, continuum-normalized (stack_mstar_elg_vs_noelg.py --norm continuum) ==="
-python3 code/stacking_analysis/stack_mstar_elg_vs_noelg.py --norm continuum --resume
+# No --resume: the ELG and non-ELG selections were redefined (IS_* flags, r-band
+# S/N gate, ELG z-slice), so both samples are recomputed from scratch rather than
+# reusing stale per-bin pickles.
+python3 code/stacking_analysis/stack_mstar_elg_vs_noelg.py --norm continuum
 
 echo "=== [2/2] FastSpecFit on continuum-normalized ELG / NO-ELG stacks ==="
 bash job_scripts/fastspec/run_stack_fastspec_elg_noelg_contnorm.sh

@@ -121,8 +121,22 @@ def deredshift_for_stacking(use_invvar=True, delta_wave=None, chunk_size=5000, n
 
 ##data loading functions
 
-def load_catalog(filename="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits"):
-    """Load and filter the dwarf galaxy catalog."""
+def load_catalog(filename="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits",
+                 apply_halpha_cut=True):
+    """Load and filter the dwarf galaxy catalog.
+
+    Parameters
+    ----------
+    apply_halpha_cut : bool
+        If True (default), the base quality mask is the Halpha-detection gate
+        ``DWARF_MASKBIT==0 & HALPHA_FLUX*sqrt(HALPHA_FLUX_IVAR)>3 & HALPHA_FLUX>1``
+        that the Halpha-normalized products (stack_mstar_haew_5pct.py,
+        stack_mstar_haew.py) rely on -- do NOT change this default or those
+        products change. If False, the base mask is ``DWARF_MASKBIT==0`` only and
+        the caller applies its own gating; used by the continuum-normalized
+        ELG/non-ELG stack, which gates on MAG_R_FIBER_NOEMI_ERR in select_sample
+        instead of on Halpha.
+    """
     
     tot_cat = Table.read(filename, hdu="MAIN")
 
@@ -138,7 +152,13 @@ def load_catalog(filename="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/d
 
     halpha_snr = ( np.array(fspec_cat["HALPHA_FLUX"]) * np.sqrt(np.array(fspec_cat["HALPHA_FLUX_IVAR"])) )
 
-    mask = (tot_cat["DWARF_MASKBIT"] == 0) & (halpha_snr > 3) & ( np.array(fspec_cat["HALPHA_FLUX"]) > 1) #& (tot_cat["MAG_TYPE"] == "TRACTOR_OG")
+    if apply_halpha_cut:
+        mask = (tot_cat["DWARF_MASKBIT"] == 0) & (halpha_snr > 3) & ( np.array(fspec_cat["HALPHA_FLUX"]) > 1)
+    else:
+        # Base mask only (DWARF_MASKBIT); the caller applies its own line /
+        # continuum-S/N gating. Used by the continuum-normalized ELG/non-ELG
+        # product, which gates on MAG_R_FIBER_NOEMI_ERR in select_sample.
+        mask = (tot_cat["DWARF_MASKBIT"] == 0)
     
     tot_cat_f = tot_cat[ mask ]
 
@@ -148,7 +168,7 @@ def load_catalog(filename="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/d
 
     derived_cat_f = derived_cat[ mask ]
     
-    tot_cat_new =  hstack( [tot_cat_f, fspec_cat_f["HALPHA_FLUX", "HALPHA_FLUX_IVAR","HBETA_FLUX", "HBETA_FLUX_IVAR", "OIII_5007_FLUX", "OIII_5007_FLUX_IVAR", "HALPHA_EW", "HALPHA_EW_IVAR", "OII_3726_FLUX", "OII_3726_FLUX_IVAR", "OII_3729_FLUX", "OII_3729_FLUX_IVAR", "HALPHA_BOXFLUX", "HALPHA_BOXFLUX_IVAR"], derived_cat_f["DELTA_MAG_G_KCORR", "DELTA_MAG_R_KCORR", "MAG_R_SDSS_Z0_MODEL_NOEMI"], tractor_cat_f["FLUX_G","FLUX_R","FLUX_Z","FLUX_IVAR_G", "FLUX_IVAR_R", "FLUX_IVAR_Z"] ] )
+    tot_cat_new =  hstack( [tot_cat_f, fspec_cat_f["HALPHA_FLUX", "HALPHA_FLUX_IVAR","HBETA_FLUX", "HBETA_FLUX_IVAR", "OIII_5007_FLUX", "OIII_5007_FLUX_IVAR", "HALPHA_EW", "HALPHA_EW_IVAR", "OII_3726_FLUX", "OII_3726_FLUX_IVAR", "OII_3729_FLUX", "OII_3729_FLUX_IVAR", "HALPHA_BOXFLUX", "HALPHA_BOXFLUX_IVAR"], derived_cat_f["DELTA_MAG_G_KCORR", "DELTA_MAG_R_KCORR", "MAG_R_SDSS_Z0_MODEL_NOEMI", "MAG_R_FIBER_NOEMI_ERR"], tractor_cat_f["FLUX_G","FLUX_R","FLUX_Z","FLUX_IVAR_G", "FLUX_IVAR_R", "FLUX_IVAR_Z"] ] )
     
     print(f"Cleaned catalog size = {len(tot_cat_new)}")
     
@@ -170,15 +190,43 @@ def load_spectra(h5_file="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra
 
 
 def select_sample(catalog, sample_name, z_min=0.05, z_max=0.1, 
-                  logmstar_min=6, logmstar_max=9.25):
-    """Select galaxies matching sample criteria."""
+                  logmstar_min=6, logmstar_max=9.25, rband_noemi_err_max=0.1):
+    """Select galaxies for the continuum-normalized ELG / non-ELG stacks.
+
+    Selection is expressed entirely via the IS_* target-membership flags (the
+    transient SAMPLE column has been dropped from the catalog). Both samples
+    share a base of DWARF_MASKBIT==0, DWARF_PRIMARY (de-duplicated fibers), and a
+    continuum-S/N gate MAG_R_FIBER_NOEMI_ERR < rband_noemi_err_max, plus the z and
+    mass windows applied below. Per-sample additions:
+
+      "ELG"    -- IS_ELG & MAG_TYPE=="TRACTOR_OG"  (== the notebook's main_elg_f;
+                  caller passes the narrow slice, e.g. 0.09 < z < 0.13)
+      "NO_ELG" -- IS_BGS_BRIGHT | IS_BGS_FAINT | IS_LOWZ  (BGS+LOWZ; no TRACTOR_OG
+                  cut; caller passes the full z range). IS_ELG is NOT excluded, so
+                  an ELG-targeted BGS/LOWZ object may appear in both samples.
+    """
+    base = (
+        (catalog["DWARF_MASKBIT"] == 0)
+        & (catalog["DWARF_PRIMARY"] == True)
+        & (catalog["MAG_R_FIBER_NOEMI_ERR"] < rband_noemi_err_max)
+    )
 
     if sample_name == "ELG":
-        samp_mask = (catalog["SAMPLE"] == "ELG")
+        samp_mask = (
+            base
+            & (catalog["IS_ELG"] == True)
+            & (catalog["MAG_TYPE"] == "TRACTOR_OG")
+        )
     elif sample_name == "NO_ELG":
-        samp_mask = (catalog["SAMPLE"] != "ELG")
+        samp_mask = base & (
+            (catalog["IS_BGS_BRIGHT"] == True)
+            | (catalog["IS_BGS_FAINT"] == True)
+            | (catalog["IS_LOWZ"] == True)
+        )
     else:
-        samp_mask = (catalog["SAMPLE"] == sample_name)
+        raise ValueError(
+            f"Unknown sample_name: {sample_name!r} (expected 'ELG' or 'NO_ELG')"
+        )
     
     # Half-open mass interval (low-exclusive, high-inclusive) so a galaxy
     # sitting exactly on a bin boundary lands in the lower-edge bin and is
