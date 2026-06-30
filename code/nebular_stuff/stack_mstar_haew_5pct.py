@@ -52,6 +52,9 @@ Outputs (written to STACK_PATH; stale files removed at the start of each run):
   Mass viz (STACK_PATH/mstar_viz/):
   - stack_ALL_mstar_{mlo}_{mhi}.fits   (1 row, full lambda grid; FITS only)
 
+Custom M* x EW viz stacks (separate script, no bootstrap / no FastSpecFit):
+  see stack_mstar_haew_viz.py -> stack_files/mstar_viz_haew/
+
 Usage:
     python stack_mstar_haew_5pct.py
 """
