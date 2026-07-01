@@ -153,7 +153,28 @@ ABSORPTION = [
     L("CaT8542",    8542.090, r"Ca II $\lambda$8542",     "caii",      True),
     L("CaT8662",    8662.140, r"Ca II $\lambda$8662",     "caii",      True),
     L("MgI8807",    8806.800, r"Mg I $\lambda$8807",      "metals"),
+    L("KI7665",     7664.900, r"K I $\lambda$7665",       "metals",    True),
+    L("KI7699",     7698.960, r"K I $\lambda$7699",       "metals"),
 ]
+
+
+# ---- ABSORPTION FAMILIES (for "forest" span bars) -------------------
+# AIR wavelengths (Angstrom) of the family members that populate the red-optical
+# metal forest.  The span bar is drawn from the bluest to reddest member that
+# lands inside the panel (see mark_span, waves=...).  Ni I is folded into the
+# Fe I forest as an Fe-peak neutral, per the figure design.  These are the
+# members in the ~5400-7200 A window; add more if you widen the panels.
+FEI_FOREST_AIR = [
+    5405.80, 5455.61, 5476.90, 5572.84, 5587.50, 5615.64, 5658.82, 5710.00,
+    5782.00, 6137.69, 6191.56, 6400.00, 6411.65, 6421.35, 6430.85, 6592.91,
+    6609.11, 6633.75, 6643.63, 6841.34, 6855.16, 6914.00, 6945.20, 6978.85,
+    7016.99, 7112.17, 7130.92,
+]
+CAI_SERIES_AIR = [
+    6102.72, 6122.22, 6162.17, 6169.04, 6439.08, 6449.81, 6462.57, 6471.66,
+]
+FEI_FOREST_COLOR = "#3b6ea5"   # steel blue
+CAI_SERIES_COLOR = "#e08214"   # orange
 
 
 # ----------------------------------------------------------------------
@@ -180,7 +201,7 @@ def configure_cm_font(usetex=False):
 def label_lines(ax, lines=LINES, *, style=None,
                 air_to_vacuum=False,
                 categories=None, exclude=None, strong_only=False, hide=None,
-                fiducial=0.5, angle=90, top_angle=0, color="0.15",
+                fiducial=0.5, below=False, angle=90, top_angle=0, color="0.15",
                 fontsize=6.0, lw=0.5, gap=0.03, end_y=0.20, top_pad=0.02,
                 stagger=True, level_step=0.05, max_levels=6, min_dx_frac=0.010):
     """
@@ -199,6 +220,9 @@ def label_lines(ax, lines=LINES, *, style=None,
     Placement
     ---------
     fiducial    : axes-fraction y that dy is measured from (default 0.5 centre).
+    below       : draw the labels hanging BELOW their anchor (va="top") instead
+                  of above it -- the emission-up / absorption-down convention.
+                  Pair with a low `fiducial` and an `end_y` up near the troughs.
     Un-styled lines get auto anti-overlap staggering (stagger=True).
     Per-line control via `style` (dict keyed by id); recognised keys:
         hide  (bool)          remove this line
@@ -312,7 +336,7 @@ def label_lines(ax, lines=LINES, *, style=None,
                     color=col, lw=lw, zorder=5, clip_on=False,
                     solid_capstyle="butt")
         ax.text(w_lab, y_anchor, lab, transform=trans, rotation=ang,
-                ha="center", va="bottom", fontsize=fontsize,
+                ha="center", va=("top" if below else "bottom"), fontsize=fontsize,
                 color=col, zorder=6, clip_on=False)
         placed[ln.id] = ("inside", w_lab, y_anchor)
  
@@ -338,3 +362,92 @@ def mark_band(ax, w0, w1, label, *, y=0.90, drop=0.02, color="0.15",
             color=color, lw=0.6, clip_on=False, zorder=6)
     ax.text(0.5 * (w0 + w1), y + 0.005, label, transform=trans, ha="center",
             va="bottom", fontsize=fontsize, color=color, clip_on=False, zorder=6)
+
+
+def _cluster_ranges(ws, gap, min_members=1):
+    """Group a SORTED wavelength list into (lo, hi) clumps, splitting wherever the
+    jump between consecutive lines exceeds `gap` (Angstrom).  Clumps with fewer than
+    `min_members` lines are dropped.  Returns a list of (lo, hi) tuples."""
+    if not ws:
+        return []
+    groups = [[ws[0]]]
+    for w in ws[1:]:
+        if w - groups[-1][-1] <= gap:
+            groups[-1].append(w)
+        else:
+            groups.append([w])
+    return [(g[0], g[-1]) for g in groups if len(g) >= min_members]
+
+
+def mark_span(ax, w0=None, w1=None, *, waves=None, cluster_gap=None, min_members=1,
+              y=0.10, label=None,
+              color="0.15", lw=1.6, tip_len=0.0, tip_dir=+1,
+              label_dy=0.012, label_va="bottom", label_ha="center", angle=0,
+              fontsize=6.0, air_to_vacuum=False, clip_to_xlim=True, zorder=6):
+    """
+    Horizontal span line(s) at axes-fraction height y.  x is data (wavelength),
+    y is axes-fraction (0 bottom, 1 top).
+
+    Endpoints, three ways:
+      * explicit w0, w1         -> one exact range (multiplet / band brackets, e.g.
+                                   the Ca II triplet or the G band).
+      * waves=[...]             -> one bar from the bluest to reddest member inside
+                                   the current x-limits (a single family bar).
+      * waves=[...] + cluster_gap
+                                -> a DISCONNECTED set of bars, one per clump.  The
+                                   members are grouped wherever consecutive lines sit
+                                   closer than `cluster_gap` (Angstrom); each clump gets
+                                   a bar from its bluest to reddest member, and clumps
+                                   with fewer than `min_members` lines are dropped.  Use
+                                   this so a sparse "forest" shows its gaps instead of
+                                   one misleadingly solid bar.
+
+    tip_len>0 (axes-frac) adds vertical end tips, turning each bar into a bracket;
+    tip_dir=+1 points them up (toward troughs above the bar), -1 down.  `label` is
+    centred once over the whole extent at y+label_dy with alignment `label_va`.
+
+    Returns the list of horizontal Line2D drawn (handy as legend proxies), or None if
+    nothing landed inside the axes.
+    """
+    from matplotlib.transforms import blended_transform_factory
+    trans = blended_transform_factory(ax.transData, ax.transAxes)
+
+    conv = air_to_vac if air_to_vacuum else (lambda x: x)
+    x0, x1 = ax.get_xlim()
+    xlo, xhi = min(x0, x1), max(x0, x1)
+
+    if waves is not None:
+        ws = sorted(conv(w) for w in waves)
+        if clip_to_xlim:
+            ws = [w for w in ws if xlo <= w <= xhi]
+        if not ws:
+            return None
+        segs = _cluster_ranges(ws, cluster_gap, min_members) if cluster_gap \
+            else [(ws[0], ws[-1])]
+    else:
+        a, b = conv(w0), conv(w1)
+        if clip_to_xlim and (b < xlo or a > xhi):
+            return None
+        if clip_to_xlim:
+            a, b = max(a, xlo), min(b, xhi)
+        segs = [(a, b)]
+
+    if not segs:
+        return None
+
+    lines = []
+    for a, b in segs:
+        (line,) = ax.plot([a, b], [y, y], transform=trans, color=color, lw=lw,
+                          solid_capstyle="butt", clip_on=False, zorder=zorder)
+        lines.append(line)
+        if tip_len:
+            for wt in (a, b):
+                ax.plot([wt, wt], [y, y + tip_dir * tip_len], transform=trans,
+                        color=color, lw=lw, solid_capstyle="butt",
+                        clip_on=False, zorder=zorder)
+    if label:
+        xs = [x for seg in segs for x in seg]
+        ax.text(0.5 * (min(xs) + max(xs)), y + label_dy, label, transform=trans,
+                ha=label_ha, va=label_va, rotation=angle, fontsize=fontsize,
+                color=color, clip_on=False, zorder=zorder)
+    return lines
