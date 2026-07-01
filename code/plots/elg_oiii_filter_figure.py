@@ -42,14 +42,13 @@ EX_Z = (0.08, 0.12)        # bracket the n(z) peak: [OIII] in g vs in the g/r ga
 # npz-baked EX_Z (the SED is rest-frame, redshifted at plot time). Lighter (low-z)
 # to darker (high-z): light grey -> black.
 OVERLAY_Z = (0.03, 0.11)
-OVERLAY_COLORS = ("0.6", "k")
+OVERLAY_COLORS = ("k", "k")
 
 # rest-frame vacuum wavelengths (Angstrom) to annotate
 MARK_LINES = {
     "[OII]":      3728.5,
     r"H$\beta$":  4862.7,
-    "[OIII]4959": 4960.3,
-    "[OIII]5007": 5008.2,
+    "[OIII]": 5020.2,
     r"H$\alpha$": 6564.6,
 }
 BAND_COLORS = {"g": "tab:green", "r": "tab:red", "z": "tab:purple"}
@@ -179,64 +178,59 @@ def plot_spectra_filters(prod, axes=None, xlim=(3600, 9900),
     return axes
 
 
-def plot_spectra_filters_overlay(prod, ax=None, z_values=OVERLAY_Z,
-                                 colors=OVERLAY_COLORS, xlim=(3600, 9900),
-                                 rest_norm=(4150.0, 4350.0), ymax=8.0,
-                                 label_z_index=-1, lw=0.8):
-    """Single-panel overlay of the SAME rest-frame mock SED redshifted to each z.
+def plot_spectra_filters_overlay(prod, ax=None, z=0.11, color="k",
+                                 xlim=(3600, 9900), rest_norm=(4150.0, 4350.0),
+                                 ymax=8.0, filt_frac=0.95, lw=0.8):
+    """Single-panel mock SED at one redshift over the grz bandpasses.
 
-    Unlike ``plot_spectra_filters`` (one z per stacked panel), this draws every z
-    in ``z_values`` on ONE axis over a shared observed-wavelength scale, with the
-    grz filters drawn once behind (they don't move with z). Each spectrum is
-    continuum-normalized to the SAME baseline, so its emission lines poke up at
-    their redshift-dependent observed wavelengths -- directly showing the lines
-    sliding across the g/r gap as z grows.  Colors run light (low z) -> dark
-    (high z).  To avoid double-labelling every line, emission-line ticks/labels
-    are drawn only for the spectrum at ``z_values[label_z_index]`` (default the
-    last / reddest), color-matched to that spectrum.
+    The SAME rest-frame mock SED is redshifted to ``z`` and continuum-normalized,
+    so its emission lines fall at their observed wavelengths -- showing which lines
+    land in / between the grz bands at this z.  The grz filters are drawn directly
+    on the flux axis (NO twin response axis): each bandpass is scaled to peak near
+    the top purely to indicate band POSITION and wavelength RANGE, and the g/r/z
+    letters sit just above the (response-weighted) centre of each filter.
+    Emission-line ticks/labels are color-matched to the spectrum.
 
     `ax` : a single Axes (e.g. one make_tall_subplots panel). If None, makes its
            own figure.  Hα is allowed to run off the top (ymax). Returns the Axes.
     """
-    z_values = np.atleast_1d(z_values)
-    colors = list(colors)
     if ax is None:
         _, ax = plt.subplots(figsize=(7.5, 2.5))
     w0, f0 = prod["wave_rest"], prod["flam_rest"]
 
-    # filters once, behind every spectrum
-    axf = ax.twinx()
-    _overlay_filters(axf, prod)
-    axf.set_zorder(ax.get_zorder() - 1)
-    ax.patch.set_visible(False)
-    axf.set_ylabel("filter response")
+    # filters drawn on the flux axis (no twin axis): scaled so each bandpass peaks
+    # near the top, purely to mark band position + range. g/r/z above band centre.
+    scale = filt_frac * ymax
+    for band in ["g", "r", "z"]:
+        w, resp = prod["filters"][band]
+        ax.plot(w, resp * scale, color=BAND_COLORS[band], lw=1.2, zorder=1)
+        ax.fill_between(w, resp * scale, color=BAND_COLORS[band], alpha=0.12,
+                        lw=0, zorder=0)
+        wcen = np.average(w, weights=resp)            # response-weighted centre
+        ax.text(wcen*1.02,0.85 , band, color=BAND_COLORS[band], ha="center",
+                va="bottom", fontsize=12, transform=ax.get_xaxis_transform())
 
-    label_i = range(len(z_values))[label_z_index]
-    for i, (z, color) in enumerate(zip(z_values, colors)):
-        wobs = w0 * (1.0 + z)
-        fobs = f0 / (1.0 + z)
-        sel = (wobs > rest_norm[0] * (1 + z)) & (wobs < rest_norm[1] * (1 + z))
-        norm = np.median(fobs[sel]) if np.any(sel) else 1.0
-        ax.plot(wobs, fobs / norm, color=color, lw=lw, zorder=5 + i,
-                label=fr"$z={z:.2f}$")
+    # the single z=0.11 spectrum
+    wobs = w0 * (1.0 + z)
+    fobs = f0 / (1.0 + z)
+    sel = (wobs > rest_norm[0] * (1 + z)) & (wobs < rest_norm[1] * (1 + z))
+    norm = np.median(fobs[sel]) if np.any(sel) else 1.0
+    ax.plot(wobs, fobs / norm, color=color, lw=lw, zorder=5)
 
-        if i == label_i:
-            for k, (name, lam0) in enumerate(zip(prod["line_names"],
-                                                 prod["line_waves"])):
-                lam = float(lam0) * (1.0 + z)
-                if not (xlim[0] < lam < xlim[1]):
-                    continue
-                ax.axvline(lam, color=color, ls=":", lw=0.8, alpha=0.7, zorder=2)
-                ytxt = 0.97 if k % 2 == 0 else 0.78
-                ax.text(lam, ytxt, str(name), rotation=90, va="top", ha="right",
-                        fontsize=7, color=color,
-                        transform=ax.get_xaxis_transform())
+    for k, (name, lam0) in enumerate(zip(prod["line_names"], prod["line_waves"])):
+        lam = float(lam0) * (1.0 + z)
+        if not (xlim[0] < lam < xlim[1]):
+            continue
+        # ax.axvline(lam, color=color, ls=":", lw=0.8, alpha=0.7, zorder=2)
+        ytxt = 0.7 if k % 2 == 0 else 0.82
+        ax.text(lam, ytxt, str(name), rotation=90, va="top", ha="right", color=color, transform=ax.get_xaxis_transform())
 
-    ax.set_ylabel(r"$f_\lambda$ (cont.-norm.)")
+    ax.text(0.015, 0.88, fr"$z = {z:.2f}$", transform=ax.transAxes, fontsize=12)
+
+    ax.set_ylabel(r"$f_\lambda$")
     ax.set_ylim(0, ymax)
     ax.set_xlim(*xlim)
-    ax.set_xlabel(r"observed wavelength [$\AA$]")
-    ax.legend(frameon=False, loc="upper left", fontsize=9)
+    ax.set_xlabel(r"Observed Wavelength ($\AA$)")
     return ax
 
 

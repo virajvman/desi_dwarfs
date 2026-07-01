@@ -106,14 +106,14 @@ SAMPLE_SPECS = [
 ]
 
 # Stellar-mass bin edges (log Msun). 0.25 dex bins throughout.
-MSTAR_BINS = np.arange(6.0, 9.5 + 1e-6, 0.25)
+MSTAR_BINS = np.arange(6.0, 9.25 + 1e-6, 0.25)
 
 # Redshift windows. The ELG sample is restricted to a narrow slice centered on
 # z=0.11 (z = 0.11 +/- 0.02), matching the notebook's main_elg_f -- a clean,
 # aperture-matched ELG population for the continuum-normalized stack. The non-ELG
 # (BGS+LOWZ) sample keeps the full range (BGS dwarfs sit at z << 0.11, so the
 # slice would gut them); the comparison is asymmetric in redshift by design.
-ELG_Z_MIN, ELG_Z_MAX = 0.09, 0.13
+ELG_Z_MIN, ELG_Z_MAX = 0.07, 0.16
 NOELG_Z_MIN, NOELG_Z_MAX = 0.0, 0.5
 
 # Retained as the saved-metadata default; the actual per-sample window is resolved
@@ -153,7 +153,7 @@ BOOT_NJOBS = 16
 # (high-mass) bins reflects this cap, i.e. mildly conservative. None disables it.
 # Tunable: raise to ~20000 for tighter errors on the biggest bins -- still
 # memory-safe on a full node.
-MAX_STACK_SPECTRA = 10000
+MAX_STACK_SPECTRA = 20000
 
 # Output location. Selected by --norm in main(): the Halpha-normalized product
 # writes to mstar/, the continuum (r-band) normalized product to mstar_contnorm/,
