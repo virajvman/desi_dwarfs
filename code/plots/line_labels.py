@@ -135,7 +135,7 @@ LINES = [
 # ---- ABSORPTION -----------------------------------------------------
 # categories: caii, balmer_abs, gband, metals, molecular
 ABSORPTION = [
-    L("CaK",        3933.663, r"Ca II K $\lambda$3934",   "caii",      True),
+    L("CaK",        3933.663, r"Ca II K",   "caii",      True),
     L("CaH",        3968.468, r"Ca II H $\lambda$3968",   "caii",      True),
     L("CN4150",     4150.000, r"CN $\lambda$4150",        "molecular"),
     L("CaI4227",    4226.730, r"Ca I $\lambda$4227",      "metals"),
@@ -144,8 +144,8 @@ ABSORPTION = [
     L("FeI5270",    5270.000, r"Fe I $\lambda$5270",      "metals"),
     L("FeI5335",    5335.000, r"Fe I $\lambda$5335",      "metals"),
     L("FeI5406",    5406.000, r"Fe I $\lambda$5406",      "metals"),
-    L("Mgb",        5175.000, r"Mg b $\lambda$5175",      "metals",    True),
-    L("NaD",        5892.900, r"Na D $\lambda$5893",      "metals",    True),
+    L("Mgb",        5175.000, r"Mg b",      "metals",    True),
+    L("NaD",        5892.900, r"Na D",      "metals",    True),
     L("TiO5449",    5449.000, r"TiO $\lambda$5449",       "molecular"),
     L("TiO6159",    6159.000, r"TiO $\lambda$6159",       "molecular"),
     L("TiO7053",    7053.000, r"TiO $\lambda$7053",       "molecular"),
@@ -173,8 +173,8 @@ FEI_FOREST_AIR = [
 CAI_SERIES_AIR = [
     6102.72, 6122.22, 6162.17, 6169.04, 6439.08, 6449.81, 6462.57, 6471.66,
 ]
-FEI_FOREST_COLOR = "#3b6ea5"   # steel blue
-CAI_SERIES_COLOR = "#e08214"   # orange
+FEI_FOREST_COLOR = "steelblue"   # steel blue
+CAI_SERIES_COLOR = "darkorange"   # orange
 
 
 # ----------------------------------------------------------------------
