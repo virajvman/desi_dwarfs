@@ -130,9 +130,9 @@ def load_catalog(filename="/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/d
     apply_halpha_cut : bool
         If True (default), the base quality mask is the Halpha-detection gate
         ``DWARF_MASKBIT==0 & HALPHA_FLUX*sqrt(HALPHA_FLUX_IVAR)>3 & HALPHA_FLUX>1``
-        that the Halpha-normalized products (stack_mstar_haew_5pct.py,
-        stack_mstar_haew.py) rely on -- do NOT change this default or those
-        products change. If False, the base mask is ``DWARF_MASKBIT==0`` only and
+        that the Halpha-normalized product (stack_mstar_haew_5pct.py) relies
+        on -- do NOT change this default or that product changes. If False, the
+        base mask is ``DWARF_MASKBIT==0`` only and
         the caller applies its own gating; used by the continuum-normalized
         ELG/non-ELG stack, which gates on MAG_R_FIBER_NOEMI_ERR in select_sample
         instead of on Halpha.
@@ -230,8 +230,8 @@ def select_sample(catalog, sample_name, z_min=0.05, z_max=0.1,
     
     # Half-open mass interval (low-exclusive, high-inclusive) so a galaxy
     # sitting exactly on a bin boundary lands in the lower-edge bin and is
-    # not silently dropped from both neighbors. Matches select_sample_2d in
-    # stack_mstar_haew.py.
+    # not silently dropped from both neighbors. Matches the half-open mass
+    # binning in stack_mstar_haew_5pct.py.
     mask = (
          samp_mask &
         (catalog["Z"] > z_min) &

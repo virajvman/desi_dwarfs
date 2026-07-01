@@ -192,10 +192,13 @@ def apply_halpha_detection_cuts(
 
 
 def _sample_mask(catalog, sample_names, z_min, z_max, logmstar_min, logmstar_max):
-    sample_col = catalog["SAMPLE"]
+    # Target membership comes from the boolean IS_<NAME> flags (the categorical
+    # SAMPLE column was dropped from the catalog). Pool the requested samples as
+    # a union: a row is kept if any of its IS_<NAME> flags is set, so
+    # ["BGS_BRIGHT", "BGS_FAINT", "LOWZ"] -> IS_BGS_BRIGHT | IS_BGS_FAINT | IS_LOWZ.
     samp_mask = np.zeros(len(catalog), dtype=bool)
     for name in sample_names:
-        samp_mask |= (sample_col == name)
+        samp_mask |= (catalog["IS_" + name] == True)
     return (
         samp_mask
         & (catalog["Z"] > z_min) & (catalog["Z"] < z_max)
