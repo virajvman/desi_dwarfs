@@ -18,16 +18,25 @@
 # jobs against the store at the same time.
 #
 # BEFORE the production run, validate container-vs-URL agreement (manual gate):
-#   shifter --image dstndstn/cutouts:dvsro3 python3 \
-#     <repo>/job_scripts/image_cutouts/psf/many_psfs_general.py \
-#     --catalog-path $CATALOG_PATH --outdir-data $OUTDIR \
-#     --validate-url 30 --nompi
-# Inspect the panels + metrics it prints, THEN submit this job.
+# see README.md in this directory, or just submit validate_psf_debug.sbatch
+# (qos=debug, fast turnaround). Inspect the panels + metrics it prints, THEN
+# submit this job.
 #
 # Incremental: objects already in the PSF manifest, or tombstoned in
-# permanently_failed.csv, are skipped.
+# permanently_failed.csv, are skipped -- this also means running MULTIPLE
+# catalogs through the SAME store (see CATALOG_PATHS below) costs nothing
+# extra for any TARGETIDs the catalogs happen to share (the store is unified
+# across sample classes, see psf_store.get_store_dir()'s own docstring).
 # ============================================================
-CATALOG_PATH="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_BGS_BRIGHT_shreds_catalog_w_aper_mags.fits"
+
+# One or more input catalogs to process, in order, against the SAME PSF
+# store -- e.g. BGS_BRIGHT + SGA. Add more paths here for additional samples;
+# each just needs RA_COL/DEC_COL/ID_COL/brick columns (same for every sample
+# so far -- override below if a future catalog uses different names).
+CATALOG_PATHS=(
+    "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_BGS_BRIGHT_shreds_catalog_w_aper_mags.fits"
+    "/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_SGA_sga_catalog_w_aper_mags.fits"
+)
 # PSF store (must match psf_store.PSFS_DIR) -- sibling of the image store
 OUTDIR="/global/cfs/cdirs/desi/users/virajvm/dwarf_cutouts/psfs"
 RA_COL="RA"
@@ -48,15 +57,22 @@ SCRIPT_DIR="/global/homes/v/virajvm/DESI2_LOWZ/desi_dwarfs/job_scripts/image_cut
 
 echo "Starting at $(date)"
 
-cmd="sh $SCRIPT_DIR/psfs_cnn_general.sh $N $mp $CATALOG_PATH $OUTDIR $RA_COL $DEC_COL $ID_COL $EXTRA_ARGS"
-echo $cmd
-$cmd
+for CATALOG_PATH in "${CATALOG_PATHS[@]}"; do
+    if [ ! -f "$CATALOG_PATH" ]; then
+        echo "FAILED: catalog not found: $CATALOG_PATH"
+        exit 1
+    fi
+    echo "---- Processing $CATALOG_PATH at $(date) ----"
+    cmd="sh $SCRIPT_DIR/psfs_cnn_general.sh $N $mp $CATALOG_PATH $OUTDIR $RA_COL $DEC_COL $ID_COL $EXTRA_ARGS"
+    echo $cmd
+    $cmd
 
-if [ $? -eq 0 ]; then
-    echo "SUCCESS: PSFs done at $(date)"
-else
-    echo "FAILED at $(date)"
-    exit 1
-fi
+    if [ $? -eq 0 ]; then
+        echo "SUCCESS: $CATALOG_PATH done at $(date)"
+    else
+        echo "FAILED on $CATALOG_PATH at $(date)"
+        exit 1
+    fi
+done
 
-echo "All done at $(date)"
+echo "All catalogs done at $(date)"
