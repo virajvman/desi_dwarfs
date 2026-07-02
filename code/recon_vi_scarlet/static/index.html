@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>recon_vi_scarlet — SCARLET component VI</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="sidebar-head">
+        <span>Objects</span>
+        <button id="btn-filter-accept" class="sb-filter"
+                title="show only accepted objects for a review pass (hotkey: f)">Accepted only</button>
+      </div>
+      <div id="sidebar-list"></div>
+    </aside>
+
+    <main id="main">
+      <header id="topbar">
+        <div class="topbar-left">
+          <button id="btn-prev" class="nav">‹ Prev</button>
+          <span id="counter" class="counter">– / –</span>
+          <button id="btn-next" class="nav">Next ›</button>
+        </div>
+        <div class="topbar-mid">
+          <span class="kv">TARGETID <a id="targetid" class="tid-link" href="#" target="_blank" rel="noopener noreferrer">—</a></span>
+          <span class="kv">brick <b id="brickname">—</b></span>
+          <span id="ncomp-badge" class="badge">—</span>
+          <span id="verdict-badge" class="badge v-none">—</span>
+          <span id="markers-banner" class="badge v-disabled" style="display:none">Markers OFF — click/hover disabled (press m)</span>
+        </div>
+        <div class="topbar-right">
+          <input id="jump-input" placeholder="index / TARGETID" />
+          <button id="btn-jump">Go</button>
+        </div>
+      </header>
+
+      <section id="panels">
+        <div class="panel-row">
+          <figure class="panel">
+            <figcaption>Input cutout <span class="hint">(click components)</span></figcaption>
+            <canvas id="canvas-input" width="400" height="400"></canvas>
+          </figure>
+          <figure class="panel">
+            <figcaption>Residual <span class="hint">(data − full model)</span></figcaption>
+            <canvas id="canvas-residual" width="400" height="400"></canvas>
+          </figure>
+          <div class="panel panel-spacer" aria-hidden="true"></div>
+        </div>
+        <div class="panel-row">
+          <figure class="panel">
+            <figcaption>Galaxy model <span class="hint">(live · click its components)</span></figcaption>
+            <canvas id="canvas-galaxy" width="400" height="400"></canvas>
+          </figure>
+          <figure class="panel">
+            <figcaption>Not-galaxy model <span class="hint">(live · click its components)</span></figcaption>
+            <canvas id="canvas-nondwarf" width="400" height="400"></canvas>
+          </figure>
+          <figure class="panel">
+            <figcaption>Data − galaxy <span class="hint">(live · cutout minus galaxy model)</span></figcaption>
+            <canvas id="canvas-datamgal" width="400" height="400"></canvas>
+          </figure>
+        </div>
+      </section>
+
+      <section id="controls">
+        <div class="row">
+          <button id="btn-to-galaxy" class="act good">→ Galaxy</button>
+          <button id="btn-to-nondwarf" class="act danger">→ Not-galaxy</button>
+          <button id="btn-undo" class="act">Undo</button>
+          <button id="btn-reset" class="act">Reset to baseline</button>
+          <button id="btn-lsb" class="act on"
+                  title="move the full-frame LSB component between the panels (hotkey: l)">LSB: galaxy</button>
+          <button id="btn-badfit" class="act off"
+                  title="flag the SCARLET model itself as wrong — refit candidate (hotkey: b)">bad fit</button>
+          <button id="btn-markers" class="act on"
+                  title="show/hide the component markers on all panels (hotkey: m)">Markers: on</button>
+          <span id="sel-info" class="muted">0 selected</span>
+          <span class="grow"></span>
+          <button id="btn-reset-view" class="act">Reset view</button>
+          <label class="muted" for="fov-input">FOV</label>
+          <input id="fov-input" inputmode="numeric"
+                 title="visible field of view in array pixels — type a value + Enter" />
+          <span class="muted">px</span>
+          <span class="hint">scroll = zoom · drag = pan · dbl-click = quick move · hover = source outline · hold <kbd>O</kbd> = hide overlay · <kbd>m</kbd> = markers on/off · <kbd>l</kbd> = LSB · <kbd>b</kbd> = bad fit · <kbd>f</kbd> = accepted-only</span>
+        </div>
+        <div class="row legend">
+          <span class="lg"><i class="sw on"></i> in galaxy</span>
+          <span class="lg"><i class="sw out"></i> in not-galaxy (dashed)</span>
+          <span class="lg"><i class="sw edit"></i> your edit (＋ to galaxy / － to not-galaxy)</span>
+          <span class="lg"><i class="sw tgt"></i> DESI target position</span>
+          <span class="lg"><i class="sw star"></i> Gaia star (diamond)</span>
+        </div>
+        <div class="row">
+          <button id="btn-accept" class="verdict accept">Accept</button>
+          <button id="btn-unsure" class="verdict unsure">Unsure</button>
+          <button id="btn-reject" class="verdict reject">Reject</button>
+          <span id="status-line" class="muted">to not-galaxy 0 · to galaxy 0 · changed 0</span>
+        </div>
+        <div class="row">
+          <textarea id="comment" placeholder="comment (autosaved)"></textarea>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="tooltip"></div>
+
+  <script src="/static/rgb.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

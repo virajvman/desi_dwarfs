@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "recon-vi-scarlet",
+      "runtimeExecutable": "/Users/virajmanwadkar/anaconda3/bin/python",
+      "runtimeArgs": [
+        "-m", "recon_vi_scarlet.server",
+        "--bundle", "/Users/virajmanwadkar/Downloads/scarlet_local_test/scarlet_vi_bundle_6obj.h5",
+        "--out", "/Users/virajmanwadkar/Downloads/scarlet_local_test/scarlet_vi_decisions.csv",
+        "--inspector", "claude_test"
+      ],
+      "cwd": "/Users/virajmanwadkar/Desktop/Stanford/Research/DESI/desi_code/desi_dwarfs/code",
+      "port": 8001
+    }
+  ]
+}

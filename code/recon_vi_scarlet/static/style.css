@@ -1,0 +1,222 @@
+/* recon_vi_scarlet dark theme (forked from recon_vi). Two knobs change the
+   whole look: --font-family and
+   --font-size. The bundled JetBrains Mono (OFL) loads from /static/fonts/ with
+   a system-mono fallback, so it works even if the woff2 is absent. Swap
+   --font-family to a user-supplied licensed font in one line. */
+
+@font-face {
+  font-family: "ReconMono";
+  src: url("/static/fonts/JetBrainsMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "ReconMono";
+  src: url("/static/fonts/JetBrainsMono-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+
+:root {
+  --font-family: "ReconMono", ui-monospace, "SF Mono", "JetBrains Mono",
+    "Cascadia Code", "Fira Code", Menlo, Consolas, monospace;
+  --font-size: 13px;
+
+  --bg: #0e1116;
+  --bg-2: #161b22;
+  --bg-3: #1d242e;
+  --line: #2a323d;
+  --fg: #d6dee8;
+  --fg-dim: #8a96a6;
+  --accent: #5b8cff;
+  --good: #3ddc84;
+  --danger: #e5685f;
+  --warn: #ffd23f;
+  --target: #28e0e0;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-family);
+  font-size: var(--font-size);
+  -webkit-font-smoothing: antialiased;
+}
+
+#app { display: flex; height: 100vh; }
+
+/* ---- sidebar ---- */
+#sidebar {
+  width: 168px; min-width: 168px;
+  background: var(--bg-2);
+  border-right: 1px solid var(--line);
+  display: flex; flex-direction: column;
+}
+.sidebar-head {
+  padding: 10px 12px; color: var(--fg-dim);
+  text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.82em;
+  border-bottom: 1px solid var(--line);
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+}
+/* accepted-only review-pass toggle (mirrors the infill toggle's on/off look) */
+.sb-filter {
+  text-transform: none; letter-spacing: 0; font-size: 1em;
+  padding: 2px 7px; border-radius: 6px; cursor: pointer;
+  background: var(--bg-3); color: var(--fg-dim); border: 1px solid var(--line);
+}
+.sb-filter:hover { border-color: var(--accent); }
+.sb-filter.on { color: var(--good); border-color: #2c6b48; background: #11271b; }
+#sidebar-list { overflow-y: auto; flex: 1; }
+.sb-item.hidden { display: none; }
+.sb-item {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 10px; cursor: pointer; border-bottom: 1px solid #1b212a;
+}
+.sb-item:hover { background: var(--bg-3); }
+.sb-item.active { background: #223049; box-shadow: inset 3px 0 0 var(--accent); }
+.sb-item.disabled .sb-tid { color: var(--fg-dim); font-style: italic; }
+.sb-idx { color: var(--fg-dim); width: 34px; font-size: 0.82em; }
+.sb-tid { flex: 1; font-size: 0.82em; overflow: hidden; text-overflow: ellipsis; }
+.sb-mark { width: 14px; text-align: center; font-weight: 700; }
+.sb-mark.v-accept { color: var(--good); }
+.sb-mark.v-unsure { color: var(--warn); }
+.sb-mark.v-remove { color: var(--danger); }
+.sb-mark.v-edited { color: var(--accent); }
+
+/* ---- main ---- */
+#main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+#topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 8px 14px;
+  background: var(--bg-2); border-bottom: 1px solid var(--line);
+}
+.topbar-left, .topbar-mid, .topbar-right { display: flex; align-items: center; gap: 8px; }
+.counter { color: var(--fg-dim); min-width: 70px; text-align: center; }
+.kv { color: var(--fg-dim); }
+.kv b { color: var(--fg); font-weight: 700; }
+.kv a.tid-link {
+  color: var(--fg);
+  font-weight: 700;
+  text-decoration: none;
+}
+.kv a.tid-link:hover { color: var(--accent); text-decoration: underline; }
+
+.badge {
+  padding: 2px 8px; border-radius: 10px; font-size: 0.8em;
+  background: var(--bg-3); color: var(--fg-dim); border: 1px solid var(--line);
+}
+.badge.v-iso { color: var(--good); border-color: #25503a; }
+.badge.v-disabled { color: var(--warn); border-color: #5a4d1e; }
+.badge.v-accept { color: var(--good); border-color: #25503a; }
+.badge.v-unsure { color: var(--warn); border-color: #5a4d1e; }
+.badge.v-remove { color: var(--danger); border-color: #5a2b29; }
+.badge.v-none { color: var(--fg-dim); }
+
+button {
+  font-family: inherit; font-size: inherit;
+  background: var(--bg-3); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 6px;
+  padding: 5px 10px; cursor: pointer;
+}
+button:hover { border-color: var(--accent); }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+button.nav { background: transparent; }
+
+input, textarea {
+  font-family: inherit; font-size: inherit;
+  background: var(--bg); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px;
+}
+#jump-input { width: 130px; }
+#fov-input { width: 58px; text-align: right; }
+
+/* ---- panels ---- */
+/* Two rows: static (input | residual) on top, live (galaxy | not-galaxy |
+   data-galaxy) below. Both rows use the same 3-column tracks so every panel
+   is the same size; the static row's third slot is an invisible spacer. */
+#panels {
+  display: flex; flex-direction: column; gap: 10px; padding: 12px; flex: 1;
+  min-height: 0; overflow: hidden;
+}
+.panel-row { display: flex; gap: 10px; flex: 1; min-height: 0; justify-content: center; }
+.panel-spacer { visibility: hidden; }
+.panel {
+  margin: 0; display: flex; flex-direction: column;
+  flex: 0 0 auto;             /* sized explicitly by JS (resizeCanvases), not stretched */
+  min-width: 0; min-height: 0;
+}
+.panel figcaption {
+  color: var(--fg-dim); padding: 0 0 6px 2px; font-size: 0.85em;
+}
+.hint { color: #61708a; font-size: 0.92em; }
+.panel canvas {
+  /* width/height are set inline (px) by resizeCanvases() in app.js, computed
+     from the ACTUAL available space so two stacked rows never overflow past
+     the controls below -- a pure aspect-ratio+flex-shrink approach silently
+     fails here because a flex child's default min-height:auto pins it to its
+     content's intrinsic (aspect-ratio-driven) size, so shrinking rows just
+     overflow instead. object-fit is intentionally NOT used: the click/hover
+     coordinate math assumes getBoundingClientRect() equals the fully-drawn
+     image with no letterboxing, which only holds if the box is set square
+     directly (not stretched-then-letterboxed). */
+  display: block; min-width: 0; min-height: 0;
+  background: #000; border: 1px solid var(--line); border-radius: 8px;
+  image-rendering: pixelated; cursor: crosshair;
+}
+#canvas-residual, #canvas-datamgal { cursor: grab; }
+
+/* ---- controls ---- */
+#controls {
+  padding: 10px 14px; border-top: 1px solid var(--line); background: var(--bg-2);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.row .grow { flex: 1; }
+.act.good { border-color: #2c6b48; }
+.act.good:hover { background: #173524; }
+.act.danger { border-color: #6b3330; }
+.act.danger:hover { background: #341a18; }
+/* LSB chip: in galaxy = green-tinted (default), in not-galaxy = dim */
+#btn-lsb.on { color: var(--good); border-color: #2c6b48; background: #11271b; }
+#btn-lsb.off { color: var(--fg-dim); border-color: var(--line); background: var(--bg-3); }
+/* bad-fit flag: amber when set */
+#btn-badfit.on { color: var(--warn); border-color: #5a4d1e; background: #322b10; }
+#btn-badfit.off { color: var(--fg-dim); border-color: var(--line); background: var(--bg-3); }
+/* model-panel marker toggle */
+#btn-markers.on { color: var(--good); border-color: #2c6b48; background: #11271b; }
+#btn-markers.off { color: var(--fg-dim); border-color: var(--line); background: var(--bg-3); }
+.verdict { padding: 6px 18px; font-weight: 700; }
+.verdict.accept { color: var(--good); border-color: #2c6b48; }
+.verdict.accept:hover { background: #173524; }
+.verdict.unsure { color: var(--warn); border-color: #5a4d1e; }
+.verdict.unsure:hover { background: #322b10; }
+.verdict.reject { color: var(--danger); border-color: #6b3330; }
+.verdict.reject:hover { background: #341a18; }
+.muted { color: var(--fg-dim); }
+.legend { gap: 16px; font-size: 0.84em; color: var(--fg-dim); }
+.lg { display: inline-flex; align-items: center; gap: 6px; }
+.sw {
+  width: 13px; height: 13px; border-radius: 50%;
+  border: 2px solid transparent; display: inline-block;
+}
+.sw.on { border-color: #2ee36a; }
+.sw.out { border-color: #ff5d6c; border-style: dashed; }
+.sw.edit { border-color: #ffb02e; }
+.sw.tgt { border-color: #22e0e0; border-width: 2.6px; }
+.sw.star { border-color: #d6dee8; border-radius: 0; transform: rotate(45deg); width: 10px; height: 10px; }
+kbd {
+  background: var(--bg-3); border: 1px solid var(--line); border-radius: 4px;
+  padding: 0 5px; font-size: 0.9em;
+}
+#comment { width: 100%; min-height: 44px; resize: vertical; }
+
+/* ---- tooltip ---- */
+#tooltip {
+  position: fixed; pointer-events: none; z-index: 50;
+  background: rgba(13, 17, 23, 0.96); border: 1px solid var(--line);
+  border-radius: 6px; padding: 6px 9px; font-size: 0.85em;
+  color: var(--fg); opacity: 0; transition: opacity 0.12s; max-width: 240px;
+}

@@ -137,7 +137,15 @@ def load_object(row, cfg=None):
     dec = float(row["DEC"])
     brickname = str(row["BRICKNAME"])
     file_path = str(row["FILE_PATH"])
-    image_size_pix = int(row["IMAGE_SIZE_PIX"])
+    image_size_pix = int(row["IMAGE_SIZE_PIX"])          # native/catalog size
+
+    # Fixed working box size override (e.g. NERSC production at 350px when the
+    # catalog's per-row IMAGE_SIZE_PIX varies and is always >= it). Safe
+    # because cutout_store only ever central-crops down (raises if native <
+    # requested). When unset, fit_size==image_size_pix and start==0, so every
+    # `- start` adjustment below is a no-op -- one code path, not two.
+    fit_size = int(cfg.fixed_box_size) if cfg.fixed_box_size else image_size_pix
+    start = (image_size_pix - fit_size) // 2
 
     cutouts_dir = cfg.cutouts_dir or cutout_store.get_store_dir()
     psfs_dir = cfg.psfs_dir or psf_store.get_store_dir()
@@ -147,7 +155,7 @@ def load_object(row, cfg=None):
     # ---- imaging cube + invvar + WCS --------------------------------------
     try:
         cut = cutout_store.read_cutout(cutouts_dir, brickname, targetid,
-                                       size=image_size_pix)
+                                       size=fit_size)
     except Exception as exc:                              # noqa: BLE001
         raise InputError("read_cutout failed for {}: {}".format(targetid, exc))
     data = np.asarray(cut["image"], dtype=np.float32)
@@ -181,12 +189,19 @@ def load_object(row, cfg=None):
 
     # ---- on-disk masks (consume, fall back gracefully) --------------------
     seg = _load_npy(file_path, "segment_map_v2.npy")
-    if seg is None or np.asarray(seg).shape != (S, S):
-        if seg is not None:
-            warnings.append("segment_map_v2 shape {} != ({},{}); using all-main-blob"
-                            .format(np.asarray(seg).shape, S, S))
+    if seg is not None:
+        seg = np.asarray(seg)
+        if seg.shape == (image_size_pix, image_size_pix):
+            # Crop to match the fitted frame (no-op when fixed_box_size is unset).
+            seg = seg[start:start + fit_size, start:start + fit_size]
         else:
-            warnings.append("segment_map_v2.npy missing; using all-main-blob")
+            warnings.append(
+                "segment_map_v2 shape {} != catalog IMAGE_SIZE_PIX ({},{}); "
+                "using all-main-blob".format(seg.shape, image_size_pix, image_size_pix))
+            seg = None
+    else:
+        warnings.append("segment_map_v2.npy missing; using all-main-blob")
+    if seg is None:
         # Fallback: treat whole image as the main blob (no off-blob freeze).
         seg = np.full((S, S), 2, dtype=np.int32)
     seg = np.asarray(seg, dtype=np.int32)
@@ -203,8 +218,12 @@ def load_object(row, cfg=None):
 
     fiber = _load_npy(file_path, "fiber_pix_pos.npy")
     if fiber is not None:
-        fiber_x, fiber_y = float(fiber[0]), float(fiber[1])
+        # Native-frame position on disk; shift into the fitted frame (no-op
+        # when fixed_box_size is unset, since start==0).
+        fiber_x, fiber_y = float(fiber[0]) - start, float(fiber[1]) - start
     else:
+        # WCS is already fixed for the (possibly cropped) frame by
+        # cutout_store, so this fallback needs no shift either way.
         fx, fy = wcs.celestial.all_world2pix(ra, dec, 0)
         fiber_x, fiber_y = float(fx), float(fy)
 
@@ -213,6 +232,11 @@ def load_object(row, cfg=None):
                                       [np.nan, np.nan, np.nan]), dtype=np.float64).ravel()
     aper_cen = np.asarray(_row_get(row, "APER_CEN_XY_PIX_ISOLATE",
                                    [np.nan, np.nan]), dtype=np.float64).ravel()
+    if aper_cen.size >= 2:
+        # Native-frame position from the catalog; shift into the fitted frame
+        # (no-op when fixed_box_size is unset, since start==0).
+        aper_cen = aper_cen.copy()
+        aper_cen[:2] -= start
     cog_mag_grz = np.array([
         float(_row_get(row, "COG_MAG_G_ISOLATE")),
         float(_row_get(row, "COG_MAG_R_ISOLATE")),

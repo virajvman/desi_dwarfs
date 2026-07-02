@@ -9,16 +9,21 @@ same component objects are carried forward across stages (no copying), and
   Stage 1  extended sources only (wavelet seeds), stars masked in the weights.
            init_all_sources(set_spectra=True) does the ONE full LLSQ spectrum
            solve; then fit.
-  Stage 2  append the global LSB StarletSource. Freeze + weight-mask the
-           off-main-blob sources (segment 1); keep main-blob sources (segment 2)
-           free so they co-adapt with the LSB. Spectra are PRESERVED (not
-           re-solved): we fix every existing spectrum, run set_spectra_to_match
-           so it initialises ONLY the LSB spectrum against the residual, then
-           restore the fit-time freeze and fit.
+  Stage 2  (if cfg.fit_lsb) append the global LSB StarletSource; spectra are
+           PRESERVED (not re-solved): fix every existing spectrum, run
+           set_spectra_to_match so it initialises ONLY the LSB spectrum against
+           the residual, then restore the fit-time freeze. Either way: freeze +
+           weight-mask the off-main-blob sources (segment 1); keep main-blob
+           sources (segment 2) free so they co-adapt with the LSB (if any) --
+           this refinement under the off-blob mask still runs with fit_lsb=False.
   Stage 3  unmask everything (full invvar). Add forced Gaia PointSources with
-           positions frozen. Thaw extended spectra/morphologies, freeze ALL
-           positions, freeze the LSB spectrum (coeffs stay free). Init only the
-           new star spectra (others held), then fit.
+           positions frozen (or shift-free if cfg.star_shift_free). Extended
+           spectra stay FROZEN at their stage-1/2 solved values (2026-07-02
+           simplification -- this stage now only redistributes morphology
+           now that star/off-blob pixels are unmasked, not re-solve total
+           flux); morphology thawed, positions frozen. LSB spectrum frozen
+           if present (coeffs stay free). Init only the new star spectra
+           (others held), then fit.
 
 `run_fit` returns a FitResult: the fitted components (stable order
 [extended..., stars..., lsb]), per-component metadata, the final full-weight
@@ -43,7 +48,7 @@ class FitResult:
     observation: object              # final full-weight observation (for render/measure)
     components: list                 # [extended..., stars..., lsb]
     comp_meta: list                  # aligned dicts: type/is_star/center_yx/ref_id/on_main_blob
-    lsb_index: int
+    lsb_index: int                    # None if cfg.fit_lsb is False (no LSB fit)
     stage_logs: list                 # [(stage, n_iter, logL), ...]
     band_covered: np.ndarray
     n_extended: int = 0
@@ -144,29 +149,38 @@ def run_fit(inp, seeds, cfg=None):
     else:
         stage_logs.append((1, 0, float("nan")))
 
-    # ===== STAGE 2: add global LSB; freeze + mask off-main-blob =====
+    # ===== STAGE 2: (optionally) add global LSB; freeze + mask off-main-blob =====
     w2 = base_w.copy()
     w2[:, seg == 1] = 0.0
     w2 = star_masked(w2)
     obs2 = _build_observation(scarlet, data, obs_psf, w2, bands, model_frame)
 
-    lsb = scarlet.source.StarletSource(model_frame, starlet_thresh=cfg.starlet_thresh)
+    lsb = None
+    if cfg.fit_lsb:
+        lsb = scarlet.source.StarletSource(
+            model_frame, starlet_thresh=cfg.starlet_thresh,
+            monotonic=cfg.lsb_monotonic)
 
-    # targeted spectrum init: hold every existing spectrum so the LLSQ solve
-    # initialises ONLY the LSB spectrum (against the residual)
-    for src in sources:
-        _set_freeze(src, spectrum=True)
-    comps2 = sources + [lsb]
-    set_spectra_to_match(comps2, obs2)
+        # targeted spectrum init: hold every existing spectrum so the LLSQ solve
+        # initialises ONLY the LSB spectrum (against the residual)
+        for src in sources:
+            _set_freeze(src, spectrum=True)
+        comps2 = sources + [lsb]
+        set_spectra_to_match(comps2, obs2)
+    else:
+        comps2 = list(sources)
 
-    # fit-time freeze: off-main-blob fully frozen; main-blob free; LSB free
+    # fit-time freeze: off-main-blob fully frozen; main-blob free; LSB (if any) free
     for src, om in zip(sources, on_main):
         frozen = not om
         _set_freeze(src, spectrum=frozen, morphology=frozen, center=frozen)
 
-    blend2 = scarlet.Blend(comps2, obs2)
-    it2, logL2 = blend2.fit(cfg.max_iter_stage2, e_rel=cfg.e_rel, min_iter=cfg.min_iter)
-    stage_logs.append((2, int(it2), float(logL2)))
+    if comps2:
+        blend2 = scarlet.Blend(comps2, obs2)
+        it2, logL2 = blend2.fit(cfg.max_iter_stage2, e_rel=cfg.e_rel, min_iter=cfg.min_iter)
+        stage_logs.append((2, int(it2), float(logL2)))
+    else:
+        stage_logs.append((2, 0, float("nan")))
 
     # ===== STAGE 3: unmask all; add forced PointSource stars =====
     obs3 = _build_observation(scarlet, data, obs_psf, base_w, bands, model_frame)
@@ -178,17 +192,25 @@ def run_fit(inp, seeds, cfg=None):
     # init only the new star spectra: hold every existing spectrum + LSB spectrum
     for src in sources:
         _set_freeze(src, spectrum=True)
-    _set_freeze(lsb, spectrum=True)
-    comps3 = sources + star_sources + [lsb]
+    if lsb is not None:
+        _set_freeze(lsb, spectrum=True)
+    comps3 = sources + star_sources + ([lsb] if lsb is not None else [])
     set_spectra_to_match(comps3, obs3)
 
-    # fit-time freeze: extended spectra/morph free + positions frozen; LSB
-    # spectrum frozen (coeffs free); star flux free + position frozen
+    # fit-time freeze: extended spectra FROZEN at their stage-1/2 solved
+    # values (2026-07-02 simplification, see module docstring); morphology
+    # thawed; positions frozen. LSB spectrum frozen (coeffs free) if present.
+    # star flux free + position frozen (or shift-free).
     for src in sources:
-        _set_freeze(src, spectrum=False, morphology=False, center=True)
-    _set_freeze(lsb, spectrum=True)
+        _set_freeze(src, spectrum=True, morphology=False, center=True)
+    if lsb is not None:
+        _set_freeze(lsb, spectrum=True)
     for ps in star_sources:
-        _set_freeze(ps, spectrum=False, center=True)
+        # center=True pins the star at the Gaia catalog position; with
+        # star_shift_free the sub-pixel shift stays free (initialised at Gaia)
+        # to absorb catalog/coadd astrometry offsets that otherwise leave
+        # dipole/ring residuals.
+        _set_freeze(ps, spectrum=False, center=not cfg.star_shift_free)
 
     blend3 = scarlet.Blend(comps3, obs3)
     it3, logL3 = blend3.fit(cfg.max_iter_stage3, e_rel=cfg.e_rel, min_iter=cfg.min_iter)
@@ -211,11 +233,13 @@ def run_fit(inp, seeds, cfg=None):
             "center_yx": (float(cy), float(cx)),
             "ref_id": int(rid), "on_main_blob": False,
         })
-    comp_meta.append({
-        "type": "starlet_lsb", "is_star": False,
-        "center_yx": None, "ref_id": None, "on_main_blob": False,
-    })
-    lsb_index = len(comps3) - 1
+    lsb_index = None
+    if lsb is not None:
+        comp_meta.append({
+            "type": "starlet_lsb", "is_star": False,
+            "center_yx": None, "ref_id": None, "on_main_blob": False,
+        })
+        lsb_index = len(comps3) - 1
 
     return FitResult(
         model_frame=model_frame, observation=obs3,

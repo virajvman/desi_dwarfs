@@ -94,6 +94,31 @@ def main(argv=None):
     p.add_argument("--model-psf-sigma", type=float, default=None)
     p.add_argument("--detection-method", default=None, choices=["chi2", "ivar_weighted", "sum"])
     p.add_argument("--grouping-rule", default=None, choices=["or", "bluebox", "gmm"])
+    p.add_argument("--fixed-box-size", type=int, default=None,
+                   help="fit every object at this box size regardless of its "
+                        "catalog IMAGE_SIZE_PIX (must be <= every row's native "
+                        "size); crops in-memory at load time, no files written")
+    p.add_argument("--gmm-model-dir", default=None,
+                   help="local dir of gmm_model_idx_{N}.pkl files (bypasses the "
+                        "hardcoded NERSC aperture_photo._GMM_MODEL_DIR path)")
+    p.add_argument("--detect-scale", type=int, default=None,
+                   help="wavelet scale index for footprint peaks (coarser = fewer components)")
+    p.add_argument("--starlet-thresh", type=float, default=None,
+                   help="LSB per-scale L0 threshold (higher = smoother LSB)")
+    p.add_argument("--fit-lsb", dest="fit_lsb", action="store_true", default=None,
+                   help="fit a global LSB StarletSource in stage 2 (default: on)")
+    p.add_argument("--no-fit-lsb", dest="fit_lsb", action="store_false",
+                   help="skip the LSB entirely (diffuse light goes to residual/extended comps)")
+    p.add_argument("--lsb-monotonic", dest="lsb_monotonic", action="store_true",
+                   default=None,
+                   help="constrain the LSB starlet to be monotonic about the box center (default: on)")
+    p.add_argument("--no-lsb-monotonic", dest="lsb_monotonic", action="store_false",
+                   help="L0-thresholded (non-monotonic) LSB starlet")
+    p.add_argument("--star-shift-free", dest="star_shift_free", action="store_true",
+                   default=None,
+                   help="leave star sub-pixel shifts free, init at Gaia (default: on)")
+    p.add_argument("--no-star-shift-free", dest="star_shift_free", action="store_false",
+                   help="hard-freeze star positions at the Gaia coordinates")
     args = p.parse_args(argv)
 
     cfg = ScarletConfig(save_plots=args.save_plots)
@@ -107,6 +132,20 @@ def main(argv=None):
         cfg.detection_method = args.detection_method
     if args.grouping_rule:
         cfg.grouping_rule = args.grouping_rule
+    if args.fixed_box_size is not None:
+        cfg.fixed_box_size = args.fixed_box_size
+    if args.gmm_model_dir:
+        cfg.gmm_model_dir = args.gmm_model_dir
+    if args.detect_scale is not None:
+        cfg.detect_scale = args.detect_scale
+    if args.starlet_thresh is not None:
+        cfg.starlet_thresh = args.starlet_thresh
+    if args.fit_lsb is not None:
+        cfg.fit_lsb = args.fit_lsb
+    if args.lsb_monotonic is not None:
+        cfg.lsb_monotonic = args.lsb_monotonic
+    if args.star_shift_free is not None:
+        cfg.star_shift_free = args.star_shift_free
 
     cat = Table.read(args.input_catalog)
     if args.tgids:

@@ -6,15 +6,21 @@ classifier"), which decides which fitted components are the dwarf BEFORE any
 human VI. It is only a starting point -- the future VI tool adds/removes
 components -- so it does not need to be perfect.
 
-Default rule (LOCKED 2026-06-30) = the OR:
+Default rule since 2026-07-02 (`cfg.grouping_rule='gmm'`, Viraj) = the GMM
+contour ALONE:
 
-    member  =  ( (g-r < gr_cut) AND (r-z < rz_cut) )            # LSB-anchored blue box
-               OR ( GMM_prob >= conf_levels[gmm_contour] )      # per-z-bin GMM contour
+    member  =  GMM_prob >= conf_levels[gmm_contour]             # per-z-bin GMM contour
 
-evaluated only over main-blob (segment 2), non-star components. The global LSB
-StarletSource is ALWAYS a member. The blue-box cuts are anchored on the LSB's
-own colour (the dwarf's diffuse colour); the `lsb != np.nan` bug of the
-prototype is fixed here with `np.isnan`.
+evaluated only over main-blob (segment 2), non-star components. This replaced
+the earlier LSB-anchored-blue-box-OR-GMM default once `cfg.fit_lsb` became
+False (2026-07-02): with no LSB there is no diffuse colour to anchor a blue
+box on, and the box's literal fallback constants (`gr/rz_cut_fallback`) proved
+too strict, starving several test objects down to 0 members. The 'or' and
+'bluebox' rules still exist (see ScarletConfig.grouping_rule) for when an LSB
+IS fit: the blue-box cuts are then anchored on its colour (the dwarf's diffuse
+colour); the `lsb != np.nan` bug of the prototype is fixed here with
+`np.isnan`. With no LSB (`lsb_index=None`), the box cuts fall back to
+`cfg.gr_cut_fallback`/`rz_cut_fallback` regardless of rule.
 
 Inputs are model-frame per-component fluxes (scarlet.measure.flux), passed in so
 this module needs no scarlet import. It does import the pre-trained per-z-bin
@@ -74,14 +80,28 @@ def _colors_from_flux(comp_flux):
     return gr, rz
 
 
-def _load_gmm_for_z(z):
-    """Per-z-bin GMM (sklearn GaussianMixture) via aperture_photo._load_gmm.
-    Bin grid matches the prototype: np.arange(0.001, 0.525, 0.025)."""
-    from aperture_photo import _load_gmm
+_local_gmm_cache = {}
+
+
+def _load_gmm_for_z(z, gmm_model_dir=None):
+    """Per-z-bin GMM (sklearn GaussianMixture). Bin grid matches the prototype:
+    np.arange(0.001, 0.525, 0.025). By default loads via
+    aperture_photo._load_gmm (that module's hardcoded NERSC-only pscratch
+    path, left untouched). Pass `gmm_model_dir` (cfg.gmm_model_dir) to load
+    directly from a local copy instead -- e.g. for local dev with the pickles
+    copied down from NERSC."""
     zgrid = np.arange(0.001, 0.525, 0.025)
     idx = np.where(z > zgrid)[0]
     file_index = int(idx[-1]) if idx.size else 0
     file_index = min(max(file_index, 0), len(zgrid) - 1)
+    if gmm_model_dir:
+        if file_index not in _local_gmm_cache:
+            import os
+            import joblib
+            path = os.path.join(gmm_model_dir, "gmm_model_idx_{}.pkl".format(file_index))
+            _local_gmm_cache[file_index] = joblib.load(path)
+        return _local_gmm_cache[file_index]
+    from aperture_photo import _load_gmm
     return _load_gmm(file_index)
 
 
@@ -123,9 +143,10 @@ def group_components(fit_result, comp_flux, redshift, cfg=None):
     N = len(meta)
     gr, rz = _colors_from_flux(comp_flux)
 
-    # --- blue-box cuts anchored on the LSB colour ---
+    # --- blue-box cuts anchored on the LSB colour (if one was fit) ---------
     lsb_i = fit_result.lsb_index
-    lsb_gr, lsb_rz = gr[lsb_i], rz[lsb_i]
+    lsb_gr = gr[lsb_i] if lsb_i is not None else np.nan
+    lsb_rz = rz[lsb_i] if lsb_i is not None else np.nan
     if np.isfinite(lsb_gr) and np.isfinite(lsb_rz):
         gr_cut = max(lsb_gr, cfg.color_floor) + cfg.col_lenient
         rz_cut = max(lsb_rz, cfg.color_floor) + cfg.col_lenient
@@ -138,7 +159,7 @@ def group_components(fit_result, comp_flux, redshift, cfg=None):
     contour_value = np.inf
     if cfg.grouping_rule in ("or", "gmm"):
         try:
-            gmm = _load_gmm_for_z(redshift)
+            gmm = _load_gmm_for_z(redshift, cfg.gmm_model_dir)
             thresholds = _gmm_contour_thresholds(gmm, cfg.gmm_conf_levels)
             contour_value = thresholds.get(cfg.gmm_contour, np.inf)
             finite = np.isfinite(gr) & np.isfinite(rz)

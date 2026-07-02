@@ -99,15 +99,33 @@ def wavelet_peaks(detect_img, cfg):
 # ----------------------------------------------------------------------
 
 def _as_str(arr):
-    return np.array([str(x).strip() for x in np.asarray(arr)])
+    """Decode a FITS string column to clean str. np.asarray on an astropy
+    Column bypasses its on-access bytes->str decoding and yields raw 'S'-dtype
+    bytes, so str(x) would give "b'G2'" and every comparison silently fails
+    (this un-seeded ALL Gaia stars); decode bytes explicitly."""
+    out = []
+    for x in np.asarray(arr):
+        if isinstance(x, bytes):
+            x = x.decode("utf-8", "replace")
+        out.append(str(x).strip())
+    return np.array(out)
 
 
 def select_gaia_stars(source_cat, pm_sigma=2.0):
     """Boolean mask over `source_cat`: a Gaia source (ref_cat=='G2') that is
-    either Tractor-typed PSF or has proper motion significant at >pm_sigma.
+    Tractor-typed PSF AND has proper motion significant at >pm_sigma in either
+    coordinate.
 
-    Shared definition with the aperture pipeline (which uses 2 sigma; the scarlet
-    prototype used 3 -- we unify on 2)."""
+    This matches aperture_photo.py's `is_star` (G2 & PSF & signi_pm): PM
+    significance is REQUIRED, not an alternative -- faint Gaia entries with no
+    detected PM can be compact galaxies (and bright nearby HII regions can carry
+    spurious PM), so kinematic confirmation gates the star treatment. (An
+    earlier OR-form here wrongly admitted every faint G2 PSF; changed 2026-07-02.)
+
+    NOT ported from aperture_photo: the G2+DUP association path
+    (`select_dup_stars_g2` -- DUP placeholders confirmed by nearby non-G2 PSF
+    rows). None of the local test catalogs contain DUP rows; revisit for the
+    NERSC run if DUP stars matter for seeding."""
     n = len(source_cat)
     if n == 0:
         return np.zeros(0, dtype=bool)
@@ -124,7 +142,7 @@ def select_gaia_stars(source_cat, pm_sigma=2.0):
     )
     is_gaia = ref_cat == "G2"
     is_psf = typ == "PSF"
-    return is_gaia & (is_psf | signi_pm)
+    return is_gaia & is_psf & signi_pm
 
 
 def _gaia_max_mag(source_cat):
