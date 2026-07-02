@@ -495,15 +495,25 @@ def fetch_coadd_psf_url(ra, dec, bands=DEFAULT_BANDS, layer=DEFAULT_LAYER,
     (and BANDS/BAND%i in the primary header); we key off those rather than HDU
     order, since a partially-covered position drops bands and would otherwise
     misalign with a positional [0]=g,[1]=r,[2]=z assumption.
+
+    Uses `requests` (not `urllib`) deliberately: requests verifies TLS against
+    its own bundled `certifi` CA store rather than the OS/container's system
+    trust store, which sidesteps containers (e.g. dstndstn/cutouts on NERSC
+    shifter) whose system CA bundle is stale/missing --
+    urllib.request.urlopen hit CERTIFICATE_VERIFY_FAILED there while this
+    exact requests.Session().get(url) pattern (from the scarlet_photo.py
+    prototype's fetch_psf) is confirmed working in the same environment.
     """
-    import urllib.request
+    import requests
     from astropy.io import fits
 
     url = ("{base}/coadd-psf/?ra={ra}&dec={dec}&layer={layer}&bands={bands}").format(
         base=url_base, ra=ra, dec=dec, layer=layer, bands="".join(bands))
 
-    with urllib.request.urlopen(url, timeout=timeout) as resp:
-        payload = resp.read()
+    with requests.Session() as session:
+        resp = session.get(url, timeout=timeout)
+        resp.raise_for_status()
+        payload = resp.content
 
     out = {}
     with fits.open(io.BytesIO(payload), memmap=False) as hdul:
