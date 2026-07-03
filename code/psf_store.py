@@ -337,8 +337,13 @@ def merge_manifest_deltas(psfs_dir):
     n_new = 0
     for dpath in delta_files:
         with open(dpath, newline="") as f:
-            for row in csv.DictReader(f):
-                row = _normalize_manifest_row(row)
+            for raw in csv.DictReader(f):
+                try:
+                    row = _normalize_manifest_row(raw)
+                except (KeyError, ValueError):
+                    # Tolerate a truncated final line from a run killed mid-append;
+                    # the shard is ground truth, so that object simply rebuilds.
+                    continue
                 key = (row["brickname"], row["targetid"])
                 if key not in merged or _manifest_row_better(row, merged[key]):
                     if key not in merged:

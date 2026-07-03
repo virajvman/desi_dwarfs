@@ -434,6 +434,14 @@ def do_psfs(args, comm=None, outdir_data='.'):
         if args.rebuild_manifest:
             print('Rebuilding PSF manifest from shards ...', flush=True)
             psf_store.build_manifest(outdir_data, nproc=args.manifest_nproc)
+        else:
+            # Fold in any manifest deltas a previously-killed run left behind
+            # (e.g. one that hit its wall-clock limit before the end-of-job
+            # merge_manifest_deltas ran). Without this, the stale/empty
+            # psf_manifest.csv masks shards already on disk and everything
+            # rebuilds. Shards remain ground truth -- --rebuild-manifest rescans
+            # them directly if the deltas were also lost.
+            merge_manifest_deltas(outdir_data)
         brick_names, brick_rows, ra, dec, tgid, brick_weights = plan(args, outdir_data)
         groups = weighted_partition(brick_weights, size)
         print('Planning took {:.2f} sec'.format(time.time() - t0), flush=True)
