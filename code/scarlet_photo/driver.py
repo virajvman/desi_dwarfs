@@ -41,6 +41,9 @@ def _result_to_row(res):
     out = {
         "TARGETID": int(res.targetid),
         "SCARLET_STATUS": str(res.status),
+        # Truncated failure reason -- without this a batch of 'input_failed'
+        # rows is undebuggable from the output FITS alone.
+        "SCARLET_ERROR": str(res.error_msg or "")[:160],
         "N_COMPONENTS": int(res.n_components),
         "N_EXTENDED": int(res.n_extended),
         "N_STARS": int(res.n_stars),
@@ -66,6 +69,23 @@ def _worker(task):
         from scarlet_photo.pipeline import ScarletResult
         res = ScarletResult(targetid=tgid, status="error", error_msg=repr(exc))
     return _result_to_row(res)
+
+
+def _harvest_worker(task):
+    row, cfg = task
+    tgid = int(row["TARGETID"])
+    try:
+        res = _pipeline.harvest_result(row, cfg)
+    except Exception as exc:                                # noqa: BLE001
+        from scarlet_photo.pipeline import ScarletResult
+        res = ScarletResult(targetid=tgid, status="error", error_msg=repr(exc))
+    return _result_to_row(res)
+
+
+def _write_mags(results, out_path):
+    from astropy.table import Table
+    out_tbl = Table(rows=results) if results else Table()
+    out_tbl.write(out_path, overwrite=True)
 
 
 def _rows_as_dicts(catalog):
@@ -119,6 +139,12 @@ def main(argv=None):
                    help="leave star sub-pixel shifts free, init at Gaia (default: on)")
     p.add_argument("--no-star-shift-free", dest="star_shift_free", action="store_false",
                    help="hard-freeze star positions at the Gaia coordinates")
+    p.add_argument("--harvest-mags", action="store_true",
+                   help="do NOT fit anything: rebuild the mags FITS from the "
+                        "EXISTING fragments of every catalog row that has one "
+                        "(use after a walltime kill lost the end-of-run mags "
+                        "write; mags are identical to what the fit would have "
+                        "written)")
     args = p.parse_args(argv)
 
     cfg = ScarletConfig(save_plots=args.save_plots)
@@ -155,15 +181,27 @@ def main(argv=None):
 
     rows = _rows_as_dicts(cat)
 
-    # incremental skip on fragment existence (unless overwrite)
-    if not args.overwrite:
-        rows = [r for r in rows if not _pipeline.fragment_exists(r, cfg)]
-    if not rows:
-        print("Nothing to do (all fragments present; use --overwrite to re-fit).")
-        return
+    if args.harvest_mags:
+        # inverted filter: only rows that HAVE a fragment can be harvested
+        rows = [r for r in rows if _pipeline.fragment_exists(r, cfg)]
+        if not rows:
+            print("Nothing to harvest (no fragments found for this catalog).")
+            return
+        print("Harvesting mags from {} existing fragments with {} cores ..."
+              .format(len(rows), args.ncores))
+        worker = _harvest_worker
+    else:
+        # incremental skip on fragment existence (unless overwrite)
+        if not args.overwrite:
+            rows = [r for r in rows if not _pipeline.fragment_exists(r, cfg)]
+        if not rows:
+            print("Nothing to do (all fragments present; use --overwrite to re-fit).")
+            return
+        print("Fitting {} objects with {} cores ...".format(len(rows), args.ncores))
+        worker = _worker
 
-    print("Fitting {} objects with {} cores ...".format(len(rows), args.ncores))
     tasks = [(r, cfg) for r in rows]
+    out_path = args.output or args.input_catalog.replace(".fits", "_scarlet_mags.fits")
 
     results = []
     try:
@@ -172,22 +210,30 @@ def main(argv=None):
     except Exception:                                       # noqa: BLE001
         progress = lambda it: it
 
+    # Checkpoint the mags FITS periodically so a walltime kill loses at most
+    # CHECKPOINT_EVERY objects' rows (the fragments themselves are written
+    # per-object inside the workers and were never at risk). A checkpointed
+    # partial FITS is completed later by re-running with --harvest-mags.
+    CHECKPOINT_EVERY = 256
+
     if args.ncores > 1 and len(tasks) > 1:
         with mp.Pool(args.ncores) as pool:
-            for row_out in progress(pool.imap_unordered(_worker, tasks, chunksize=8)):
+            for row_out in progress(pool.imap_unordered(worker, tasks, chunksize=8)):
                 results.append(row_out)
+                if len(results) % CHECKPOINT_EVERY == 0:
+                    _write_mags(results, out_path)
     else:
         for task in progress(tasks):
-            results.append(_worker(task))
+            results.append(worker(task))
+            if len(results) % CHECKPOINT_EVERY == 0:
+                _write_mags(results, out_path)
 
     # status summary
     from collections import Counter
     counts = Counter(r["SCARLET_STATUS"] for r in results)
     print("Status:", dict(counts))
 
-    out_path = args.output or args.input_catalog.replace(".fits", "_scarlet_mags.fits")
-    out_tbl = Table(rows=results) if results else Table()
-    out_tbl.write(out_path, overwrite=True)
+    _write_mags(results, out_path)
     print("Wrote SCARLET mags for {} objects -> {}".format(len(results), out_path))
 
 

@@ -61,6 +61,59 @@ def fragment_exists(row, cfg=None):
     return os.path.exists(fragment_path_for(row, cfg))
 
 
+def harvest_result(row, cfg=None):
+    """Rebuild a ScarletResult (benchmark mags + counts) from an EXISTING
+    fragment, without refitting. Runs the same measure_photometry the live fit
+    ran, on the same stored quantities (per-component model-frame fluxes,
+    initial membership, rendered science_cube), so the mags are identical to
+    what the driver would have written at fit time.
+
+    Exists because the driver only writes the mags FITS at the END of a run: a
+    walltime kill loses every completed object's mags row even though their
+    fragments are safely on disk (atomic writes). `driver.py --harvest-mags`
+    uses this to regenerate the full mags catalog from fragments alone.
+    Never raises -- failures reported via ScarletResult.status."""
+    import h5py
+
+    if cfg is None:
+        cfg = ScarletConfig()
+    targetid = int(row["TARGETID"])
+
+    path = fragment_path_for(row, cfg)
+    if not os.path.exists(path):
+        return ScarletResult(targetid=targetid, status="no_fragment",
+                             error_msg="fragment missing: {}".format(path))
+    try:
+        inp = _inputs.load_object(row, cfg)
+        with h5py.File(path, "r") as f:
+            comps = f["components"]
+            keys = list(comps.keys())
+            comp_flux = np.array(
+                [[comps[k].attrs["flux_g"], comps[k].attrs["flux_r"],
+                  comps[k].attrs["flux_z"]] for k in keys], dtype=np.float64)
+            membership = np.array(
+                [bool(comps[k].attrs["initial_membership"]) for k in keys])
+            dwarf_obs = np.asarray(f["science_cube"][:], dtype=np.float64)
+            res = ScarletResult(targetid=targetid, status="ok")
+            res.n_components = int(f.attrs["n_components"])
+            res.n_members = int(f.attrs["n_members"])
+            res.n_extended = int(f.attrs.get("n_extended", 0))
+            res.n_stars = int(f.attrs.get("n_stars", 0))
+            res.invariant_max_frac = float(
+                f.attrs.get("invariant_max_frac", float("nan")))
+        phot = _photometry.measure_photometry(inp, comp_flux, membership,
+                                              dwarf_obs, cfg)
+        res.total_mag = phot.total_mag
+        res.total_mag_err = phot.total_mag_err
+        res.r4_mag = phot.r4_mag
+        res.r4_mag_err = phot.r4_mag_err
+        res.mw_transmission = phot.mw_transmission
+        return res
+    except Exception as exc:                                # noqa: BLE001
+        return ScarletResult(targetid=targetid, status="error",
+                             error_msg=repr(exc))
+
+
 def run_scarlet_object(row, cfg=None):
     """Run the full stage-1 fit for one catalogue row. Never raises -- failures
     are reported via ScarletResult.status."""

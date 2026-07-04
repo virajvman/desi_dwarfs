@@ -136,8 +136,16 @@ shifter --image=dstndstn/cutouts:dvsro3 python3 -m scarlet_photo.consolidate --i
   `aperture_photo`'s hardcoded NERSC pscratch path. Not needed on NERSC unless
   that path has been purged (pscratch is not permanent storage).
 
+- `--harvest-mags` — fit NOTHING; rebuild the mags FITS from every catalog row
+  that already has a fragment (same `measure_photometry` on the stored
+  fluxes/membership/science_cube, so values are identical to the live fit's —
+  verified to 1e-9). Use after a walltime kill: fragments are written
+  per-object (atomically) and survive, but the mags FITS is only checkpointed
+  every 256 completions, and a resumed run's FITS contains only its own rows.
+
 Incremental skip: re-running resumes (objects with a fragment are skipped); use
-`--overwrite` to redo them.
+`--overwrite` to redo them. On a walltime kill, resubmit as-is to finish the
+remaining objects, then run `--harvest-mags` once for the complete mags FITS.
 
 **`consolidate.py` (Stage 2):**
 

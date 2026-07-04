@@ -33,7 +33,8 @@ fresh ``SPEC_DERIVED`` HDU containing:
 
 The direct-method nebular fits (``TE_*``) are run only on rows passing
 ``line_snr_mask([HALPHA, HBETA, HGAMMA, OIII_4363, OIII_5007, OII_3726,
-OII_3729], snr_val=5, min_lines=7)`` with per-line flux > 1 in FastSpec
+OII_3729], snr_val=TE_SNR_VAL, min_lines=7)`` (TE_SNR_VAL = 3 in the DR1
+production run; 14,530 rows) with per-line flux > 1 in FastSpec
 units (1e-17 erg/cm2/s) -- all other rows have NaN / False / 0 fills so
 the row order matches MAIN exactly.
 

@@ -25,7 +25,9 @@ count only; once it passes, however many spectra matched are stacked, down to 1,
 via ``min_n_valid=1``). Sample selection is ``select_sample``, expressed via the
 IS_* target-membership flags (the SAMPLE column has been dropped from the catalog):
   - ELG    : IS_ELG & DWARF_PRIMARY & MAG_TYPE=="TRACTOR_OG" & 0.09 < z < 0.13
-             (== the notebook's main_elg_f)
+             (== the notebook's main_elg_f); in --norm continuum mode the ELG
+             sample additionally requires MSTAR_MASKBIT==0 (reliable stellar
+             masses), so mass-binned trends are not driven by bad masses
   - NO_ELG : (IS_BGS_BRIGHT | IS_BGS_FAINT | IS_LOWZ) & DWARF_PRIMARY, full z
 Both samples share a continuum-S/N gate (MAG_R_FIBER_NOEMI_ERR < 0.1); the Halpha-
 detection gate in the default load_catalog is bypassed here via
@@ -682,11 +684,16 @@ def main(resume=False, norm_mode="halpha"):
             print(f"\n  --- {sample_name} ---")
 
             z_lo, z_hi = sample_z_window(sample_name)
+            # Continuum-normalized product only: require MSTAR_MASKBIT==0 for the
+            # ELG sample (the flag is a no-op for NO_ELG inside select_sample), so
+            # the ELG mass bins are not contaminated by unreliable stellar masses.
+            # The Halpha-normalized product is left unchanged.
             sub_cat = select_sample(
                 tot_cat, sample_name,
                 z_min=z_lo, z_max=z_hi,
                 logmstar_min=mstar_min, logmstar_max=mstar_max,
                 rband_noemi_err_max=RBAND_NOEMI_ERR_MAX,
+                require_mstar_maskbit=(NORM_MODE == "continuum"),
             )
             print(f"      N galaxies in bin: {len(sub_cat)} "
                   f"(z in [{z_lo:.2f}, {z_hi:.2f}])")

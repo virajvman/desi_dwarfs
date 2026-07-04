@@ -64,7 +64,7 @@ export HDF5_USE_FILE_LOCKING=FALSE
 # ------------------------------
 # Configurable flags
 # ------------------------------
-CATALOG_PATH="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_photometry/iron_BGS_BRIGHT_shreds_catalog_w_aper_mags.fits"
+CATALOG_PATH="/pscratch/sd/v/virajvm/trash/vi_cat.fits"
 NCORES=128
 FIXED_BOX_SIZE=350          # locked config (see DESIGN.md) -- catalog's native
                              # IMAGE_SIZE_PIX varies and is always >= this
@@ -76,30 +76,29 @@ RUN_CONSOLIDATE=true        # chain stage 2 right after stage 1 (cheap,
                              # to review stage-1 output before packing it)
 
 # ============================================================
-# ROUGH WALLTIME GUIDANCE (from local testing, 2026-07-02, under the FINAL
-# locked config -- fit_lsb=False, detect_scale=1, wavelet_K=5, GMM grouping,
-# fixed_box_size=350): 6 hand-picked local test objects fit in ~155s
-# wall-clock run 6-way parallel (~1 core each) -- i.e. per-object fit time is
-# roughly 150-200s on that small sample. This has NOT been validated at
-# NERSC-node core speed or against the real production sample's actual
-# crowding/component-count distribution (denser fields will be slower) --
-# treat it as a first-order estimate, not a guarantee.
+# WALLTIME GUIDANCE -- now from a REAL production run (2026-07-04, 128 cores,
+# fixed_box_size=350): 4126/4613 objects completed in 2h00m of walltime
+# before hitting the limit -> effective throughput ~1.75 s/object early on,
+# but the imap_unordered TAIL is much slower (the hardest/most-crowded fields
+# cluster at the end; the visible tqdm rate collapsed to ~106 s/it there).
+# Also note per-worker fits run several times slower at 128-way than solo
+# (memory-bandwidth contention -- scarlet is convolution/FFT heavy), so don't
+# extrapolate from single-core login-node tests.
 #
-#   wall_time ≈ ceil(N_objects / NCORES) * ~150-200s
-#
-#   Example: N_objects=6000, NCORES=128 -> ceil(6000/128)=47 batches
-#            * ~150-200s ≈ 7050-9400s ≈ ~2.0-2.6 hours
-#
-# RECOMMENDATION: run a validation batch first (set LIMIT="--limit 300"
-# above, short --time, e.g. 00:30:00) to get a REAL per-object timing
-# distribution on this catalog before committing walltime for the full run.
-# --time=06:00:00 above is a generous first-attempt guess (~2-3x the point
-# estimate for 6000 objects) -- tighten or loosen after the validation batch.
+#   Rule of thumb: ~4500 objects ≈ 2.5-3.5h; budget generously for the tail.
 #
 # Re-submittable: driver.py skips objects whose fragment already exists
 # unless --overwrite is passed, so if this job times out partway through, a
 # clean re-submission just resumes from where it left off (no --overwrite
 # needed, and adding it would force a wasteful full re-fit).
+#
+# MAGS AFTER A TIMEOUT: the driver checkpoints the mags FITS every 256
+# completions, so a kill loses at most the last ~256 rows -- and a resumed
+# run's FITS only contains ITS OWN rows either way. That's why the HARVEST
+# step below always reruns after the fit: it rebuilds the complete mags
+# catalog from ALL on-disk fragments (no refitting, ~seconds/object,
+# identical values -- validated to 1e-9), so the final FITS is whole no
+# matter how many interrupted runs it took to get all fragments in.
 # ============================================================
 
 echo "Starting at $(date)"
@@ -112,6 +111,18 @@ srun --cpu-bind=cores python -m scarlet_photo.driver \
     --fixed-box-size "$FIXED_BOX_SIZE" \
     --ncores "$NCORES" \
     $LIMIT
+
+# Rebuild the COMPLETE mags FITS from all on-disk fragments (covers rows fit
+# by earlier interrupted runs, which this run's own FITS would omit). Cheap,
+# idempotent, no scarlet needed. Skipped in --limit test mode: a full harvest
+# would misleadingly overwrite the small test FITS with every past fragment.
+if [ -z "$LIMIT" ]; then
+    echo "Stage 1 done at $(date); harvesting complete mags catalog from fragments"
+    srun --cpu-bind=cores python -m scarlet_photo.driver \
+        --input-catalog "$CATALOG_PATH" \
+        --fixed-box-size "$FIXED_BOX_SIZE" \
+        --harvest-mags --ncores "$NCORES"
+fi
 
 if [ "$RUN_CONSOLIDATE" = true ]; then
     echo "Stage 1 done at $(date); starting consolidate"

@@ -189,8 +189,9 @@ def load_spectra(h5_file="/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra
     return data
 
 
-def select_sample(catalog, sample_name, z_min=0.05, z_max=0.1, 
-                  logmstar_min=6, logmstar_max=9.25, rband_noemi_err_max=0.1):
+def select_sample(catalog, sample_name, z_min=0.05, z_max=0.1,
+                  logmstar_min=6, logmstar_max=9.25, rband_noemi_err_max=0.1,
+                  require_mstar_maskbit=False):
     """Select galaxies for the continuum-normalized ELG / non-ELG stacks.
 
     Selection is expressed entirely via the IS_* target-membership flags (the
@@ -200,10 +201,15 @@ def select_sample(catalog, sample_name, z_min=0.05, z_max=0.1,
     mass windows applied below. Per-sample additions:
 
       "ELG"    -- IS_ELG & MAG_TYPE=="TRACTOR_OG"  (== the notebook's main_elg_f;
-                  caller passes the narrow slice, e.g. 0.09 < z < 0.13)
+                  caller passes the narrow slice, e.g. 0.09 < z < 0.13). When
+                  require_mstar_maskbit=True, additionally MSTAR_MASKBIT==0 so
+                  bins are not contaminated by unreliable stellar masses (the
+                  continuum-normalized product sets this; see
+                  stack_mstar_elg_vs_noelg.py).
       "NO_ELG" -- IS_BGS_BRIGHT | IS_BGS_FAINT | IS_LOWZ  (BGS+LOWZ; no TRACTOR_OG
                   cut; caller passes the full z range). IS_ELG is NOT excluded, so
                   an ELG-targeted BGS/LOWZ object may appear in both samples.
+                  require_mstar_maskbit does not apply here.
     """
     base = (
         (catalog["DWARF_MASKBIT"] == 0)
@@ -217,6 +223,8 @@ def select_sample(catalog, sample_name, z_min=0.05, z_max=0.1,
             & (catalog["IS_ELG"] == True)
             & (catalog["MAG_TYPE"] == "TRACTOR_OG")
         )
+        if require_mstar_maskbit:
+            samp_mask = samp_mask & (catalog["MSTAR_MASKBIT"] == 0)
     elif sample_name == "NO_ELG":
         samp_mask = base & (
             (catalog["IS_BGS_BRIGHT"] == True)
