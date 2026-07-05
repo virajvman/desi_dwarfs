@@ -52,8 +52,13 @@ for _p in (_CODE_DIR, os.path.join(_CODE_DIR, "nebular_stuff")):
 
 from plot_style import (
     apply_paper_style, make_subplots,
-    MARGIN_LABEL, MARGIN_PAD, MARGIN_SPLIT,
+    MARGIN_LABEL, MARGIN_PAD, MARGIN_SPLIT, MARGIN_SHARED
 )
+
+#todo: import the make_alternating_line function here and update tehe cmap to be consistent with others
+#once plot_style as this make_alternating_function, we might need to update the import statement elsewhere.
+
+
 from cardelli_attenuation import k_ccm89, model_hahb, BALMER_INTRINSIC
 
 
@@ -110,6 +115,7 @@ def plot_direct_vs_strongline(main, der, outpath):
         & np.isfinite(np.asarray(der["TE_12_LOG_OH"]))
         & np.isfinite(np.asarray(der["Z_GAS_R23_N2"]))
     )
+    
     strong = np.asarray(der["Z_GAS_R23_N2"])[ok]
     direct = np.asarray(der["TE_12_LOG_OH"])[ok]
     resid = direct - strong
@@ -118,39 +124,40 @@ def plot_direct_vs_strongline(main, der, outpath):
     print(f"  direct-vs-strongline: N={ok.sum()}, "
           f"median offset={med_off:+.3f} dex, NMAD={sig:.3f} dex")
 
-    fig, (axl, axr) = two_panel_axes()
+    fig, ax = make_subplots(
+        ncol=1, nrow=2, plot_size=2.25, return_fig=True,
+        row_spacing=[MARGIN_LABEL - 0.4, MARGIN_SHARED, MARGIN_PAD],
+        col_spacing=[MARGIN_LABEL - 0.2, MARGIN_PAD],
+    )
 
-    lim = (7.0, 9.0)
-    axl.hist2d(strong, direct, bins=[60, 60],
+    lim = (7.0, 8.75)
+    ax[1].hist2d(direct, strong, bins=[60, 60],
                range=[lim, lim], norm=LogNorm(), cmap="magma", rasterized=True)
-    axl.plot(lim, lim, ls="--", color="k", lw=1.0, zorder=4)
-    axl.set_xlim(lim); axl.set_ylim(lim)
-    axl.set_xlabel(r"$12 + \log_{10}(\mathrm{O/H})$  [$R_{23}$+$N2$]")
-    axl.set_ylabel(r"$12 + \log_{10}(\mathrm{O/H})$  [direct $T_e$]")
 
-    rlim = (-1.0, 1.0)
-    axr.hist2d(strong, resid, bins=[60, 60],
-               range=[lim, rlim], norm=LogNorm(), cmap="magma", rasterized=True)
-    axr.axhline(0.0, ls="--", color="k", lw=1.0, zorder=4)
-    add_median_points(axr, strong, resid, np.arange(lim[0], lim[1] + 0.01, 0.2))
-    axr.set_xlim(lim); axr.set_ylim(rlim)
-    axr.set_xlabel(r"$12 + \log_{10}(\mathrm{O/H})$  [$R_{23}$+$N2$]")
-    axr.set_ylabel(r"$\Delta\,[12 + \log_{10}(\mathrm{O/H})]$")
-    axr.text(0.04, 0.05,
-             "direct $-$ strong line\n"
-             f"median = ${med_off:+.2f}$\nNMAD = ${sig:.2f}$",
-             transform=axr.transAxes, ha="left", va="bottom", fontsize=9)
+    ax[1].set_ylabel(r"$12 + \log_{10}(\mathrm{O/H})$  [$R_{23}$+$N2$]")
+    ax[1].set_xticklabels([])
+
+    ax[0].set_ylabel(r"$12 + \log_{10}(\mathrm{O/H})$  [direct $T_e$, lit.]")
+    ax[0].set_xlabel(r"$12 + \log_{10}(\mathrm{O/H})$  [direct $T_e$]")
+
+    for axi in ax:
+        axi.set_yticks([7,7.5,8,8.5,9])
+        axi.set_xticks([7,7.5,8,8.5,9])
+        axi.set_xlim(lim); axi.set_ylim(lim)
+        axi.plot(lim, lim, ls="--", color="k", lw=1.0, zorder=4)
 
     fig.savefig(outpath)
     plt.close(fig)
     print(f"  saved {outpath}")
 
-
 def plot_av_direct_vs_param(main, der, outpath):
     ok = (
         (np.asarray(main["DWARF_MASKBIT"]) == 0)
         & np.isfinite(np.asarray(der["TE_AV"]))
+        & (np.asarray(der["TE_AV_ERR"]) < 0.2)
+        & (der["TE_FIT_SUCCESS"] == True )
         & np.isfinite(np.asarray(main["LOG_MSTAR_M24"]))
+        & (np.asarray(der["TE_CHI2_AV_ML"] < 5))
     )
     logm = np.asarray(main["LOG_MSTAR_M24"])[ok]
     av = np.asarray(der["TE_AV"])[ok]
@@ -159,36 +166,36 @@ def plot_av_direct_vs_param(main, der, outpath):
     resid = av - av_model
     med_err = np.nanmedian(av_err)
 
+    #print the median te_chi2_av
+    print("Median AV CHI2 = ", np.median( np.asarray(der["TE_CHI2_AV_ML"])[ok] )  )
+    print("16per AV CHI2 = ", np.percentile( np.asarray(der["TE_CHI2_AV_ML"])[ok], 16 )  )
+    print("84per AV CHI2 = ", np.percentile( np.asarray(der["TE_CHI2_AV_ML"])[ok], 84 )  )
+
     print(f"  av-direct-vs-param: N={ok.sum()}, median TE_AV_ERR={med_err:.3f}, "
           f"median resid={np.median(resid):+.3f}, NMAD={nmad(resid):.3f}")
 
-    fig, (axl, axr) = two_panel_axes()
+    fig, ax = make_subplots(
+        ncol=1, nrow=1, plot_size=2.25, return_fig=True,
+        row_spacing=[MARGIN_LABEL - 0.4, MARGIN_PAD],
+        col_spacing=[MARGIN_LABEL - 0.2, MARGIN_PAD],
+    )
 
     mlim = (6.5, 9.25)
     alim = (0.0, 1.6)
-    axl.hist2d(logm, av, bins=[60, 60],
+    ax[0].hist2d(logm, av, bins=[60, 60],
                range=[mlim, alim], norm=LogNorm(), cmap="magma", rasterized=True)
     mgrid = np.linspace(*mlim, 200)
-    axl.plot(mgrid, av_from_bd(model_hahb(mgrid)), color="deepskyblue", lw=2.0,
+    ax[0].plot(mgrid, av_from_bd(model_hahb(mgrid)), color="deepskyblue", lw=2.0,
              zorder=4, label=r"mass-based model")
     # median per-object A_V uncertainty, shown as a single vertical bar
-    axl.errorbar([mlim[0] + 0.25], [alim[1] - 0.35], yerr=[med_err],
+    ax[0].errorbar([mlim[0] + 0.25], [alim[1] - 0.35], yerr=[med_err],
                  fmt="none", ecolor="k", elinewidth=1.2, capsize=2.5, zorder=5)
-    axl.text(mlim[0] + 0.33, alim[1] - 0.35, "median\nerror",
+    ax[0].text(mlim[0] + 0.33, alim[1] - 0.35, "median\nerror",
              fontsize=8, ha="left", va="center")
-    axl.legend(loc="upper right", handlelength=1.2)
-    axl.set_xlim(mlim); axl.set_ylim(alim)
-    axl.set_xlabel(r"$\log_{10}\,M_\star/M_\odot$")
-    axl.set_ylabel(r"$A_V$  [direct fit]")
-
-    rlim = (-0.8, 0.8)
-    axr.hist2d(logm, resid, bins=[60, 60],
-               range=[mlim, rlim], norm=LogNorm(), cmap="magma", rasterized=True)
-    axr.axhline(0.0, ls="--", color="k", lw=1.0, zorder=4)
-    add_median_points(axr, logm, resid, np.arange(mlim[0], mlim[1] + 0.01, 0.25))
-    axr.set_xlim(mlim); axr.set_ylim(rlim)
-    axr.set_xlabel(r"$\log_{10}\,M_\star/M_\odot$")
-    axr.set_ylabel(r"$A_V$ (direct) $-$ $A_V$ (model)")
+    ax[0].legend(loc="upper right", handlelength=1.2)
+    ax[0].set_xlim(mlim); ax[0].set_ylim(alim)
+    ax[0].set_xlabel(r"$\log_{10}\,M_\star/M_\odot$")
+    ax[0].set_ylabel(r"$A_V$ (nebular)")
 
     fig.savefig(outpath)
     plt.close(fig)
@@ -211,6 +218,11 @@ def main():
     plot_direct_vs_strongline(
         main_tab, der_tab,
         os.path.join(args.outdir, "direct_vs_strongline_zgas.pdf"))
+
+    #TODO: cross match our catalog with other catalogs and see if we have are measuring consistent O/H
+    #we are seeing this systematic offset in this very low metallicity direct pop, but maybe that is expected ..?
+    #draw comparison samples from Sui et al. and other literature like CLASSY, SDSS etc. 
+
     plot_av_direct_vs_param(
         main_tab, der_tab,
         os.path.join(args.outdir, "av_direct_vs_param.pdf"))
