@@ -1,0 +1,206 @@
+J/A+A/448/955    Abundances  of emission galaxies in SDSS-DR3    (Izotov+, 2006)
+================================================================================
+The chemical composition of metal-poor emission-line galaxies in the
+Data Release 3 of the Sloan Digital Sky Survey.
+    Izotov Y.I., Stasinska G., Meynet G., Guseva N.G., Thuan T.X.
+   <Astron. Astrophys. 448, 955 (2006)>
+   =2006A&A...448..955I
+================================================================================
+ADC_Keywords: Galaxies, spectra ; H II regions ; Abundances
+Keywords: galaxies: ISM - galaxies: starburst - galaxies: abundances
+
+Abstract:
+    We have re-evaluated empirical expressions for the abundance
+    determination of N, O, Ne, S, Cl, Ar and Fe taking into account
+    the latest atomic data and constructing an appropriate grid of
+    photoionization models with state-of-the art model atmospheres.
+    Using these expressions we have derived heavy element abundances in
+    the ~310 emission-line galaxies from the Data Release 3 of the Sloan
+    Digital Sky Survey (SDSS, <III/241>) with an observed Hbeta flux
+    F(Hbeta)>10^-14^erg/s/cm^2^ and for which the [O III] 4363 emission
+    line was detected at least at a 2sigma level, allowing abundance
+    determination by direct methods. The oxygen abundance 12+logO/H of the
+    SDSS galaxies lies in the range from ~7.1 (Z_{sun}_/30) to ~8.5
+    (0.7Z_{sun}_). The SDSS sample is merged with a sample of 109 blue
+    compact dwarf (BCD) galaxies with high quality spectra, which contains
+    extremely low-metallicity objects. We use the merged sample to study
+    the abundance patterns of low-metallicity emission-line galaxies. We
+    find that extremely metal-poor galaxies (12+logO/H<7.6, i.e.
+    Z<Z_{sun}_/12) are rare in the SDSS sample. The alpha element to
+    oxygen abundance ratios do not show any significant trends with oxygen
+    abundance, in agreement with previous studies, except for a slight
+    increase of Ne/O with increasing metallicity, which we interpret as
+    due to a moderate depletion of O onto grains in the most metal-rich
+    galaxies. The Fe/O abundance ratio is smaller than the solar value, by
+    up to 1 dex at the high metallicity end. We also find that Fe/O
+    increases with decreasing Hbeta equivalent width EW(Hbeta). We
+    interpret this as a sign of strong depletion onto dust grains, and
+    gradual destruction of those grains on a time scale of a few Myr. All
+    the galaxies are found to have logN/O>-1.6, implying that they have a
+    different nature than the subsample of high-redshift damped Lyalpha
+    systems with log N/O of ~-2.3 and that their ages are larger than
+    100-300Myr. We confirm the apparent increase in N/O with decreasing
+    EW(Hbeta), already shown in previous studies, and explain it as the
+    signature of gradual nitrogen ejection by massive stars from the most
+    recent starburst.
+
+Description:
+    Table 1 contains emission line fluxes, the equivalent width and the
+    observed flux of the Hbeta emission line and the extinction
+    coefficient obtained from the spectra of the SDSS galaxies.
+    Table 2 contains the electron temperature Te(O III), the oxygen
+    abundance 12+logO/H, and the logarithms of the N/O, Ne/O, S/O, Cl/O,
+    Ar/O, Fe/O abundance ratios in the SDSS galaxies.
+
+File Summary:
+--------------------------------------------------------------------------------
+ FileName   Lrecl  Records   Explanations
+--------------------------------------------------------------------------------
+ReadMe         80        .   This file
+sdss.dat       54      309  *SDSS-DR3 names and positions
+table1.dat    332      309   Extinction-corrected fluxes of the emission
+                              lines in the spectra of the SDSS galaxies
+table2.dat    104      309   Element abundances in the SDSS galaxies
+--------------------------------------------------------------------------------
+Note on sdss.dat: table added at CDS
+--------------------------------------------------------------------------------
+
+See also:
+     II/259 : The SDSS Photometric Catalog, Release 3 (Abazajian+ 2005)
+    III/241 : Spectroscopy of SDSS Data Release 3 (SDSS-DR3) (ARC, 2005)
+    http://www.sdss.org/dr3/ :  SDSS-R3 Home Page
+
+
+Byte-by-byte Description of file: sdss.dat
+--------------------------------------------------------------------------------
+   Bytes Format Units   Label     Explanations
+--------------------------------------------------------------------------------
+   1- 14  A14   ---     Name      The spectrum number in the SDSS database
+  16- 24  F9.5  deg     RAdeg     ? Right Ascension (J2000) from SDSS-DR3 (1)
+  26- 34  F9.5  deg     DEdeg     ? Declination (J2000) from SDSS-DR3 (1)
+  36- 54  A19   ---     SDSS      SDSS name from SDSS-DR3 (1)
+--------------------------------------------------------------------------------
+Note (1): One spectrum number, 0412-51931-038, could not be located in any
+     of the releases DR2, DR3 and DR4, and had therefore no position.
+     The SDSS name, based on J2000 position, exists only for the objects
+     existing in the SDSS-DR3 (Cat. II/259)
+--------------------------------------------------------------------------------
+
+Byte-by-byte Description of file: table1.dat
+--------------------------------------------------------------------------------
+   Bytes Format Units       Label    Explanations
+--------------------------------------------------------------------------------
+   1- 14  A14   ---         Name     The spectrum number in the SDSS database
+  16- 20  F5.3  ---         F3727    Extinction-corrected flux of the
+                                      [O II] 3727 line relative   to Hbeta
+  22- 26  F5.3  ---       e_F3727    rms uncertainty on [O II] 3727 flux
+  28- 32  F5.3  ---         F3750    Extinction-corrected flux of the
+                                      H12 3750 line relative to   Hbeta
+  34- 38  F5.3  ---       e_F3750    rms uncertainty on H12 3750 flux
+  40- 44  F5.3  ---         F3771    Extinction-corrected flux of the
+                                      H11 3771 line relative to   Hbeta
+  46- 50  F5.3  ---       e_F3771    rms uncertainty on H11 3771 flux
+  52- 56  F5.3  ---         F3797    Extinction-corrected flux of the
+                                      H10 3797 line relative to   Hbeta
+  58- 62  F5.3  ---       e_F3797    rms uncertainty on H10 3797 flux
+  64- 68  F5.3  ---         F3835    Extinction-corrected flux of the
+                                      H9 3835 line relative to H  beta
+  70- 74  F5.3  ---       e_F3835    rms uncertainty on H9 3835 flux
+  76- 80  F5.3  ---         F3868    Extinction-corrected flux of the
+                                      [Ne III] 3868 line relative to Hbeta
+  82- 86  F5.3  ---       e_F3868    rms uncertainty on [Ne III] 3868 flux
+  88- 92  F5.3  ---         F4101    Extinction-corrected flux of the
+                                      Hdelta 4101 line relative to Hbeta
+  94- 98  F5.3  ---       e_F4101    rms uncertainty on Hdelta 4101 flux
+ 100-104  F5.3  ---         F4340    Extinction-corrected flux of the
+                                      Hgamma 4340 line relative to Hbeta
+ 106-110  F5.3  ---       e_F4340    rms uncertainty on Hgamma 4340 flux
+ 112-116  F5.3  ---         F4363    Extinction-corrected flux of the
+                                      [O III] 4363 line relative to Hbeta
+ 118-122  F5.3  ---       e_F4363    rms uncertainty on [O III] 4363 flux
+ 124-128  F5.3  ---         F4658    Extinction-corrected flux of the
+                                      [Fe III] 4658 line relative to Hbeta
+ 130-134  F5.3  ---       e_F4658    rms uncertainty on [Fe III] 4658 flux
+ 136-140  F5.3  ---         F4686    Extinction-corrected flux of the
+                                      He II 4686 line relative to Hbeta
+ 142-146  F5.3  ---       e_F4686    rms uncertainty on He II 4686 flux
+ 148-152  F5.3  ---         F4740    Extinction-corrected flux of the
+                                      [Ar IV] 4740 line relative to Hbeta
+ 154-158  F5.3  ---       e_F4740    rms uncertainty on [Ar IV] 4740 flux
+ 160-164  F5.3  ---         F4861    [1.0] Extinction-corrected flux of the
+                                      Hbeta 4861 line relative to Hbeta
+ 166-170  F5.3  ---       e_F4861    rms uncertainty on Hbeta 4861 flux
+ 172-176  F5.3  ---         F4959    Extinction-corrected flux of the
+                                      [O III] 4959 line relative to Hbeta
+ 178-182  F5.3  ---       e_F4959    rms uncertainty on [O III] 4959 flux
+ 184-188  F5.3  ---         F4988    Extinction-corrected flux of the
+                                      [Fe III] 4988 line relative to Hbeta
+ 190-194  F5.3  ---       e_F4988    rms uncertainty on [Fe III] 4988 flux
+ 196-200  F5.3  ---         F5525    Extinction-corrected flux of the
+                                      [Cl III] 5517+5538 lines relative to Hbeta
+ 202-206  F5.3  ---       e_F5525    rms uncertainty on [Cl III] 5517+5538 flux
+ 208-212  F5.3  ---         F5876    Extinction-corrected flux of the
+                                      He I 5876 line relative to Hbeta
+ 214-218  F5.3  ---       e_F5876    rms uncertainty on He I 5876 flux
+ 220-224  F5.3  ---         F6300    Extinction-corrected flux of the
+                                      [O I] 6300 line relative to Hbeta
+ 226-230  F5.3  ---       e_F6300    rms uncertainty on [O I] 6300 flux
+ 232-236  F5.3  ---         F6312    Extinction-corrected flux of the
+                                      [S III] 6312 line relative to Hbeta
+ 238-242  F5.3  ---       e_F6312    rms uncertainty on [S III] 6312 flux
+ 244-248  F5.3  ---         F6563    Extinction-corrected flux of the
+                                      Halpha 6563 line relative to Hbeta
+ 250-254  F5.3  ---       e_F6563    rms uncertainty on Halpha 6563 flux
+ 256-260  F5.3  ---         F6584    Extinction-corrected flux of the
+                                      [N II] 6584 line relative to Hbeta
+ 262-266  F5.3  ---       e_F6584    rms uncertainty on [N II] 6584 flux
+ 268-272  F5.3  ---         F6725    Extinction-corrected flux of the
+                                      [S II] 6717+6731 lines relative to Hbeta
+ 274-278  F5.3  ---       e_F6725    rms uncertainty on [S II] 6717+6731 flux
+ 280-284  F5.3  ---         F7136    Extinction-corrected flux of the
+                                      [Ar III] 7136 line relative to Hbeta
+ 286-290  F5.3  ---       e_F7136    rms uncertainty on [Ar III] 7136 flux
+ 292-296  F5.3  ---         F7325    Extinction-corrected flux of the
+                                      [O II] 7320+7331 lines relative to Hbeta
+ 298-302  F5.3  ---       e_F7325    rms uncertainty on [O II] 7320+7331 flux
+ 304-308  F5.3  ---         F9069    Extinction-corrected flux of the
+                                      [S III] 9069 line relative to Hbeta
+ 310-314  F5.3  ---       e_F9069    rms uncertainty on [S III] 9069 flux
+ 316-319  F4.0  0.1nm       EWHb     Equivalent width of the Hbeta emission line
+ 321-325  F5.0 10-19W/s/m2  FHb      Observed Hbeta flux
+ 327-332  F6.3  ---         cHb      Extinction coefficient
+--------------------------------------------------------------------------------
+
+Byte-by-byte Description of file: table2.dat
+--------------------------------------------------------------------------------
+   Bytes Format Units   Label      Explanations
+--------------------------------------------------------------------------------
+   1- 14  A14   ---     Name       The spectrum number in the SDSS database
+  16- 21  F6.4  10-4K   Te         Electron temperature Te(O III)
+  23- 28  F6.4  10-4K e_Te         rms uncertainty on Te(O III)
+  30- 33  F4.2  ---     12+logO/H  Oxygen abundance 12+logO/H
+  35- 38  F4.2  ---   e_12+logO/H  rms uncertainty on oxygen abundance 12+logO/H
+  40- 44  F5.2  ---     logN/O     Logarithm of the nitrogen-to-oxygen
+                                    abundance ratio logN/O
+  46- 49  F4.2  ---   e_logN/O     rms uncertainty on logN/O
+  51- 55  F5.2  ---     logNe/O    Logarithm of the neon-to-oxygen
+                                    abundance ratio logNe/O
+  57- 60  F4.2  ---   e_logNe/O    rms uncertainty on logNe/O
+  62- 66  F5.2  ---     logS/O     Logarithm of the sulfur-to-oxygen
+                                    abundance ratio logS/O
+  68- 71  F4.2  ---   e_logS/O     rms uncertainty on logS/O
+  73- 77  F5.2  ---     logAr/O    Logarithm of the argon-to-oxygen
+                                    abundance ratio logAr/O
+  79- 82  F4.2  ---   e_logAr/O    rms uncertainty on logAr/O
+  84- 88  F5.2  ---     logCl/O    Logarithm of the chlorine-to-oxygen
+                                    abundance ratio logCl/O
+  90- 93  F4.2  ---   e_logCl/O    rms uncertainty on logCl/O
+  95- 99  F5.2  ---     logFe/O    Logarithm of the iron-to-oxygen
+                                    abundance ratio logFe/O
+ 101-104  F4.2  ---   e_logFe/O    rms uncertainty on logFe/O
+--------------------------------------------------------------------------------
+
+Acknowledgements: Yuri Izotov, izotov(at)astro.physik.uni-goettingen.de
+
+================================================================================
+(End)            Yuri Izotov [MAO, Ukraine], Patricia Vannier [CDS]  22-Nov-2005

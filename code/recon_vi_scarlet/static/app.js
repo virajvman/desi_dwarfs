@@ -8,7 +8,9 @@
 (function () {
   "use strict";
 
-  var FOV = 200;               // fiducial viewport size in array pixels
+  var FOV = 350;               // fiducial viewport size in array pixels
+                               // (350 = the locked production fit box, so the
+                               // whole cutout is visible on open; was 200)
   var MIN_HIT_PX = 8;          // min click tolerance (screen px)
   var VIEWER_TID_BASE = "https://www.legacysurvey.org/viewer/desi-spectrum/dr1/targetid";
   // Membership/provenance palette (same grammar as recon_vi): COLOR = state,

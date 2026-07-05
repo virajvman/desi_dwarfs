@@ -1,0 +1,298 @@
+J/ApJS/261/31   COS Legacy Archive Sp. Survey (CLASSY) treasury   (Berg+, 2022)
+================================================================================
+The COS Legacy Archive Spectroscopy Survey (CLASSY) Treasury atlas.
+    Berg D.A., James B.L., King T., McDonald M., Chen Z., Chisholm J.,
+    Heckman T., Martin C.L., Stark D.P., Aloisi A., Amorin R.O.,
+    Arellano-Cordova K.Z., Bayliss M., Bordoloi R., Brinchmann J., Charlot S.,
+    Chevallard J., Clark I., Erb D.K., Feltre A., Gronke M., Hayes M., Henry A.,
+    Hernandez S., Jaskot A., Jones T., Kewley L.J., Kumari N., Leitherer C.,
+    Llerena M., Maseda M., Mingozzi M., Nanayakkara T., Ouchi M., Plat A.,
+    Pogge R.W., Ravindranath S., Rigby J.R., Sanders R., Scarlata C.,
+    Senchyna P., Skillman E.D., Steidel C.C., Strom A.L., Sugahara Y.,
+    Wilkins S.M., Wofford A., Xu X., The CLASSY Team
+   <Astrophys. J. Suppl. Ser., 261, 31 (2022)>
+   =2022ApJS..261...31B
+================================================================================
+ADC_Keywords: Spectra, ultraviolet; Spectra, optical; Galaxies, nearby;
+              Redshifts; Abundances; Reddening
+Keywords: Galaxies ; Ultraviolet surveys ; Emission line galaxies ;
+          Interstellar line absorption ; Lyman-alpha galaxies ;
+          High-redshift galaxies
+
+Abstract:
+    Far-ultraviolet (FUV; ~1200-2000{AA}) spectra are fundamental to our
+    understanding of star-forming galaxies, providing a unique window on
+    massive stellar populations, chemical evolution, feedback processes,
+    and reionization. The launch of the James Webb Space Telescope will
+    soon usher in a new era, pushing the UV spectroscopic frontier to
+    higher redshifts than ever before; however, its success hinges on a
+    comprehensive understanding of the massive star populations and gas
+    conditions that power the observed UV spectral features. This requires
+    a level of detail that is only possible with a combination of ample
+    wavelength coverage, signal-to-noise, spectral-resolution, and sample
+    diversity that has not yet been achieved by any FUV spectral database.
+    We present the Cosmic Origins Spectrograph Legacy Spectroscopic Survey
+    (CLASSY) treasury and its first high-level science product, the CLASSY
+    atlas. CLASSY builds on the Hubble Space Telescope (HST) archive to
+    construct the first high-quality (S/N_1500{AA}_>~5/resel),
+    high-resolution (R~15000) FUV spectral database of 45 nearby
+    (0.002<z<0.182) star-forming galaxies. The CLASSY atlas, available to
+    the public via the CLASSY website, is the result of optimally
+    extracting and coadding 170 archival+new spectra from 312 orbits of
+    HST observations. The CLASSY sample covers a broad range of properties
+    including stellar mass (6.2<logM_*_(M_{sun}_)<10.1), star formation
+    rate (-2.0<logSFR(M_{sun}_/yr)<+1.6), direct gas-phase metallicity
+    (7.0<12+log(O/H)<8.8), ionization (0.5<O_32_<38.0), reddening
+    (0.02<E(B-V)<0.67), and nebular density (10<n_e_(cm-3)<1120). CLASSY
+    is biased to UV-bright star-forming galaxies, resulting in a sample
+    that is consistent with the z~0 mass-metallicity relationship, but is
+    offset to higher star formation rates by roughly 2dex, similar to z>~2
+    galaxies. This unique set of properties makes the CLASSY atlas the
+    benchmark training set for star-forming galaxies across cosmic time.
+
+Description:
+    The COS Legacy Archive Spectroscopy Survey (CLASSY) combines
+    135 orbits of new HST data with 177 orbits of archival HST data, for a
+    total of 312 orbits, to complete the first atlas of high-quality
+    rest-FUV COS spectra of 45 local star-forming galaxies.
+
+    In order to complete the FUV spectral coverage of the CLASSY sample,
+    the archival observations were supplemented with 76 new HST/COS
+    spectroscopic data sets of 42 galaxies, compiled over 135 orbits in
+    Cycle 27 as part of PID 15840. These data consist of 27 G130M data
+    sets, 5 G160M data sets, 29 G185M data sets, and 8 G225M data sets.
+    Details of all individual data sets are provided in Table 2.
+
+    High-quality optical spectra have been compiled for the entire CLASSY
+    sample to ensure uniform determinations of galaxy properties.
+    Initially, much of the sample was selected from the SDSS, and so
+    archival SDSS spectra exist for 38 of the CLASSY galaxies. The
+    exceptions are J0036-3333, J0127-0619, J0144+0453, J0337-0502,
+    J0405-3648, J0934+5514, and J1444+4237. Instead, we use VLT/VIMOS
+    integral field unit (IFU) from James+ (2009MNRAS.398....2J) for
+    J0127-0619, MMT Blue Channel Spectrograph spectra from
+    Senchyna+ (2019MNRAS.488.3492S) for J0144+0453 and J1444+4237,
+    Keck/KCWI IFU spectra from Rickards Vaught+ (2021ApJ...911L..17R) for
+    J0337-0502, and VLT/MUSE IFU spectra for the remaining four galaxies.
+
+    To ensure robust direct T_e_ measurements for J0808+3948, J0944+3442,
+    and J1545+0858, very high-S/N optical spectral were obtained using the
+    Multi-Object Double Spectrographs (MODS) on the Large Binocular
+    Telescope (LBT).
+
+    We gathered additional optical spectra from archival VLT/MUSE IFU
+    spectra and Keck/ESI spectra from R. L. Sanders et al. (2022, in
+    preparation), and spectra that were prioritized over the SDSS spectra
+    due to their superior S/N and spectral resolution.
+
+    The details of the ancillary optical spectra adopted for the CLASSY
+    sample are listed in Table 4.
+
+    The SDSS provides optical imaging in ugriz for 42 galaxies in the
+    CLASSY sample. For the other three, J0036-3333 and J0405-3648 have
+    grizY images from the DES (Abbott+ 2021, II/371), and J0337-0502 is
+    observed by the Pan-STARRS1 (Chambers+ 2016, II/349). For the UV, 43
+    galaxies (all but J0337-0502 and J1157+3220) have imaging in the NUV
+    and FUV available from GALEX (Martin+ 2005ApJ...619L...1M ; see II/335).
+    Additionally, Wide-field Infrared Survey Explorer (WISE) W1 and W2
+    near-infrared (NIR) data are also available for the entire CLASSY
+    sample.
+    See Appendix C.
+
+File Summary:
+--------------------------------------------------------------------------------
+ FileName    Lrecl  Records  Explanations
+--------------------------------------------------------------------------------
+ReadMe          80        .  This file
+table2.dat     107      217  CLASSY New+Archival HST/COS observations
+table3.dat      43       45  Nominal and measured spectral resolution of
+                              CLASSY coadded spectra
+table4.dat     134       45  Ancillary optical spectra for the CLASSY
+                              galaxy sample
+table5.dat     120       45  CLASSY galaxy spectroscopy-derived properties
+table6.dat     118       45  CLASSY galaxy photometry-derived properties
+fits/*           .       45  Individual CLASSY HLSP galaxy spectrum
+                              in FITS format
+--------------------------------------------------------------------------------
+
+See also:
+ B/hst  : HST Archived Exposures Catalog (STScI, 2007)
+ II/311 : WISE All-Sky Data Release (Cutri+ 2012)
+ V/147  : The SDSS Photometric Catalogue, Release 12 (Alam+, 2015)
+ II/349 : The Pan-STARRS release 1 (PS1) Survey - DR1 (Chambers+, 2016)
+ II/335 : Revised catalog of GALEX UV sources (GUVcat_AIS GR6+7) (Bianchi+ 2017)
+ V/154  : Sloan Digital Sky Surveys (SDSS), Release 16 (DR16) (Ahumada+, 2020)
+ II/371 : The Dark Energy Survey (DES): Data Release 2 (Abott+, 2021)
+ J/ApJS/178/247 : H{alpha} and [NII] survey in local 11 Mpc (Kennicutt+, 2008)
+ J/ApJ/706/599  : H{alpha} and UV SFR in the local volume (Lee+, 2009)
+ J/ApJS/190/233 : Spectroscopy & abundances of SINGS galaxies (Moustakas+, 2010)
+ J/A+A/561/A64  : Mrk 996 optical spectroscopy (Telles+, 2014)
+ J/ApJ/806/16   : CHemical Abundances of Spirals. I. NGC628 (Berg+, 2015)
+ J/ApJS/219/8   : SFR for WISE + SDSS spectroscopic galaxies (Chang+, 2015)
+ J/ApJ/814/L6   : CIII] emission in near & far star-forming gal. (Rigby+, 2015)
+ J/A+A/608/A139 : 237 Lyman-alpha spectra of MUSE-Wide survey (Gronke, 2017)
+ J/A+A/615/A78  : Spectral models for binary products (Goetberg+, 2018)
+ J/AJ/155/104   : MEGaSaURA. I. The sample and the spectra (Rigby+, 2018)
+ J/ApJ/869/123  : Keck Lyman continuum sp. survey (KLCS) (Steidel+, 2018)
+ J/ApJ/893/96   : CHAOS IV: NGC3184 LBT obs. & 3 other gal. abund. (Berg+, 2020)
+ J/A+A/654/A80  : MUSE Catalog of UV emission line measurement (Schmidt+, 2021)
+ http://archive.stsci.edu/hlsp/classy : CLASSY home page
+
+Byte-by-byte Description of file: table2.dat
+--------------------------------------------------------------------------------
+   Bytes Format Units    Label      Explanations
+--------------------------------------------------------------------------------
+   1-  2 I2     ---      Seq        [1/45] Internal target index number
+   4- 13 A10    ---      Name       Galaxy identifier (JHHMM+DDMM)
+  15- 21 F7.5   ---      z          [0.0016/0.182] Spectroscopic redshift
+  23- 27 I5     ---      PID        [11523/15840]? HST Program ID (1)
+  29- 38 A10    ---      ImData     Acquisition image dataset name
+  40- 44 F5.1   s        ImExpT     [0.6/510]? Acquisition image exposure time
+  46- 47 A2     ---    f_ImExpT     NA = Not applicable
+      49 A1     ---      ImMir      [AB] Acquisition image mirror
+  51- 53 I3     deg      PA         [1/355]? Position angle of aperture
+  55- 58 F4.2   arcsec   ImGFWHM    [0.1/1.42]? GFWHM along spatial axis of
+                                     acquisition image
+  60- 61 A2     ---    f_ImGFWHM    NA = Not applicable
+  63- 71 A9     ---      SpData     Spectrum dataset name
+  73- 77 A5     ---      Grating    Spectrum grating
+  79- 82 I4     10-10m   clambda    [1105/2339]? Spectrum central wavelength;
+                                     in Angstrom units
+  84- 84 I1     ---      LP         [1/4]? Spectrum lifetime position
+  86- 87 A2     ---    f_LP         NA = Not applicable
+  89- 93 I5     s        SpExpT     [356/13852]? Spectrum exposure time
+  95-100 F6.1   10-10m   lambdaSt   [966.6/1889.3]? Starting rest wavelength (2)
+ 102-107 F6.1   10-10m   lambdaEnd  [1221.7/2414.6]? Ending rest wavelength (2)
+--------------------------------------------------------------------------------
+Note (1): The program IDs contain both archival and new observations.
+Note (2): Of the coverage. The full extent of the contiguous wavelength
+          coverage is in the last row for each galaxy.
+--------------------------------------------------------------------------------
+
+Byte-by-byte Description of file: table3.dat
+--------------------------------------------------------------------------------
+   Bytes Format Units    Label   Explanations
+--------------------------------------------------------------------------------
+   1- 10 A10    ---      Name    Galaxy identifier (JHHMM+DDMM)
+  14- 17 A4     10-10m   lambda  Rest-frame wavelength; Angstroms
+  19- 22 F4.1   km/s     VHR     [11.6/14.3] Nominal resolution of the VHR
+                                  spectrum in units of km/s per resolution
+                                  element (5)
+  24- 27 F4.1   km/s     HR      [14.2/17.4] Nominal resolution of the HR
+                                  spectrum in units of km/s per resolution
+                                  element (5)
+  29- 32 F4.1   km/s     MR      [38.8/47.6] Nominal resolution of the MR
+                                  spectrum in units of km/s per resolution
+                                  element (5)
+  34- 38 F5.1   km/s     LR      [96.5/119.6] Nominal resolution of the LR
+                                  spectrum in units of km/s per resolution
+                                  element (5)
+  40- 43 I4     km/s     Res     [20/128] Resolution of measured absorption
+                                  feature (6)
+--------------------------------------------------------------------------------
+Note (5): For each coadded dataset.
+Note (6): Gaussian FWHM measured from the HR, Galactic extinction-corrected,
+          binned spectra (extension 9).
+--------------------------------------------------------------------------------
+
+Byte-by-byte Description of file: table4.dat
+--------------------------------------------------------------------------------
+   Bytes Format Units  Label      Explanations
+--------------------------------------------------------------------------------
+   1- 10 A10    ---    Name       Galaxy identifier (JHHMM+DDMM)
+  12- 20 A9     ---    Inst       Telescope/spectrograph of optical spectrum
+  22- 30 A9     arcsec Ap         Aperture size (1)
+  32- 41 A10    s      ExpTime    Cumulative exposure time
+  43- 81 A39    ---    Reference  Reference for the observations
+  83-134 A52    ---    FileName   Name of the FITS file in subdirectory "fits";
+                                   column added by CDS
+--------------------------------------------------------------------------------
+Note (1): These apertures are the ones used to extract the spectra used in
+          this work to determine the nebular properties of the CLASSY sample.
+          For IFU observations, the 1-dimensional spectra were extracted to
+          aperture-match the FUV HST/COS spectra.
+--------------------------------------------------------------------------------
+
+Byte-by-byte Description of file: table5.dat
+--------------------------------------------------------------------------------
+   Bytes Format Units          Label   Explanations
+--------------------------------------------------------------------------------
+  1-   2 I2     ---            Seq     [1/45] Internal target index number
+  4-  13 A10    ---            Name    Galaxy identifier (JHHMM+DDMM)
+ 15-  31 A17    ---            AName   Alternate name(s)
+ 33-  34 I2     h              RAh     Hour of Right Ascension (J2000)
+ 36-  37 I2     min            RAm     Minute of Right Ascension (J2000)
+ 39-  43 F5.2   s              RAs     Second of Right Ascension (J2000)
+      45 A1     ---            DE-     Sign of the Declination (J2000)
+ 46-  47 I2     deg            DEd     Degree of Declination (J2000)
+ 49-  50 I2     arcmin         DEm     Arcminute of Declination (J2000)
+ 52-  56 F5.2   arcsec         DEs     Arcsecond of Declination (J2000)
+ 58-  64 F7.5   ---            z       [0.0016/0.182] Spectroscopic redshift
+ 66-  70 F5.2   10-17W/m2/nm   F1500   [0.69/16.6] Continuum flux at 1500{AA}
+                                        from the CLASSY coadded spectra; in
+                                        units of 10^-15^erg/s/cm^2^/{AA}
+ 72-  75 F4.2   [-]            Z       [6.98/8.8] Direct method oxygen
+                                        abundance (12+log (O/H))
+ 77-  81 F5.2   [-]          e_Z       [0.01/11.4] Uncertainty in Z
+ 83-  91 A9     ---          r_Z       Ion temperature used to determine Z
+ 93-  95 I3     cm-3           ne      [10/910] Gas-phase electron density
+ 97-  99 I3     cm-3         e_ne      [10/160] Uncertainty in ne
+101- 104 F4.1   ---            O32     [0.5/38] The [OIII]5007{AA}/[OII]3727{AA}
+                                        flux ratio
+106- 108 F3.1   ---          e_O32     [0.1/3] Uncertainty in O32
+110- 114 F5.3   mag            E(B-V)  [0.039/0.5] Reddening value from Balmer
+                                        decrement
+116- 120 F5.3   mag          e_E(B-V)  [0.004/0.07] Uncertainty in E (B-V)
+--------------------------------------------------------------------------------
+
+Byte-by-byte Description of file: table6.dat
+--------------------------------------------------------------------------------
+   Bytes Format Units       Label    Explanations
+--------------------------------------------------------------------------------
+  1-   2 I2     ---         Seq      [1/45] Internal target index number
+  4-  13 A10    ---         Name     Target identifier (JHHMM+DDMM)
+ 15-  16 I2     h           RAh      Hour of Right Ascension (J2000)
+ 18-  19 I2     min         RAm      Minute of Right Ascension (J2000)
+ 21-  25 F5.2   s           RAs      Second of Right Ascension (J2000)
+      27 A1     ---         DE-      Sign of the Declination (J2000)
+ 28-  29 I2     deg         DEd      Degree of Declination (J2000)
+ 31-  32 I2     arcmin      DEm      Arcminute of Declination (J2000)
+ 34-  38 F5.2   arcsec      DEs      Arcsecond of Declination (J2000)
+ 40-  46 F7.5   ---         z        [0.0016/0.182] Spectroscopic redshift
+ 48-  50 I3     Mpc         Dist     [8/880] Luminosity distance (2)
+ 52-  55 F4.2   arcsec      r50      [0.7/7.3] Optical half light radius (3)
+ 57-  60 F4.2   [Msun]      MAper    [4.9/10] COS aperture log stellar mass (4)
+ 62-  65 F4.2   [Msun]    E_MAper    [0.12/0.6] Upper uncertainty in MAper
+ 67-  70 F4.2   [Msun]    e_MAper    [0.09/0.5] Lower uncertainty in MAper
+ 72-  76 F5.2   [Msun]      MTot     [6.2/10.1] Total log stellar mass for
+                                      entire galaxy (4)
+ 78-  81 F4.2   [Msun]    E_MTot     [0.15/0.51] Upper uncertainty in MTot
+ 83-  86 F4.2   [Msun]    e_MTot     [0.1/0.42] Lower uncertainty in MTot
+ 88-  92 F5.2   [Msun/yr]   SFRAper  [-3.1/1.5] Within COS aperture log star
+                                      formation rate (4)
+ 94-  97 F4.2   [Msun/yr] E_SFRAper  [0.07/0.3] Upper uncertainty in SFRAper
+ 99- 102 F4.2   [Msun/yr] e_SFRAper  [0.08/0.5] Lower uncertainty in SFRAper
+104- 108 F5.2   [Msun/yr]   SFRTot   [-2.1/1.6] Total log star formation rate
+                                      for entire galaxy (4)
+110- 113 F4.2   [Msun/yr] E_SFRTot   [0.07/0.7] Upper uncertainty in SFRTot
+115- 118 F4.2   [Msun/yr] e_SFRTot   [0.07/0.65] Lower uncertainty in SFRTot
+--------------------------------------------------------------------------------
+Note (2): Corrected for the Hubble flow using the velocity field model of
+          Masters (2005PhDT.........2M).
+Note (3): Dervied from the optical imaging (see Figure 2).
+Note (4): Dervied using Beagle SED fitting.
+--------------------------------------------------------------------------------
+
+History:
+    From electronic version of the journal for Tables 2-6
+    Spectra (CLASSY HLSPs) downloaded from:
+    http://archive.stsci.edu/hlsp/classy
+
+References:
+    James et al.             Paper II.   2022ApJS..262...37J
+    Xu et al.                Paper III.
+    Mingozzi et al.          Paper IV.
+    Arellano-Cordova et al.  Paper V.    2022ApJ...935...74A
+
+================================================================================
+(End)                    Prepared by [AAS], Emmanuelle Perret [CDS]  28-Sep-2022

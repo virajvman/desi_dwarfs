@@ -121,6 +121,8 @@ def main(argv=None):
     print("Packing {} objects from {} -> {}".format(len(rows), bundle_dir, args.out),
           flush=True)
 
+    out_parent = os.path.dirname(os.path.abspath(args.out))
+    os.makedirs(out_parent, exist_ok=True)
     out_tmp = args.out + ".tmp"
     if os.path.exists(out_tmp):
         os.remove(out_tmp)
