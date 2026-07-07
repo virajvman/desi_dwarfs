@@ -37,6 +37,76 @@ recon_vi_scarlet.build_bundle ──► bundle.h5 ──scp──► recon_vi_sc
  out of the bundle store)                              ▼
                                           http://127.0.0.1:8001/
                                           decisions.csv (autosaved)
+                                                       │
+                        recon_vi_scarlet.apply_decisions
+                        (stage 4a: replay decisions → final galaxy cubes)
+                                                       │
+                                                       ▼
+                                          scarlet_final_cubes.h5
+                                                       │
+                        recon_vi_scarlet.make_crops
+                        (stage 4b: light-centered crop → ML tensor)
+                                                       │
+                                                       ▼
+                                          scarlet_crops128.h5
+                                                       │
+    vi_cat.fits ──►         recon_vi_scarlet.add_psfsize
+    (TARGETID +             (stage 4c: attach native psfsize_g/r/z + brickname)
+     PSFSIZE_* +                                       │
+     BRICKNAME)                                        ▼
+                       scarlet_crops128.h5  (+ /psfsize_g/r/z + /brickname)
+                                                       │
+                              (→ galaxy_prior_proj: PSF homogenization + repack)
+```
+
+## Quick reference — copy-paste commands
+
+Set the paths once, then run the steps in order. These are the actual local
+paths for the current run; edit them if the files move. (Per-step detail is in
+the numbered sections below.)
+
+```bash
+# --- set once (local paths for this run) ---
+CODE=/Users/virajmanwadkar/Desktop/Stanford/Research/DESI/desi_code/desi_dwarfs/code
+DATA=/Users/virajmanwadkar/Desktop/Stanford/Research/galaxy_prior_proj/data
+CAT=/Users/virajmanwadkar/Downloads/datasets/vi_cat.fits
+cd "$CODE"
+
+# --- stage 3: VI GUI (open http://127.0.0.1:8001/) ---
+python -m recon_vi_scarlet.server \
+    --bundle "$DATA/bundle_partial.h5" \
+    --out    "$DATA/scarlet_decisions.csv" \
+    --inspector viraj
+
+# --- stage 4a: decisions -> final galaxy cubes (accept-only) ---
+python -m recon_vi_scarlet.apply_decisions \
+    --bundle    "$DATA/bundle_partial.h5" \
+    --decisions "$DATA/scarlet_decisions.csv" \
+    --out       "$DATA/scarlet_final_cubes.h5"
+
+# --- stage 4b: light-centered 128x128 crops (one per object, no augmentation) ---
+python -m recon_vi_scarlet.make_crops \
+    --in  "$DATA/scarlet_final_cubes.h5" \
+    --out "$DATA/scarlet_crops128.h5"
+
+# --- stage 4c: attach native psfsize_g/r/z from the catalog (in place) ---
+python -m recon_vi_scarlet.add_psfsize \
+    --crops   "$DATA/scarlet_crops128.h5" \
+    --catalog "$CAT"
+```
+
+> **Stage 1–2 (bundle build)** run on NERSC and feed `bundle_partial.h5`; see
+> §1 below for `build_bundle`. The chain above is the repeatable local part.
+
+
+And then once the scarlet_crop128.h5 file is shopped to NERSC, we can homogenize the psf (if we are traning that model variant)
+
+```bash
+cd galaxy_cutouts
+python homogenize_scarlet_crops.py \
+    --input  /pscratch/sd/v/virajvm/galaxy_prior_data/scarlet_crops128.h5 \
+    --output /pscratch/sd/v/virajvm/galaxy_prior_data/scarlet_crops128.homog.h5 \
+    --target-fwhm-file /pscratch/sd/v/virajvm/galaxy_cutouts/run1/target_fwhm.json
 ```
 
 ## 1. Build the bundle
@@ -62,8 +132,12 @@ float32 (they are summed in the compositor).
 
 ```bash
 cd .../desi_dwarfs/code
-python -m recon_vi_scarlet.server --bundle bundle.h5 --out decisions.csv
+python -m recon_vi_scarlet.server \
+    --bundle /Users/virajmanwadkar/Desktop/Stanford/Research/galaxy_prior_proj/data/bundle_partial.h5 \
+    --out    /Users/virajmanwadkar/Desktop/Stanford/Research/galaxy_prior_proj/data/scarlet_decisions.csv \
+    --inspector viraj
 # open http://127.0.0.1:8001/   (port 8001 so recon_vi on 8000 can coexist)
+# --bundle must be the bundle .h5 file (from build_bundle.py), NOT a directory.
 ```
 
 On launch it reads any existing `decisions.csv`, marks decided objects, and
@@ -136,6 +210,124 @@ fine-tuned grouping exactly later (stage 4 consumes this).
 | `timestamp`, `inspector` | ISO-8601 UTC; from `--inspector` |
 
 The CSV is rewritten atomically (temp + `os.replace`) on every save.
+
+## 3. Apply decisions → final galaxy cubes (stage 4a)
+
+`apply_decisions.py` replays `decisions.csv` against the `bundle.h5` and writes the
+**primary product**: the final finetuned galaxy MODEL cube per object — grz,
+PSF-convolved (observed frame, *not* deconvolved), background-free. Pure
+numpy/h5py (+ astropy for the WCS); no scarlet, no NERSC.
+
+```bash
+cd .../desi_dwarfs/code
+python -m recon_vi_scarlet.apply_decisions \
+    --bundle bundle.h5 \
+    --decisions decisions.csv \
+    --out scarlet_final_cubes.h5 \
+    [--include-unsure] [--include-undecided] [--float16]
+```
+
+Each cube is the flux-space **sum of the VI-selected component patches**, with the
+final membership reconstructed exactly as the GUI computed it:
+
+```
+member = (initial_membership and cid not in removed) or (cid in added)
+```
+
+Component patches are stored float32 in the bundle (only the *display* cubes are
+float16), so the sum is a clean float32 cube independent of the float16 baseline.
+
+**By default only `verdict=='accept'` objects are written.** `--include-unsure`
+adds the `unsure` rows; `--include-undecided` adds objects with no verdict
+(applying their edits if any, else the automatic initial membership).
+
+Output layout (one group per object, keyed by TARGETID):
+
+| item | meaning |
+|---|---|
+| `/{TARGETID}/galaxy_cube` | `(3, S, S)` float32 — the final model cube (grz), at the **full box_size** cutout frame |
+| group attrs | `TARGETID`, `BRICKNAME`, `box_size`, `gal_ra/dec`, `gal_xpix/ypix`, `pixscale`, `wcs_header` (TAN, reconstructed from the anchor), `verdict`, `bad_fit`, `lsb_in_galaxy`, `comment`, `n_members_final`, `member_comp_ids`, `removed_comp_ids`/`added_comp_ids`, `mag_g/r/z` (post-VI, not MW-corrected), `inspector`, `decision_timestamp`, `created` |
+| `/index` | compound table: `targetid, brickname, box_size, n_members_final, mag_g/r/z, verdict` |
+| top-level attrs | `n_objects`, `source_bundle`, `source_decisions`, `n_by_verdict`, `created` |
+
+The reconstructed TAN WCS runs through the exact `(gal_ra,gal_dec) ↔ 0-based
+(gal_xpix,gal_ypix)` anchor at the Legacy Surveys 0.262″/px, N-up/E-left scale —
+accurate to well under a pixel across the field. Warnings are printed for empty
+member sets and for requested decisions that had no bundle group.
+
+## 4. Make light-centered crops (stage 4b)
+
+`make_crops.py` turns the final cubes into a stacked ML tensor: **one crop per
+object** (no augmentation), recentered on the light-weighted centroid. It only
+READS the input. Pure numpy/h5py (+ astropy for pixel→sky).
+
+```bash
+cd .../desi_dwarfs/code
+python -m recon_vi_scarlet.make_crops \
+    --in  scarlet_final_cubes.h5 \
+    --out scarlet_crops128.h5 \
+    [--crop-size 128] [--window 0]
+```
+
+Per object: compute the flux-weighted centroid of the grz-summed cube (negatives
+clipped to 0; `--window R` for an iterative windowed centroid seeded at the
+target), crop a fixed `crop-size` box (default 128) with the origin snapped to the
+nearest int and **clamped** to stay on-frame (no zero-padding, `clamped` flag
+recorded).
+
+The light center is recorded **both** as sky coordinates and as pixel coordinates
+**in the original box_size cutout frame**, so you can re-download a matching cutout
+from the real data at exactly the light-weighted center.
+
+Output — one row per object:
+
+| item | meaning |
+|---|---|
+| `/images` | `(N, 3, size, size)` float32 — `N = n_objects`, one crop each |
+| `/targetid` | `(N,)` int64 — source TARGETID (join key) |
+| `/index` | compound: `targetid`, `light_center_ra`, `light_center_dec` (deg), `light_center_xpix`, `light_center_ypix` (0-based px, original frame), `crop_origin_x/y` (box top-left, original frame), `clamped`, `mag_g/r/z` |
+| top-level attrs | `n_crops`, `n_objects`, `crop_size`, `recenter`, `source_file`, `created` |
+
+`light_center_ra/dec` come from pushing `(light_center_xpix, light_center_ypix)`
+through each object's stored `wcs_header`; they are `NaN` if the object had no
+usable WCS.
+
+## 5. Attach native PSF sizes + brickname (stage 4c)
+
+`add_psfsize.py` joins a FITS catalog (with a `TARGETID` column) onto the crops h5
+by TARGETID and writes per-object arrays: the **native per-band PSF FWHM**
+`psfsize_g/r/z` (arcsec, three float32 datasets) and the **Legacy `brickname`**
+(string). The psfsizes are what the galaxy_prior_proj homogenization step reads to
+build each object's Gaussian matching kernel; `brickname` together with the
+light-center RA/Dec in `/index` lets you pull the matching real-data cutout. Both
+satisfy the `psfsize_g/r/z` + `brickname` parts of `repack_scarlet_clean.py`'s
+input contract. Needs numpy/h5py/astropy.
+
+```bash
+cd .../desi_dwarfs/code
+python -m recon_vi_scarlet.add_psfsize \
+    --crops scarlet_crops128.h5 \
+    --catalog /path/vi_cat.fits \
+    [--hdu 1] [--targetid-col TARGETID] \
+    [--psfsize-cols PSFSIZE_G PSFSIZE_R PSFSIZE_Z] \
+    [--brickname-col BRICKNAME] [--strict]
+```
+
+- **Per-object, not attrs.** Each galaxy has its own seeing / brick, so
+  `psfsize_g/r/z` + `brickname` are length-`N` datasets, **row-aligned to the
+  top-level `/targetid`** — row `i` is the value for the galaxy at `targetid[i]`.
+- **In place + idempotent.** The datasets are written into the crops h5 directly
+  (existing ones overwritten), so re-running is safe. Also sets attrs
+  `psf_homogenized=False` (this is the native/PSF-variation variant),
+  `psfsize_source_catalog`, `psfsize_units="arcsec_fwhm"`, `psfsize_added`.
+- **Join policy (default, graceful):** a crop targetid absent from the catalog →
+  `psfsize` `NaN` (homogenization treats a non-finite PSF as un-homogenizable and
+  skips it) and `brickname` `""`; duplicate catalog TARGETID → first occurrence;
+  counts reported. `--strict` aborts on either instead.
+- **Columns** default to the Legacy standard `TARGETID` + `PSFSIZE_G/R/Z` +
+  `BRICKNAME` (case-insensitive); override with `--targetid-col` /
+  `--psfsize-cols` / `--brickname-col`. PSF values are taken as FWHM in arcsec
+  (no conversion); FITS byte-strings are decoded to UTF-8.
 
 ## Notes & limitations
 
