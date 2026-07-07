@@ -1446,12 +1446,9 @@ fastspec_hdu_datamodel = {
         "unit": 1/u.mag**2,
         "description": "Inverse variance of absolute magnitude in SDSS z-band band-shifted to z=0.1 assuming h=1.0.",
         "dtype": "float32"
-    },
-    "LOG_MSTAR": {
-     "unit": logM_sun,
-     "description": "Stellar mass from fastspecfit assuming h=1.0.",
-    "dtype": "float32"}
-    
+    }
+    # NOTE: the FastSpecFit SED stellar mass is added below as LOG_MSTAR_FASTSPEC
+    # (+ LOG_MSTAR_FASTSPEC_IVAR); the former dangling "LOG_MSTAR" key was removed.
 }
                     
 # Emission-line definitions
@@ -1497,11 +1494,22 @@ fastspec_hdu_datamodel["HALPHA_EW_IVAR"] = {
     "description": "Inverse variance in HALPHA_EW.",
     "dtype": "float32"
 }
-fastspec_hdu_datamodel["LOGMSTAR_FASTSPEC"] = {
+fastspec_hdu_datamodel["LOG_MSTAR_FASTSPEC"] = {
     "unit": None,
     "description": (
-        "log10(stellar mass / Msun) from FastSpecFit SED fit (LOGMSTAR column "
-        "in the FastSpecFit SPECPHOT HDU); renamed from LOGMSTAR for clarity."
+        "log10(stellar mass / Msun) from the FastSpecFit SED fit (LOGMSTAR column "
+        "in the SPECPHOT HDU of the custom DR1-dwarfs FastSpecFit run), assuming "
+        "h=1.0. Total SED-fit mass; an independent estimator from LOG_MSTAR_M24 "
+        "(grz color-based M/L) and on a different little-h scale. Renamed from LOGMSTAR."
+    ),
+    "dtype": "float32",
+}
+fastspec_hdu_datamodel["LOG_MSTAR_FASTSPEC_IVAR"] = {
+    "unit": None,
+    "description": (
+        "Inverse variance of LOG_MSTAR_FASTSPEC (LOGMSTAR_IVAR column in the "
+        "FastSpecFit SPECPHOT HDU); 0 where the SED stellar mass is unconstrained. "
+        "Renamed from LOGMSTAR_IVAR."
     ),
     "dtype": "float32",
 }

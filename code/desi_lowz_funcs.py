@@ -1481,6 +1481,36 @@ def match_fastspec_catalog(gal_cat, coord_name="", match_method="RADEC", source=
         custom_path  = "/pscratch/sd/v/virajvm/desi_dwarf_catalogs/fastspecfit_custom_run/iron/catalogs/fastspec-iron-dr1-dwarfs.fits"
         print(f"match_fastspec_catalog: reading custom FASTSPEC HDU (hdu=3) from {custom_path}")
         vac_data = Table.read(custom_path, hdu=3)
+
+        # The FastSpecFit SED stellar mass (LOGMSTAR) and its inverse variance
+        # (LOGMSTAR_IVAR) live in the SPECPHOT HDU, NOT the FASTSPEC HDU we just
+        # read. In FastSpecFit output SPECPHOT and FASTSPEC are row-matched (same
+        # object order; create_output_table prepends TARGETID to both), so we read
+        # SPECPHOT and attach these columns onto vac_data positionally, guarded by
+        # a length + TARGETID-alignment tripwire. The subsequent max-SNR_R dedup and
+        # TARGETID match then carry them through like any other FASTSPEC column.
+        specphot = Table.read(custom_path, hdu="SPECPHOT")
+        if len(specphot) != len(vac_data):
+            raise ValueError(
+                "match_fastspec_catalog: custom SPECPHOT/FASTSPEC row-count mismatch "
+                f"({len(specphot)} vs {len(vac_data)}); cannot attach LOGMSTAR safely"
+            )
+        if "TARGETID" in specphot.colnames and not np.array_equal(
+            np.asarray(specphot["TARGETID"]), np.asarray(vac_data["TARGETID"])
+        ):
+            raise ValueError(
+                "match_fastspec_catalog: custom SPECPHOT vs FASTSPEC TARGETID order "
+                "differs; SPECPHOT is not row-matched to FASTSPEC as assumed"
+            )
+        for _col in ("LOGMSTAR", "LOGMSTAR_IVAR"):
+            if _col in specphot.colnames:
+                vac_data[_col] = specphot[_col]
+            else:
+                print(
+                    f"match_fastspec_catalog: WARNING - '{_col}' not in custom "
+                    "SPECPHOT HDU; skipping (FastSpecFit stellar mass will be absent)"
+                )
+
         if match_method != "TARGETID":
             print(
                 f"match_fastspec_catalog: source='custom' has no RA/DEC; "

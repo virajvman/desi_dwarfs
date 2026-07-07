@@ -1139,8 +1139,13 @@ def get_fastspec_matched_catalog(gal_cat, save_name, match_method="TARGETID", so
 
     fastspec_cat = make_catalog_unmasked(fastspec_cat)
 
-    if "LOGMSTAR" in fastspec_cat.colnames and "LOGMSTAR_FASTSPEC" not in fastspec_cat.colnames:
-        fastspec_cat.rename_column("LOGMSTAR", "LOGMSTAR_FASTSPEC")
+    # FastSpecFit SED stellar mass (+ ivar), attached from the custom-run SPECPHOT
+    # HDU inside match_fastspec_catalog. Rename to the LOG_MSTAR_* convention used
+    # elsewhere in the catalog (cf. LOG_MSTAR_M24). Total SED-fit mass, h=1.0.
+    if "LOGMSTAR" in fastspec_cat.colnames and "LOG_MSTAR_FASTSPEC" not in fastspec_cat.colnames:
+        fastspec_cat.rename_column("LOGMSTAR", "LOG_MSTAR_FASTSPEC")
+    if "LOGMSTAR_IVAR" in fastspec_cat.colnames and "LOG_MSTAR_FASTSPEC_IVAR" not in fastspec_cat.colnames:
+        fastspec_cat.rename_column("LOGMSTAR_IVAR", "LOG_MSTAR_FASTSPEC_IVAR")
 
     # Row-alignment tripwire: match_fastspec_catalog must return rows in
     # gal_cat input order, with TARGETID preserved per row (including for

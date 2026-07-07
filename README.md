@@ -207,11 +207,11 @@ Original Tractor photometry and morphological parameters from the DESI Legacy Su
 
 <br>
 
-Emission-line fitting results from **FastSpecFit**. This extension is the **FASTSPEC** HDU (HDU 3) of a custom FastSpecFit run on the DESI Iron / DR1 spectra, matched to **MAIN** by `TARGETID` and carried **verbatim** — every FASTSPEC-HDU column is included, with no subsetting. Rows match **MAIN** by `TARGETID` and order; targets with no FastSpecFit match are sentinel-filled so the row alignment is preserved.
+Emission-line fitting results from **FastSpecFit**. This extension is the **FASTSPEC** HDU (HDU 3) of a custom FastSpecFit run on the DESI Iron / DR1 spectra, matched to **MAIN** by `TARGETID` and carried **verbatim** — every FASTSPEC-HDU column is included, with no subsetting. In addition, two SED stellar-mass columns (`LOG_MSTAR_FASTSPEC`, `LOG_MSTAR_FASTSPEC_IVAR`) are appended from the FastSpecFit **SPECPHOT** HDU (HDU 2), which is row-matched to the FASTSPEC HDU by `TARGETID`, and renamed to this catalog's `LOG_MSTAR_*` convention. Rows match **MAIN** by `TARGETID` and order; targets with no FastSpecFit match are sentinel-filled so the row alignment is preserved.
 
 The column definitions below follow the FastSpecFit data model (this run corresponds to the `fastspecfit` FASTSPEC-HDU schema, ~v3.x; see the [FastSpecFit FASTSPEC data model](https://fastspecfit.readthedocs.io/en/latest/fastspec.html)). Because the HDU is taken verbatim, columns are documented **by pattern** rather than enumerated one-by-one.
 
-> **Note.** The stellar-population / SED quantities you may expect from FastSpecFit — `LOGMSTAR`, `SFR`, `DN4000*`, `ABSMAG*`, `KCORR*`, `VDISP`, rest-frame luminosities — live in the FastSpecFit **SPECPHOT** HDU (HDU 2), which is **not** carried in this catalog. Only the FASTSPEC HDU (HDU 3) is included here. The emission-subtracted fiber photometry (`MAG_*_FIBER_NOEMI`) measured by this project's pipeline lives in the **SPEC_DERIVED** extension, not here.
+> **Note.** The FastSpecFit SED stellar mass `LOGMSTAR` is carried here as `LOG_MSTAR_FASTSPEC` (+ `LOG_MSTAR_FASTSPEC_IVAR`); see the identification-and-quality table below. The other stellar-population / SED quantities you may expect from FastSpecFit — `SFR`, `DN4000*`, `ABSMAG*`, `KCORR*`, `VDISP`, rest-frame luminosities — remain in the FastSpecFit **SPECPHOT** HDU (HDU 2) only and are **not** carried in this catalog. The emission-subtracted fiber photometry (`MAG_*_FIBER_NOEMI`) measured by this project's pipeline lives in the **SPEC_DERIVED** extension, not here.
 
 **Identification and quality columns**
 
@@ -232,6 +232,8 @@ The column definitions below follow the FastSpecFit data model (this run corresp
 | `DELTA_LINENDOF` | int32 | | Δ(degrees of freedom) without vs. with broad lines |
 | `DELTA_KINECHI2` | float32 | | Δχ² between the constrained and relaxed-kinematics line model |
 | `DELTA_KINENDOF` | int32 | | Δ(degrees of freedom) between the constrained and relaxed-kinematics model |
+| `LOG_MSTAR_FASTSPEC` | float32 | $\log(M_\odot)$ | log₁₀(stellar mass) from the FastSpecFit SED fit (SPECPHOT `LOGMSTAR`), assuming *h* = 1.0. Total SED-fit mass; an independent estimator from `MAIN.LOG_MSTAR_M24` (grz color-based M/L) and on a different little-*h* scale. Renamed from `LOGMSTAR`. |
+| `LOG_MSTAR_FASTSPEC_IVAR` | float32 | | Inverse variance of `LOG_MSTAR_FASTSPEC` (SPECPHOT `LOGMSTAR_IVAR`); 0 where the SED stellar mass is unconstrained |
 
 **Doublet line-ratios** — for `DOUBLET` ∈ {`MGII` (2796/2803), `OII` (3726/3729), `OIII` (5007/4959), `SII` (6731/6716), `NII` (6584/6548), `OIIRED` (7320/7330)}:
 
