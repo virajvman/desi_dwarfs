@@ -53,7 +53,12 @@ from desi_lowz_funcs import print_stage
 # ----------------------------------------------------------------------------
 FLAG = "NEW"
 
-N_TEMPLATE_GRID = [2, 4, 6, 8, 10, 12, 14]
+# Extended grid. n=1 is the pure-average baseline: after NMF-1 the residual PCA
+# is ~standard PCA on mean-subtracted flux, so the n_nmf=1 edge of the
+# combined (n_nmf x n_pca) grid is the "pure PCA" reference. Upper end raised to
+# 20 so the diminishing-returns plateau is actually visible past the production
+# choice of 10.
+N_TEMPLATE_GRID = [1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20]
 
 # Training recipe -- kept identical to nnmf_analysis.py so the scan is faithful.
 N_ITER_WARM = 50      # per-template warm-start iterations (sequential build-up)
@@ -141,7 +146,7 @@ def _init_fit_worker(W, flux, ivar, line_mask):
 
 def _fit_one(i):
     """Fit object i (min_x>=0 ||sqrt(ivar)(W x - flux)||^2) and return
-    (global chi^2, line-window chi^2)."""
+    (global chi^2, line-window chi^2, nnls coefficients)."""
     sqrt_ivar = np.sqrt(_IVAR[:, i])
     A = sqrt_ivar[:, None] * _W
     b = sqrt_ivar * _FLUX[:, i]
@@ -150,17 +155,22 @@ def _fit_one(i):
     fit = _W @ coeffs
     chi2_pix = _IVAR[:, i] * (_FLUX[:, i] - fit) ** 2
     chi2_lines = float(chi2_pix[_LINE_MASK].sum())
-    return chi2_global, chi2_lines
+    return chi2_global, chi2_lines, coeffs
 
 
 def fit_chi2(W, flux, ivar, line_mask, n_proc):
-    """Per-object global and line-window chi^2 for all columns of flux."""
+    """Per-object global chi^2, line-window chi^2, and NNLS coefficients for all
+    columns of flux. Coefficients are returned as (n_templates, n_obj) so the
+    combined-grid scan can rebuild the NMF model (W @ H) and its residual
+    without repeating the (expensive) non-negative fit."""
     n_obj = flux.shape[1]
     with Pool(processes=n_proc, initializer=_init_fit_worker,
               initargs=(W, flux, ivar, line_mask)) as pool:
         out = list(pool.imap(_fit_one, range(n_obj), chunksize=256))
-    out = np.asarray(out)                             # (n_obj, 2)
-    return out[:, 0], out[:, 1]
+    chi2_global = np.array([o[0] for o in out], dtype="f8")
+    chi2_lines = np.array([o[1] for o in out], dtype="f8")
+    coeffs = np.array([o[2] for o in out], dtype="f4").T   # (n_templates, n_obj)
+    return chi2_global, chi2_lines, coeffs
 
 
 def build_line_mask(wave_rest, centers, halfwidth):
@@ -243,10 +253,16 @@ if __name__ == "__main__":
 
         # Fit to validation and training sets.
         t0 = time.time()
-        chi2_valid, chi2line_valid = fit_chi2(W, flux_valid, ivar_valid, line_mask, N_PROC)
-        chi2_train, chi2line_train = fit_chi2(W, flux_train, ivar_train, line_mask, N_PROC)
+        chi2_valid, chi2line_valid, H_valid = fit_chi2(W, flux_valid, ivar_valid, line_mask, N_PROC)
+        chi2_train, chi2line_train, H_train = fit_chi2(W, flux_train, ivar_train, line_mask, N_PROC)
         t_fit = time.time() - t0
         print(f"  fit (valid+train) in {t_fit:.1f} s")
+
+        # Save the NMF coefficients so the combined (n_nmf x n_pca) grid scan
+        # (scan_nnmf_pca_grid.py) can reconstruct the NMF model W @ H and its
+        # residual without re-running the non-negative least squares fit.
+        np.save(f"{RESULTS_DIR}/hcoeffs_valid_ntemp{n_templates}.npy", H_valid)
+        np.save(f"{RESULTS_DIR}/hcoeffs_train_ntemp{n_templates}.npy", H_train)
 
         rc_valid = reduced_chi2(chi2_valid, ngood_valid, n_templates)
         rc_train = reduced_chi2(chi2_train, ngood_train, n_templates)

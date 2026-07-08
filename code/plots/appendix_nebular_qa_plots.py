@@ -32,8 +32,10 @@ prescriptions):
             medians (16-84th percentile bars).
 
 Both read only catalog columns (MAIN + SPEC_DERIVED, plus the two [OIII]4363
-columns of FASTSPEC for the SNR cut), so they run anywhere astropy +
-matplotlib are available (e.g. locally on a downloaded catalog).
+columns of FASTSPEC for the SNR cut), so they run anywhere astropy, matplotlib,
+scipy, and cmasher are available (e.g. locally on a downloaded catalog). The
+shared purple colormap, density-contour (plot_2d_dist) and alternating-line
+helpers come from plot_style.py (not desi_lowz_funcs, which needs desispec).
 The literature files for the cross-match panel are resolved relative to the
 repo (data/); a missing file just skips that sample with a warning.
 Sample: DWARF_MASKBIT == 0 plus finite values of the plotted columns; the
@@ -51,7 +53,9 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 from matplotlib.colors import LogNorm
+import cmasher as cmr
 
 from astropy.table import Table, join, unique
 from astropy.io import ascii, fits
@@ -66,14 +70,22 @@ for _p in (_CODE_DIR, os.path.join(_CODE_DIR, "nebular_stuff")):
 
 from plot_style import (
     apply_paper_style, make_subplots,
+    make_alternating_plot, plot_2d_dist,
     MARGIN_LABEL, MARGIN_PAD, MARGIN_SPLIT, MARGIN_SHARED
 )
 
-#todo: import the make_alternating_line function here and update tehe cmap to be consistent with others
-#once plot_style as this make_alternating_function, we might need to update the import statement elsewhere.
-
-
 from cardelli_attenuation import k_ccm89, model_hahb, BALMER_INTRINSIC
+
+
+# Purple sequential colormap shared with the other catalog-paper hist2d panels
+# (explore_fastspec): cmr.gothic_r with the near-white low end clipped, and
+# empty (zero-count) bins rendered transparent.
+def _purple_hist_cmap():
+    cmap = mcolors.ListedColormap(cmr.gothic_r(np.linspace(0.05, 1.0, 256)))
+    cmap.set_bad(alpha=0)
+    return cmap
+
+PURPLE_CMAP = _purple_hist_cmap()
 
 
 _DATA_DIR = os.path.join(os.path.dirname(_CODE_DIR), "data")
@@ -294,8 +306,8 @@ def plot_direct_vs_strongline(main, der, snr4363, outpath):
     )
 
     lim = (7.0, 8.75)
-    ax[1].hist2d(direct, strong, bins=[60, 60],
-               range=[lim, lim], norm=LogNorm(), cmap="magma", rasterized=True)
+    ax[1].hist2d(direct, strong, bins=[30, 30],
+               range=[lim, lim], norm=LogNorm(), cmap=PURPLE_CMAP, rasterized=True)
 
     ax[1].set_ylabel(r"$12 + \log_{10}(\mathrm{O/H})$  [$R_{23}$+$N2$]")
     ax[1].set_xticklabels([])
@@ -305,11 +317,16 @@ def plot_direct_vs_strongline(main, der, snr4363, outpath):
 
     add_literature_comparison(ax[0], main, der, snr4363)
 
+    # alternating yellowgreen/black 1:1 line (shared convention with the other
+    # catalog-paper comparison figures), on both the density and lit. panels
+    line_grid = np.linspace(lim[0], lim[1], 50)
     for axi in ax:
         axi.set_yticks([7,7.5,8,8.5,9])
         axi.set_xticks([7,7.5,8,8.5,9])
         axi.set_xlim(lim); axi.set_ylim(lim)
-        axi.plot(lim, lim, ls="--", color="k", lw=1.0, zorder=4)
+        make_alternating_plot(axi, line_grid, line_grid, dash_len=1,
+                              color_1="yellowgreen", color_2="k", lw=1)
+        axi.collections[-1].set_zorder(4)
 
     fig.savefig(outpath)
     plt.close(fig)
@@ -347,11 +364,18 @@ def plot_av_direct_vs_param(main, der, outpath):
 
     mlim = (6.5, 9.25)
     alim = (0.0, 1.6)
-    ax[0].hist2d(logm, av, bins=[60, 60],
-               range=[mlim, alim], norm=LogNorm(), cmap="magma", rasterized=True)
+    ax[0].hist2d(logm, av, bins=[30, 30],
+               range=[mlim, alim], norm=LogNorm(), cmap=PURPLE_CMAP, rasterized=True)
+    # 1- and 2-sigma density contours (matches the M*-SFR/sSFR panel in
+    # explore_fastspec, which also uses plot_2d_dist)
+    plot_2d_dist(logm, av, 50, 50,
+                 cmin=1.e-4, cmax=1.0, smooth=10, clevs=[0, 0.68, 0.95], ax=ax[0],
+                 bounds=np.array([mlim[0], mlim[1], alim[0], alim[1]]),
+                 cmap=None, color="k", filled=False, label=None,
+                 cmap_alpha=1, lw_scale=0.75, alternating_contours=False)
     mgrid = np.linspace(*mlim, 200)
-    ax[0].plot(mgrid, av_from_bd(model_hahb(mgrid)), color="deepskyblue", lw=2.0,
-             zorder=4, label=r"mass-based model")
+    ax[0].plot(mgrid, av_from_bd(model_hahb(mgrid)), color="darkorange", lw=2.0, ls="-",
+             zorder=6, label=r"mass-based model")
     # median per-object A_V uncertainty, shown as a single vertical bar
     ax[0].errorbar([mlim[0] + 0.25], [alim[1] - 0.35], yerr=[med_err],
                  fmt="none", ecolor="k", elinewidth=1.2, capsize=2.5, zorder=5)
@@ -370,7 +394,8 @@ def plot_av_direct_vs_param(main, der, outpath):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("cat_path", help="Multi-extension dwarf catalog FITS file.")
-    ap.add_argument("--outdir", default=".", help="Directory for the output PDFs.")
+    ap.add_argument("--outdir", default=os.path.expanduser("~/Downloads"),
+                    help="Directory for the output PDFs (default: ~/Downloads).")
     args = ap.parse_args()
 
     apply_paper_style()

@@ -5,12 +5,22 @@ This module centralizes the SMF definitions and the n(z) prediction machinery
 that used to live inline in ``notebooks/catalog_paper/survey_plot.ipynb`` so the
 same code can be reused by ``elg_property_explore.ipynb`` (and any other plot).
 
-Two SMFs are supported:
+Two SMFs are supported, both as smooth double-Schechter functional forms:
 
 * GAMA field SMF (Driver+2022, z<0.1 double Schechter)            -> ``gama_smf``
-* SAGAbg SMF (Kado-Fong+2025, "SAGAbg III", Table 5), supplied as the published
-  CDS/MRT table with pointwise percentiles (5/16/50/84/95) for several
-  environment classes (all / satellite / field / isolated)       -> ``sagabg_smf``
+* SAGAbg SMF (Kado-Fong+2025, "SAGAbg III", Table 2): the published double-
+  Schechter *best-fit parameters* for several environment classes (all /
+  satellite / field / isolated)                                  -> ``sagabg_smf``
+
+We deliberately use the Table 2 double-Schechter *fit* rather than the Table 5
+machine-readable per-bin SMF. Table 5 is the directly-measured, ~0.1-dex-binned
+number density (Poisson counting statistics + empirical incompleteness-weight
+uncertainty), so it is noisy bin-to-bin -- that is real finite-sample noise, not
+a modeling artifact. Table 2 is the smooth parametric fit through those points,
+which is what we want for a clean prediction band. Only the best-fit parameters
+are used; the per-parameter credible intervals are intentionally *not* propagated
+(the paper points to Table 5 for the covariance-correct uncertainty, which we are
+deliberately not using here).
 
 All SMF callables take ``logM`` (log10 stellar mass, dex) and return the SMF
 ``dn/dlog10(M)`` in ``Mpc^-3 dex^-1`` so they can be integrated directly with
@@ -25,20 +35,16 @@ Two n(z) prediction paths are provided (both kept on purpose):
   apply a distance modulus + magnitude cut (``build_intrinsic_catalog`` +
   ``nz_from_intrinsic``) -- used for the magnitude-limited prediction lines.
 
-The grey shaded "expected total density" band is built by integrating the SMF
-over a stellar-mass bin (volume-limited), so no mock catalog is needed for it.
-A single string ``mode`` flag selects between:
-
-* ``"saga_posterior"`` : nested 68% (16-84) / outer 90% (5-95) band from the
-  SAGAbg percentiles (5-95 is the widest interval in the published table).
-* ``"saga_vs_gama"``    : single band spanning the SAGAbg median curve and the
-  GAMA (Driver+22) best-fit curve.
+The grey shaded "expected total density" band is built by integrating each SMF
+over a stellar-mass bin (volume-limited) and spanning the SAGAbg best-fit and the
+GAMA (Driver+22) best-fit curves (see ``total_density_band`` /
+``plot_total_density_band``). No mock catalog is needed for the band.
 """
 import os
 
 import numpy as np
 from scipy.integrate import quad, cumulative_trapezoid
-from scipy.interpolate import UnivariateSpline, interp1d
+from scipy.interpolate import UnivariateSpline
 from scipy.optimize import brentq
 from astropy.cosmology import Planck18
 
@@ -47,12 +53,12 @@ from astropy.cosmology import Planck18
 # --------------------------------------------------------------------------
 _HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(_HERE, "..", ".."))
-SAGABG_POSTERIOR_PATH = os.path.join(REPO_ROOT, "data", "SAGAbg_smf_posterior.txt")
+SAGABG_SMF_PATH = os.path.join(REPO_ROOT, "data", "SAGAbg_SMF.txt")
 
 # Default SAGAbg environment class to use (one of: all, satellite, field, isolated).
 SAGABG_ENV = "all"
 
-# Recognized environment labels in the SAGAbg MRT table.
+# Recognized SAGAbg-SMF environment labels in the Table 2 file.
 _SAGABG_ENVS = ("all", "satellite", "field", "isolated")
 
 cosmo = Planck18
@@ -94,75 +100,81 @@ def gama_smf(logM):
     return total
 
 
-def load_sagabg_posterior(path=SAGABG_POSTERIOR_PATH, env=SAGABG_ENV):
-    """Load the SAGAbg SMF percentile table (Kado-Fong+2025, Table 5).
+def _parse_latex_central(cell):
+    """Central value from an AASTeX table cell like ``$0.9{7}_{-0.38}^{+0.62}$``.
 
-    The published CDS/MRT file has a header block followed by whitespace-delimited
-    rows with columns::
+    Returns the best-fit number (``0.97`` here): everything before the first
+    ``_`` (the sub/superscript credible interval), with the braces around the
+    least-significant digit stripped. The +/- error terms are intentionally
+    discarded -- only the best-fit value is used.
+    """
+    s = cell.strip().lstrip("$").split("_")[0]
+    return float(s.replace("{", "").replace("}", ""))
 
-        log(M*min)  log(M*max)  SMF05  SMF16  SMF50  SMF84  SMF95  Env
 
-    The SMF columns are *linear* ``dn/dlog10(M*)`` [Mpc^-3 dex^-1] at the 5/16/50/84/95
-    percentiles, and ``Env`` is one of ``all``/``satellite``/``field``/``isolated``.
-    Only rows matching ``env`` are kept. The stellar-mass coordinate is the bin
-    center, ``0.5*(log M*min + log M*max)``.
+def load_sagabg_smf(path=SAGABG_SMF_PATH, env=SAGABG_ENV):
+    """Load the SAGAbg double-Schechter best-fit (Kado-Fong+2025, Table 2).
 
-    Returns a dict with the ``logM`` grid plus callables for each percentile
-    (``central`` = SMF50, ``p5``, ``p16``, ``p50``, ``p84``, ``p95``) that map
-    ``logM`` to the SMF in linear units. Interpolation is done in log10(SMF) vs
-    logM, with constant edge extrapolation just outside the tabulated bins.
+    The file is the published Table 2 (double-Schechter fit parameters). Each
+    SAGAbg row is tab-separated::
+
+        SAGAbg-SMF: <env>  logMmin  logMmax  1e3*phi_0,1  alpha_1  1e3*phi_0,2  alpha_2  log10(Mch)
+
+    with the parameter columns given as AASTeX ``$value_{-lo}^{+hi}$`` strings.
+    Only the central (best-fit) values are kept; the two ``phi_0`` columns are
+    tabulated as ``10^3 * phi_0`` [Mpc^-3] and are scaled back to ``Mpc^-3``.
+
+    Returns a dict with:
+
+    * ``central`` : callable ``logM -> dn/dlog10(M)`` [Mpc^-3 dex^-1], the
+      double Schechter built from two ``schechter_logm`` components sharing
+      ``logMc = log10(Mch)``.
+    * ``env``     : the environment label used.
+    * ``params``  : the parsed best-fit parameters (``phi1``, ``alpha1``,
+      ``phi2``, ``alpha2``, ``logMc``).
+
+    The stellar-mass completeness limits in the file are intentionally ignored:
+    the double Schechter is evaluated freely at any ``logM`` (see module
+    docstring).
     """
     if env not in _SAGABG_ENVS:
         raise ValueError(f"Unknown env {env!r}; expected one of {_SAGABG_ENVS}.")
 
-    rows = []
+    label = f"SAGAbg-SMF: {env}"
+    row = None
     with open(path) as fh:
         for line in fh:
-            parts = line.split()
-            if len(parts) == 8 and parts[-1] == env:
-                try:
-                    vals = [float(x) for x in parts[:7]]
-                except ValueError:
-                    continue
-                rows.append(vals)
-    if not rows:
-        raise ValueError(f"No rows found for env={env!r} in {path}.")
+            if line.startswith(label):
+                row = line.rstrip("\n").split("\t")
+                break
+    if row is None:
+        raise ValueError(f"No row {label!r} found in {path}.")
 
-    arr = np.array(rows)
-    logM = 0.5 * (arr[:, 0] + arr[:, 1])           # bin center
-    order = np.argsort(logM)
-    logM = logM[order]
-    # linear SMF percentile columns
-    smf = {
-        "p5": arr[order, 2],
-        "p16": arr[order, 3],
-        "p50": arr[order, 4],
-        "p84": arr[order, 5],
-        "p95": arr[order, 6],
+    # cols: 0 label, 1 logMmin, 2 logMmax, 3 1e3*phi1, 4 alpha1, 5 1e3*phi2,
+    #       6 alpha2, 7 log10(Mch)
+    params = {
+        "phi1": _parse_latex_central(row[3]) * 1e-3,
+        "alpha1": _parse_latex_central(row[4]),
+        "phi2": _parse_latex_central(row[5]) * 1e-3,
+        "alpha2": _parse_latex_central(row[6]),
+        "logMc": _parse_latex_central(row[7]),
     }
 
-    def _make_callable(smf_col):
-        log_smf_col = np.log10(smf_col)
-        spline = interp1d(
-            logM, log_smf_col, kind="linear",
-            bounds_error=False, fill_value=(log_smf_col[0], log_smf_col[-1]),
+    def _smf(logM):
+        return (
+            schechter_logm(logM, params["phi1"], params["logMc"], params["alpha1"])
+            + schechter_logm(logM, params["phi2"], params["logMc"], params["alpha2"])
         )
-        return lambda lm: 10.0 ** spline(lm)
 
-    posterior = {"logM": logM, "env": env}
-    for key, col in smf.items():
-        posterior[key] = _make_callable(col)
-    posterior["central"] = posterior["p50"]
-    return posterior
+    return {"central": _smf, "env": env, "params": params}
 
 
-def sagabg_smf(logM, posterior, quantile="central"):
-    """Evaluate the SAGAbg SMF at ``logM`` for the requested percentile.
+def sagabg_smf(logM, saga_smf):
+    """Evaluate the SAGAbg best-fit double Schechter at ``logM``.
 
-    ``quantile`` is one of ``central`` (=``p50``), ``p5``, ``p16``, ``p50``,
-    ``p84``, ``p95``.
+    ``saga_smf`` is the dict returned by ``load_sagabg_smf``.
     """
-    return posterior[quantile](logM)
+    return saga_smf["central"](logM)
 
 
 # --------------------------------------------------------------------------
@@ -330,45 +342,25 @@ def total_density_in_bin(smf_func, logM_lo, logM_hi):
     return quad(smf_func, logM_lo, logM_hi)[0]
 
 
-def total_density_band(logM_lo, logM_hi, mode, posterior, gama_smf_func=gama_smf):
+def total_density_band(logM_lo, logM_hi, saga_smf, gama_smf_func=gama_smf):
     """
     Expected total number density in a stellar-mass bin and its band edges.
 
-    mode == "saga_posterior":
-        Integrate the SAGAbg percentile curves over the mass bin.
-        Returns {"central", "lo68", "hi68", "lo_out", "hi_out"} where the inner
-        band is the 16-84 percentile (68%) and the outer band is the 5-95
-        percentile (90%, the widest interval in the published table).
-        NOTE: the table stores *pointwise* percentiles, so integrating the
-        16/84 (and 5/95) curves over the bin is an approximation to the true
-        band on the integrated density (it ignores cross-bin covariance), but is
-        the natural estimate given the published summary.
+    The band spans the SAGAbg best-fit double Schechter (Kado-Fong+2025, Table 2)
+    and the GAMA (Driver+22) best-fit, each integrated over [logM_lo, logM_hi].
 
-    mode == "saga_vs_gama":
-        Band spans the SAGAbg median curve and the GAMA (Driver+22) best-fit.
-        Returns {"central", "lo", "hi"} (central = SAGAbg).
+    ``saga_smf`` is the dict returned by ``load_sagabg_smf``. Returns
+    ``{"central", "lo", "hi", "saga", "gama"}`` with ``central`` = ``saga``.
     """
-    if mode == "saga_posterior":
-        return {
-            "central": total_density_in_bin(posterior["central"], logM_lo, logM_hi),
-            "lo68": total_density_in_bin(posterior["p16"], logM_lo, logM_hi),
-            "hi68": total_density_in_bin(posterior["p84"], logM_lo, logM_hi),
-            "lo_out": total_density_in_bin(posterior["p5"], logM_lo, logM_hi),
-            "hi_out": total_density_in_bin(posterior["p95"], logM_lo, logM_hi),
-        }
-    if mode == "saga_vs_gama":
-        saga_c = total_density_in_bin(posterior["central"], logM_lo, logM_hi)
-        gama_c = total_density_in_bin(gama_smf_func, logM_lo, logM_hi)
-        return {
-            "central": saga_c,
-            "lo": min(saga_c, gama_c),
-            "hi": max(saga_c, gama_c),
-            "saga": saga_c,
-            "gama": gama_c,
-        }
-    raise ValueError(
-        f"Unknown mode {mode!r}; expected 'saga_posterior' or 'saga_vs_gama'."
-    )
+    saga_c = total_density_in_bin(saga_smf["central"], logM_lo, logM_hi)
+    gama_c = total_density_in_bin(gama_smf_func, logM_lo, logM_hi)
+    return {
+        "central": saga_c,
+        "lo": min(saga_c, gama_c),
+        "hi": max(saga_c, gama_c),
+        "saga": saga_c,
+        "gama": gama_c,
+    }
 
 
 def _fuzzy_fill(ax, x, lo, hi, color, alpha_core=0.15, n_layers=15,
@@ -390,31 +382,20 @@ def _fuzzy_fill(ax, x, lo, hi, color, alpha_core=0.15, n_layers=15,
     )
 
 
-def plot_total_density_band(ax, z_range, logM_lo, logM_hi, mode, posterior,
-                            gama_smf_func=gama_smf, color="k", label=None,
-                            alpha_out=0.12, alpha68=0.22):
+def plot_total_density_band(ax, z_range, logM_lo, logM_hi, saga_smf,
+                            gama_smf_func=gama_smf, color="k", label=None):
     """
     Draw the expected total-density band as a horizontal region across
     ``z_range = (z_min, z_max)``.
 
-    * "saga_posterior" : nested outer 90% (5-95, lighter) + inner 68% (16-84,
-      darker) grey bands.
-    * "saga_vs_gama"   : single soft-edged band spanning SAGAbg & GAMA.
+    A single soft-edged band spans the SAGAbg (Kado-Fong+2025, Table 2) and GAMA
+    (Driver+22) best-fit total densities in the mass bin. ``saga_smf`` is the
+    dict returned by ``load_sagabg_smf``.
 
     Returns the band dict from ``total_density_band``.
     """
-    band = total_density_band(logM_lo, logM_hi, mode, posterior,
+    band = total_density_band(logM_lo, logM_hi, saga_smf,
                               gama_smf_func=gama_smf_func)
     x = np.asarray(z_range, dtype=float)
-
-    if mode == "saga_posterior":
-        # Outer 5-95 band, then inner 16-84 band on top.
-        ax.fill_between(x, band["lo_out"], band["hi_out"],
-                        facecolor=color, edgecolor="none", alpha=alpha_out,
-                        label=label)
-        ax.fill_between(x, band["lo68"], band["hi68"],
-                        facecolor=color, edgecolor="none", alpha=alpha68)
-    else:  # "saga_vs_gama"
-        _fuzzy_fill(ax, x, band["lo"], band["hi"], color, label=label)
-
+    _fuzzy_fill(ax, x, band["lo"], band["hi"], color, label=label)
     return band

@@ -85,3 +85,34 @@ for stage ① to succeed), mirroring `submit_make_cat.sh`. Re-running just stage
 (e.g. after changing the FRACFLUX threshold) never repeats the 30 GB base read.
 
 Output (default): `/pscratch/sd/v/virajvm/matterhorn/matterhorn_pix_bgs_lowz_clean.fits`.
+
+## loa dwarf catalog (`select_loa_dwarfs.py`)
+
+The **loa** counterpart of stage ①, for the loa production (still **healpix**, and
+its zcatalog is in the **iron/DR1 format** — one `zall-pix-loa.fits` file, ext
+`ZCATALOG`, redshift cols `Z/ZWARN/DELTACHI2/SPECTYPE` with no `_BEST` suffix, and
+`FLUX_G/R/Z` in the *same* file). Same BGS_BRIGHT/BGS_FAINT/LOW_Z selection and
+redshift/science cuts as the matterhorn selector, plus:
+
+- **Dereddens** g/r/z from `EBV`+`PHOTSYS` (the zcatalog has no `MW_TRANSMISSION_*`)
+  via `desiutil.dust.mwdust_transmission(..., match_legacy_surveys=True)`.
+- **Keeps only dwarfs**: `LOGM_M24 = get_stellar_mass_mia` (de los Reyes+2024
+  Eq.13) from the dereddened g−r, g and redrock z; cut `LOGM_M24 < 9.25`
+  (`--logmstar-max`). No k-correction beyond the estimator, no nebular correction.
+- Carries the same join keys, so **stage ② (`crossmatch_tractorphot.py`) is reused
+  unchanged** to attach `FRACFLUX_*` (from the DR9 sweeps — loa has no public
+  lsdr9-photometry VAC) and apply the FRACFLUX cut.
+
+```bash
+python select_loa_dwarfs.py --help
+```
+
+Job scripts live in `../../job_scripts/catalog_construct/`. From a **login node**:
+
+```bash
+./submit_loa_catalog.sh          # run_select_loa.sh --afterok--> run_crossmatch_loa.sh
+```
+
+Outputs (default, `/pscratch/sd/v/virajvm/loa/`): `loa_pix_bgs_lowz_dwarfs.fits`
+(stage ①), then `loa_pix_bgs_lowz_dwarfs_phot.fits` (all dwarfs + photometry) and
+`loa_pix_bgs_lowz_dwarfs_clean.fits` (FRACFLUX-cut) from stage ②.
