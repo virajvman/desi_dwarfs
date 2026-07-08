@@ -1,0 +1,30 @@
+Table 2 
+Double Schechter Fit Parameters for SAGAbg-SMF and Recent Literature Results
+
+
+Sample	${M}_{\star }^{\min }$ ^a	${M}_{\star }^{\max }$ ^a	10^3phi_0,1	alpha_1	10^3phi_0,2	alpha_2	${\mathrm{log}}_{10}\left(\tfrac{{M}_{\mathrm{ch}}}{{M}_{\odot }}\right)$	
+	(dex)	(dex)	(Mpc^-3)		(Mpc^-3)			
+SAGAbg-SMF: all	6.7	11.3	$0.9{7}_{-0.38}^{+0.62}$	$-1.3{7}_{-0.06}^{+0.05}$	$2.3{0}_{-1.04}^{+1.86}$	$-0.4{1}_{-0.39}^{+0.29}$	$11.2{1}_{-0.45}^{+0.55}$	
+SAGAbg-SMF: satellite	10	7	$0.6{4}_{-0.36}^{+0.70}$	$-1.3{2}_{-0.13}^{+0.11}$	$3.1{3}_{-1.74}^{+3.39}$	$-0.5{2}_{-0.36}^{+0.38}$	$10.8{1}_{-0.96}^{+0.83}$	
+SAGAbg-SMF: field	6.7	10	$0.4{9}_{-0.27}^{+0.59}$	$-1.4{4}_{-0.09}^{+0.09}$	$2.4{2}_{-1.52}^{+3.81}$	$-0.4{1}_{-0.39}^{+0.29}$	$10.9{9}_{-0.93}^{+0.69}$	
+SAGAbg-SMF: isolated	6.9	10	$0.2{8}_{-0.14}^{+0.33}$	$-1.4{8}_{-0.13}^{+0.11}$	$1.4{5}_{-0.93}^{+2.14}$	$-0.4{2}_{-0.37}^{+0.30}$	$10.6{8}_{-0.79}^{+0.77}$	
+								
+S. P. Driver et al. 2022 (GAMA, all)	6.75	11.5	$0.6{3}_{-0.09}^{+0.10}$	$-1.5{3}_{-0.03}^{+0.03}$	$3.6{5}_{-0.13}^{+0.14}$	$-0.4{7}_{-0.07}^{+0.07}$	$10.7{5}_{-0.02}^{+0.02}$	
+I. K. Baldry et al. 2012 (GAMA, all)	8	11.6	$0.{8}_{-0.23}^{+0.23}$	$-1.4{7}_{-0.05}^{+0.05}$	$4.{0}_{-0.34}^{+0.34}$	$-0.{4}_{-0.18}^{+0.18}$	$10.6{6}_{-0.05}^{+0.05}$	
+A. H. Wright et al. 2017 (GAMA, all)	7.5	11.7	$0.{6}_{-0.1}^{+0.1}$	$-1.{5}_{-0.15}^{+0.15}$	$2.{9}_{-0.4}^{+0.4}$	$-0.6{2}_{-0.15}^{+0.15}$	$10.{8}_{-0.2}^{+0.2}$	
+Y.-j. Peng et al. 2010 (SDSS)	8.8	11.8	$0.6{6}_{-0.09}^{+0.09}$	$-1.{6}_{-0.12}^{+0.12}$	$4.{0}_{-0.12}^{+0.12}$	$0.5{2}_{-0.04}^{+0.04}$	$10.6{7}_{-0.01}^{+0.01}$	
+A. Doliva-Dolinsky et al. 2023 (M31 sats)^b	4.1	8.7	cdots	$-1.{5}_{-0.1}^{+0.1}$ ^c	cdots	cdots	cdots	
+E. O. Nadler et al. 2020 (MW sats)^b, ^c	2.5	7.4	cdots	[-1.46, -1.39]^c	cdots	cdots	cdots	
+P. Bennet et al. 2019 (M101 sats)^b	5.2	10.3	cdots	cdots	$-1.{1}_{-0.1}^{+0.1}$ ^c	cdots	cdots	
+D. Crnojevic et al. 2019 (Cen A sats)^b	5.1	10.3	cdots	cdots	$-1.{1}_{-0.2}^{+0.2}$ ^c	cdots	cdots	
+K. Chiboucas et al. 2013 (M81 sats)^b	~5	~10.5	cdots	cdots	$-1.2{7}_{-0.04}^{+0.04}$ ^c	cdots	cdots	
+A. Sbaffoni et al. 2025 (GAMA groups)	8.3	12	cdots	$-1.{5}_{-0.13}^{+0.13}$	cdots	$-0.8{1}_{-0.04}^{+0.04}$	$10.8{7}_{-0.01}^{+0.01}$	
+A. K. Weigel et al. 2016 (SDSS sats)	9	11.5	$0.0{4}_{-0.03}^{+0.08}$	$-1.8{3}_{-0.23}^{+0.23}$	$1.{2}_{-0.9}^{+3.7}$	$-0.8{4}_{-0.08}^{+0.08}$	$10.7{1}_{-0.02}^{+0.02}$	
+C. R. Morgan et al. 2025 (Virgo Cluster)	7	11.8	cdots	$-1.3{5}_{-0.02}^{+0.02}$	cdots	cdots	$11.3{3}_{-0.11}^{+0.17}$	
+J. C. Cuillandre et al. 2025 (Perseus Cluster)	7	11.5	cdots	$-1.2{0}_{-0.02}^{+0.02}$	cdots	cdots	$11.{2}_{-0.1}^{+0.1}$	
+A. Sbaffoni et al. 2025 (GAMA ungrouped)	8.3	12	cdots	$-1.5{7}_{-0.03}^{+0.03}$	cdots	$-0.2{2}_{-0.06}^{+0.06}$	$10.4{1}_{-0.01}^{+0.01}$	
+A. K. Weigel et al. 2016 (SDSS centrals)	9	12	$0.{9}_{-0.20}^{+0.25}$	$-1.1{6}_{-0.05}^{+0.05}$	$1.{6}_{-0.6}^{+0.9}$	$-0.5{1}_{-0.09}^{+0.09}$	$10.8{0}_{-0.01}^{+0.01}$	
+Note. Best-fit parameters for the SMFs presented in Figure 3, as well as some recent literature measurements that include a low-mass component to the SMF. For our results, the marginalized posterior of each parameter is summarized by the 50th percentile in each table entry (super- and subscript values showing the 68% credible interval). We report the uncertainties in the same way as the reference authors. We additionally provide a machine-readable table with our best-fit estimates of phi(M_sstarf) in Table 5 to properly account for covariance between parameters in our posterior reporting.
+^a The approximate limiting stellar masses for each measured SMF are given as ${\mathrm{log}}_{10}[{M}_{\star }/{M}_{\odot }]$. This value should only be taken as an approximation for the literature measurements, and the reader should consult the reference to understand the full mass completeness of each SMF.
+^b Satellite luminosity function results are given as a function of L_V; we estimate the expected limiting stellar mass and low-mass SMF by assuming a constant mass-to-light ratio of M_sstarf/L_V = 1M_sun/L_sun.
+^c Following the reporting of E. O. Nadler et al. (2020), the brackets give the 95% credible interval for the low-mass slope.
