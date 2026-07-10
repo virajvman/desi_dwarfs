@@ -116,6 +116,7 @@ LINES = [
     L("HeI7065",  7065.196, r"He I $\lambda$7065",   "helium"),
     L("HeI7281",  7281.349, r"He I",   "helium"),
     # Paschen
+    L("Pa13", 8665.019, r"Pa13", "paschen"),
     L("Pa12", 8750.472, r"Pa12", "paschen"),
     L("Pa11", 8862.782, r"Pa11", "paschen"),
     # Permitted metals occasionally seen in emission

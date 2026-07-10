@@ -10,7 +10,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=128
 #SBATCH --mem=150GB
-#SBATCH --time=05:00:00
+#SBATCH --time=02:00:00
 #SBATCH --output=nnmf_ntemplate_scan.log
 
 # Walltime raised from 2h: the grid now runs 11 template counts (up to n=20)
