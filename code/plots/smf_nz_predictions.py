@@ -363,39 +363,23 @@ def total_density_band(logM_lo, logM_hi, saga_smf, gama_smf_func=gama_smf):
     }
 
 
-def _fuzzy_fill(ax, x, lo, hi, color, alpha_core=0.15, n_layers=15,
-                spread_dex=0.1, alpha_each=0.025, label=None):
-    """Soft-edged horizontal fill between ``lo`` and ``hi`` (log-space fuzz)."""
-    log_hi = np.log10(np.full_like(x, hi, dtype=float))
-    log_lo = np.log10(np.full_like(x, lo, dtype=float))
-    for j in range(n_layers):
-        frac = (j + 1) / n_layers
-        offset = spread_dex * frac
-        ax.fill_between(
-            x, 10.0 ** (log_hi + offset), 10.0 ** (log_lo - offset),
-            facecolor=color, edgecolor="none", alpha=alpha_each,
-            label=label if j == 0 else None,
-        )
-    ax.fill_between(
-        x, 10.0 ** log_hi, 10.0 ** log_lo,
-        facecolor=color, edgecolor="none", alpha=alpha_core,
-    )
-
-
 def plot_total_density_band(ax, z_range, logM_lo, logM_hi, saga_smf,
                             gama_smf_func=gama_smf, color="k", label=None):
     """
     Draw the expected total-density band as a horizontal region across
     ``z_range = (z_min, z_max)``.
 
-    A single soft-edged band spans the SAGAbg (Kado-Fong+2025, Table 2) and GAMA
-    (Driver+22) best-fit total densities in the mass bin. ``saga_smf`` is the
-    dict returned by ``load_sagabg_smf``.
+    A single ``fill_between`` spans the SAGAbg (Kado-Fong+2025, Table 2) and
+    GAMA (Driver+22) best-fit total densities in the mass bin. ``saga_smf`` is
+    the dict returned by ``load_sagabg_smf``.
 
     Returns the band dict from ``total_density_band``.
     """
     band = total_density_band(logM_lo, logM_hi, saga_smf,
                               gama_smf_func=gama_smf_func)
     x = np.asarray(z_range, dtype=float)
-    _fuzzy_fill(ax, x, band["lo"], band["hi"], color, label=label)
+    ax.fill_between(
+        x, band["lo"], band["hi"],
+        facecolor=color, edgecolor="none", alpha=0.15, label=label,
+    )
     return band

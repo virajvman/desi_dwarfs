@@ -188,7 +188,7 @@ if __name__ == "__main__":
     ax.set_xlabel(r"$\log_{10}(Z/Z_\odot)$")
     ax.set_ylabel(r"$\log_{10}\,C(Z_*)$ [erg/s]")
     ax.set_xlim(-2, 0)
-    ax.set_ylim(41.25, 42)
+    ax.set_ylim(41.25, 41.9)
 
     for i in range(10):
         #the factor of 0.2 is for the young mzr correction. see sfr_and_metallicity.py
