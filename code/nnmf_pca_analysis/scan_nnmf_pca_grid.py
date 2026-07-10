@@ -15,8 +15,10 @@ feed the hist2d panels in template_investigations.ipynb:
 
     global      mean over validation objects of the per-object reduced chi^2
     line        mean over objects of chi^2 per good line-window pixel
-    hisnr_p99   99th-percentile (worst-fit tail) of the reduced chi^2 among the
-                top-HISNR_TOP_FRACTION objects by median per-pixel S/N
+    hisnr       MEAN reduced chi^2 among the top-HISNR_TOP_FRACTION (10%) objects
+                by median per-pixel S/N -- "fit quality of the best-measured
+                spectra." (The 99th-percentile tail hisnr_redchi2_p99 is also
+                computed and saved, but the mean is the plotted metric.)
 
 Why this is cheap: PCA is nested, so one SVD of the training residuals at each
 n_nmf yields *every* n_pca truncation at once. The only per-n_nmf work is one
@@ -93,8 +95,9 @@ SEED = 42
 # Percentile of the per-object reduced chi^2 distribution reported for the
 # high-S/N subset (the worst-fit tail -- where genuine structure the templates
 # miss shows up; the mean/median of this subset is noise-floor flat).
-HISNR_PERCENTILE = 99.0
-HISNR_TOP_FRACTION = 0.25   # top fraction by median per-pixel S/N
+HISNR_PERCENTILE = 99.0     # still computed + saved (hisnr_redchi2_p99), not plotted
+HISNR_TOP_FRACTION = 0.10   # top fraction by median per-pixel S/N; the plotted
+                            # hi-S/N metric is the MEAN reduced chi^2 of this subset
 
 # Emission-line windows for the line-region chi^2 (VACUUM Angstrom, +/- 10 A
 # rest-frame). Identical set to scan_nnmf_ntemplates.py.

@@ -89,7 +89,11 @@ LINE_CENTERS = [3727.09, 3729.88,   # [OII]
 LINE_HALFWIDTH = 10.0   # Angstrom, rest-frame
 
 # Fraction of objects (by per-pixel SNR) kept for the "high-SNR subset" metric.
-HISNR_TOP_FRACTION = 0.25
+# The figures use the MEAN reduced chi^2 of this subset (top 10%). Kept in sync
+# with scan_nnmf_pca_grid.py. (Panel 1's hi-S/N curve is actually read from the
+# combined grid's n_pca=0 slice, so a Stage-1 rerun is not required to change
+# this fraction -- but keep them equal so the CSV columns stay consistent.)
+HISNR_TOP_FRACTION = 0.10
 
 
 # ----------------------------------------------------------------------------
