@@ -15,10 +15,12 @@ feed the hist2d panels in template_investigations.ipynb:
 
     global      mean over validation objects of the per-object reduced chi^2
     line        mean over objects of chi^2 per good line-window pixel
-    hisnr       MEAN reduced chi^2 among the top-HISNR_TOP_FRACTION (10%) objects
-                by median per-pixel S/N -- "fit quality of the best-measured
-                spectra." (The 99th-percentile tail hisnr_redchi2_p99 is also
-                computed and saved, but the mean is the plotted metric.)
+    hisnr_mean_top{1,5,10}
+                MEAN reduced chi^2 among the top {1,5,10}% of objects by median
+                per-pixel S/N -- "fit quality of the best-measured spectra." The
+                paper figure uses top 10%; 1% and 5% are for experimentation.
+                (All fractions reselect from the same per-object chi^2 -- no extra
+                fits and no NMF retrain, so this is a Stage-2-only change.)
 
 Why this is cheap: PCA is nested, so one SVD of the training residuals at each
 n_nmf yields *every* n_pca truncation at once. The only per-n_nmf work is one
@@ -95,9 +97,13 @@ SEED = 42
 # Percentile of the per-object reduced chi^2 distribution reported for the
 # high-S/N subset (the worst-fit tail -- where genuine structure the templates
 # miss shows up; the mean/median of this subset is noise-floor flat).
-HISNR_PERCENTILE = 99.0     # still computed + saved (hisnr_redchi2_p99), not plotted
-HISNR_TOP_FRACTION = 0.10   # top fraction by median per-pixel S/N; the plotted
-                            # hi-S/N metric is the MEAN reduced chi^2 of this subset
+# Top-S/N subsets to characterize (fraction by median per-pixel S/N). For each we
+# report the MEAN reduced chi^2 -- "fit quality of the best-measured spectra."
+# The paper figure uses top 10%; 1% and 5% are kept for experimentation. All are
+# computed in one pass (they only reselect objects from the same per-object chi^2;
+# no extra fits), so adding fractions costs ~nothing and needs no NMF retrain.
+HISNR_TOP_FRACTIONS = [0.01, 0.05, 0.10]
+HISNR_KEYS = {f: f"hisnr_mean_top{int(round(f * 100))}" for f in HISNR_TOP_FRACTIONS}
 
 # Emission-line windows for the line-region chi^2 (VACUUM Angstrom, +/- 10 A
 # rest-frame). Identical set to scan_nnmf_ntemplates.py.
@@ -165,9 +171,11 @@ if __name__ == "__main__":
     snr_pix[~good_valid] = np.nan
     snr_valid = np.nanmedian(snr_pix, axis=0)
     del snr_pix
-    hi_mask = snr_valid >= np.nanpercentile(snr_valid, 100 * (1 - HISNR_TOP_FRACTION))
-    print(f"high-S/N subset: {int(hi_mask.sum())} objects "
-          f"(top {HISNR_TOP_FRACTION:.0%})")
+    hi_masks = {}   # fraction -> boolean torch mask of the top-S/N validation objects
+    for frac in HISNR_TOP_FRACTIONS:
+        m = snr_valid >= np.nanpercentile(snr_valid, 100 * (1 - frac))
+        hi_masks[frac] = torch.tensor(m, device=device)
+        print(f"high-S/N subset top {frac:.0%}: {int(m.sum())} objects")
 
     sqrt_ivar_train = np.sqrt(np.clip(ivar_train, 0, None))
     sqrt_ivar_valid = np.sqrt(np.clip(ivar_valid, 0, None))
@@ -177,7 +185,6 @@ if __name__ == "__main__":
     ngood_valid_t = torch.tensor(ngood_valid.astype("f4"), device=device)
     ngood_line_valid_t = torch.tensor(np.maximum(ngood_line_valid, 1).astype("f4"),
                                       device=device)
-    hi_mask_t = torch.tensor(hi_mask, device=device)
     kx = np.arange(0, K_MAX + 1)                               # PCA axis, incl 0
 
     # Output grids, shape (n_nmf, K_MAX+1).
@@ -187,12 +194,17 @@ if __name__ == "__main__":
         "global_redchi2_mean":   np.full(grid_shape, np.nan, "f4"),
         "global_redchi2_median": np.full(grid_shape, np.nan, "f4"),
         "line_chi2_mean":        np.full(grid_shape, np.nan, "f4"),
-        "hisnr_redchi2_p99":     np.full(grid_shape, np.nan, "f4"),
-        "hisnr_redchi2_mean":    np.full(grid_shape, np.nan, "f4"),
         "cum_evr_valid":         np.full(grid_shape, np.nan, "f4"),
     }
+    for frac in HISNR_TOP_FRACTIONS:      # one MEAN-chi^2 grid per S/N fraction
+        out[HISNR_KEYS[frac]] = np.full(grid_shape, np.nan, "f4")
     first_below_null = np.zeros(G, dtype="i4")
-    nmf_only_global_mean = np.full(G, np.nan, "f4")   # pure-NNMF anchor (Panel 1)
+    # Exact pure-NMF anchors: NMF templates ONLY -- no PCA and no residual-mean
+    # term. (The n_pca=0 grid column is centered PCA, so it still subtracts the
+    # mean residual and is <= pure NMF; see module docstring.) One per metric.
+    nmf_only_global_mean = np.full(G, np.nan, "f4")
+    nmf_only_line_mean = np.full(G, np.nan, "f4")
+    nmf_only_hisnr = {frac: np.full(G, np.nan, "f4") for frac in HISNR_TOP_FRACTIONS}
 
     for gi, n_nmf in enumerate(N_TEMPLATE_GRID):
         print_stage(f"n_nmf = {n_nmf}")
@@ -209,11 +221,16 @@ if __name__ == "__main__":
         X_valid = torch.tensor(res_valid, device=device)
         del res_train, res_valid
 
-        # Pure-NNMF chi^2 anchor: sum of squared noise-normalized residual over
-        # all pixels == Stage-1 chi2_global (masked pixels are 0). Reduced by dof.
-        ss_valid = (X_valid ** 2).sum(1)                                   # (n_valid,)
-        red_nmf_only = ss_valid / torch.clamp(ngood_valid_t - n_nmf, min=1)
+        # Pure-NMF chi^2 anchors (NMF templates only: no PCA, no residual-mean
+        # subtraction). Computed from X_valid = noise-normalized residual BEFORE
+        # centering; masked pixels are 0 so the global one == Stage-1 chi2_global.
+        ss_valid      = (X_valid ** 2).sum(1)                              # (n_valid,) all pix
+        ss_line_valid = (X_valid[:, line_idx] ** 2).sum(1)                 # (n_valid,) line pix
+        red_nmf_only  = ss_valid / torch.clamp(ngood_valid_t - n_nmf, min=1)
         nmf_only_global_mean[gi] = float(red_nmf_only.mean().cpu())
+        nmf_only_line_mean[gi]   = float((ss_line_valid / ngood_line_valid_t).mean().cpu())
+        for frac in HISNR_TOP_FRACTIONS:
+            nmf_only_hisnr[frac][gi] = float(red_nmf_only[hi_masks[frac]].mean().cpu())
 
         # --- PCA on training residuals (centered on training mean) ------------
         mean_ = X_train.mean(0, keepdim=True)
@@ -264,10 +281,8 @@ if __name__ == "__main__":
         out["global_redchi2_median"][gi] = red_glob.median(0).values.cpu().numpy()
         out["line_chi2_mean"][gi]        = red_line.mean(0).cpu().numpy()
 
-        red_glob_hi = red_glob[hi_mask_t]
-        out["hisnr_redchi2_mean"][gi] = red_glob_hi.mean(0).cpu().numpy()
-        out["hisnr_redchi2_p99"][gi]  = torch.quantile(
-            red_glob_hi, HISNR_PERCENTILE / 100.0, dim=0).cpu().numpy()
+        for frac in HISNR_TOP_FRACTIONS:
+            out[HISNR_KEYS[frac]][gi] = red_glob[hi_masks[frac]].mean(0).cpu().numpy()
 
         # Cumulative explained variance of the held-out residual (per k).
         cev = np.zeros(K_MAX + 1, "f4")
@@ -285,11 +300,11 @@ if __name__ == "__main__":
         fbn = int(np.argmax(~above)) if (~above).any() else int(S.shape[0])
         first_below_null[gi] = fbn
 
+        _h10 = out[HISNR_KEYS[0.10]]
         print(f"  n_nmf={n_nmf}: pure-NNMF redchi2 mean={nmf_only_global_mean[gi]:.4f}; "
               f"global(k=0)={out['global_redchi2_mean'][gi,0]:.4f} -> "
               f"(k={K_MAX})={out['global_redchi2_mean'][gi,K_MAX]:.4f}; "
-              f"hisnr_p99(k=0)={out['hisnr_redchi2_p99'][gi,0]:.3f} -> "
-              f"(k={K_MAX})={out['hisnr_redchi2_p99'][gi,K_MAX]:.3f}; "
+              f"hisnr(top10) mean(k=0)={_h10[gi,0]:.3f} -> (k={K_MAX})={_h10[gi,K_MAX]:.3f}; "
               f"null crossing k={fbn}")
 
         del Z_train, Z_valid, T, T2, cumT2, chi2_glob, chi2_line, recon_line
@@ -306,6 +321,9 @@ if __name__ == "__main__":
              k_grid=kx,
              first_below_null=first_below_null,
              nmf_only_global_mean=nmf_only_global_mean,
+             nmf_only_line_mean=nmf_only_line_mean,
+             **{f"nmf_only_hisnr_top{int(round(f * 100))}": nmf_only_hisnr[f]
+                for f in HISNR_TOP_FRACTIONS},
              **out)
     print(f"saved -> {RESULTS_DIR}/nnmf_pca_grid_summary.npz")
 
@@ -316,7 +334,7 @@ if __name__ == "__main__":
     extent = [kx[0] - 0.5, kx[-1] + 0.5, 0, len(n_arr)]
     panels = [("global_redchi2_mean", r"global mean reduced $\chi^2$"),
               ("line_chi2_mean",      r"line-region $\chi^2$ / line pixel"),
-              ("hisnr_redchi2_p99",   r"hi-S/N p99 reduced $\chi^2$")]
+              (HISNR_KEYS[0.10],      r"hi-S/N (top 10%) mean reduced $\chi^2$")]
     fig, axes = plt.subplots(1, 3, figsize=(21, 6), layout="constrained")
     for ax, (key, label) in zip(axes, panels):
         Zg = out[key]
