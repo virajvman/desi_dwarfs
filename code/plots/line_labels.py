@@ -137,13 +137,13 @@ LINES = [
 # categories: caii, balmer_abs, gband, metals, molecular
 ABSORPTION = [
     L("CaK",        3933.663, r"Ca II K",   "caii",      True),
-    L("CaH",        3968.468, r"Ca II H $\lambda$3968",   "caii",      True),
+    # L("CaH",        3968.468, r"Ca II H $\lambda$3968",   "caii",      True),
     L("CN4150",     4150.000, r"CN $\lambda$4150",        "molecular"),
     L("CaI4227",    4226.730, r"Ca I $\lambda$4227",      "metals"),   # VALD solar depth 0.97
-    L("SrII4078",   4077.709, r"Sr II $\lambda$4078",     "metals"),   # d=0.97, luminosity-sensitive
-    L("BaII4554",   4554.033, r"Ba II $\lambda$4554",     "metals"),   # d=0.91, s-process
+    # L("SrII4078",   4077.709, r"Sr II $\lambda$4078",     "metals"),   # d=0.97, luminosity-sensitive
+    # L("BaII4554",   4554.033, r"Ba II $\lambda$4554",     "metals"),   # d=0.91, s-process
     L("Gband",      4304.400, r"G band $\lambda$4304",    "gband",     True),
-    L("FeI4383",    4383.500, r"Fe I $\lambda$4383",      "metals"),   # d=0.96
+    # L("FeI4383",    4383.500, r"Fe I $\lambda$4383",      "metals"),   # d=0.96
     L("FeI5270",    5270.000, r"Fe I $\lambda$5270",      "metals"),
     L("FeI5335",    5335.000, r"Fe I $\lambda$5335",      "metals"),
     L("FeI5406",    5406.000, r"Fe I $\lambda$5406",      "metals"),
@@ -162,11 +162,11 @@ ABSORPTION = [
     # bracket like K I; entries kept here for provenance. NOTE: at stack
     # resolution the doublet blends with Fe I 8199/8208 + Mg I 8213 + Fe I 8220
     # into one ~8180-8235 depression, so the bracket reads narrower than the dip.
-    L("NaI8183",    8183.260, r"Na I $\lambda$8183",      "metals",    True),   # d=0.52
-    L("NaI8195",    8194.827, r"Na I $\lambda$8195",      "metals",    True),   # d=0.55
-    # deepest singles between K I and the Ca II triplet (VALD solar depths)
-    L("FeI8327",    8327.051, r"Fe I $\lambda$8327",      "metals"),   # d=0.64
-    L("FeI8388",    8387.775, r"Fe I $\lambda$8388",      "metals"),   # d=0.65
+    # L("NaI8183",    8183.260, r"Na I $\lambda$8183",      "metals",    True),   # d=0.52
+    # L("NaI8195",    8194.827, r"Na I $\lambda$8195",      "metals",    True),   # d=0.55
+    # # deepest singles between K I and the Ca II triplet (VALD solar depths)
+    # L("FeI8327",    8327.051, r"Fe I $\lambda$8327",      "metals"),   # d=0.64
+    # L("FeI8388",    8387.775, r"Fe I $\lambda$8388",      "metals"),   # d=0.65
 ]
 
 
