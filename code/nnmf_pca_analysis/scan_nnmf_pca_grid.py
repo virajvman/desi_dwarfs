@@ -321,16 +321,16 @@ if __name__ == "__main__":
         cs = ax.contour(kx, np.arange(len(n_arr)) + 0.5, Zg,
                         colors="w", linewidths=0.7, alpha=0.7)
         ax.clabel(cs, inline=True, fontsize=7, fmt="%.2f")
-        # null-floor crossing per n_nmf
-        ax.plot(first_below_null, np.arange(len(n_arr)) + 0.5, "c.-", lw=1,
-                ms=6, label="noise-floor crossing")
+        # NOTE: first_below_null is saved but NOT plotted -- the parallel-analysis
+        # crossing is unstable once the residual is near-white (it jumps to ~n_pix/2
+        # for large n_nmf) and is not a reliable estimator here. The paper figure
+        # (template_investigations.ipynb) reads the grid as chi^2-vs-n_pca curves.
         ax.set_yticks(np.arange(len(n_arr)) + 0.5)
         ax.set_yticklabels(n_arr)
         ax.set_xlabel("# residual PCA components")
         ax.set_ylabel("# NNMF templates")
         ax.set_title(label)
         fig.colorbar(im, ax=ax, shrink=0.85)
-    axes[0].legend(loc="upper right", fontsize=8)
     plt.savefig(f"{RESULTS_DIR}/nnmf_pca_grid.pdf", bbox_inches="tight")
     plt.close()
     print(f"saved -> {RESULTS_DIR}/nnmf_pca_grid.pdf\nDone.")

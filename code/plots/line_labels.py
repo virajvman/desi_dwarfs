@@ -139,9 +139,11 @@ ABSORPTION = [
     L("CaK",        3933.663, r"Ca II K",   "caii",      True),
     L("CaH",        3968.468, r"Ca II H $\lambda$3968",   "caii",      True),
     L("CN4150",     4150.000, r"CN $\lambda$4150",        "molecular"),
-    L("CaI4227",    4226.730, r"Ca I $\lambda$4227",      "metals"),
+    L("CaI4227",    4226.730, r"Ca I $\lambda$4227",      "metals"),   # VALD solar depth 0.97
+    L("SrII4078",   4077.709, r"Sr II $\lambda$4078",     "metals"),   # d=0.97, luminosity-sensitive
+    L("BaII4554",   4554.033, r"Ba II $\lambda$4554",     "metals"),   # d=0.91, s-process
     L("Gband",      4304.400, r"G band $\lambda$4304",    "gband",     True),
-    L("FeI4383",    4383.500, r"Fe I $\lambda$4383",      "metals"),
+    L("FeI4383",    4383.500, r"Fe I $\lambda$4383",      "metals"),   # d=0.96
     L("FeI5270",    5270.000, r"Fe I $\lambda$5270",      "metals"),
     L("FeI5335",    5335.000, r"Fe I $\lambda$5335",      "metals"),
     L("FeI5406",    5406.000, r"Fe I $\lambda$5406",      "metals"),
@@ -156,21 +158,40 @@ ABSORPTION = [
     L("MgI8807",    8806.800, r"Mg I $\lambda$8807",      "metals"),
     L("KI7665",     7664.900, r"K I $\lambda$7665",       "metals",    True),
     L("KI7699",     7698.960, r"K I $\lambda$7699",       "metals"),
+    # Na I doublet ("Na 8190", gravity/IMF-sensitive) -- drawn as a mark_span
+    # bracket like K I; entries kept here for provenance. NOTE: at stack
+    # resolution the doublet blends with Fe I 8199/8208 + Mg I 8213 + Fe I 8220
+    # into one ~8180-8235 depression, so the bracket reads narrower than the dip.
+    L("NaI8183",    8183.260, r"Na I $\lambda$8183",      "metals",    True),   # d=0.52
+    L("NaI8195",    8194.827, r"Na I $\lambda$8195",      "metals",    True),   # d=0.55
+    # deepest singles between K I and the Ca II triplet (VALD solar depths)
+    L("FeI8327",    8327.051, r"Fe I $\lambda$8327",      "metals"),   # d=0.64
+    L("FeI8388",    8387.775, r"Fe I $\lambda$8388",      "metals"),   # d=0.65
 ]
 
 
 # ---- ABSORPTION FAMILIES (for "forest" span bars) -------------------
 # AIR wavelengths (Angstrom) of the family members that populate the red-optical
 # metal forest.  The span bar is drawn from the bluest to reddest member that
-# lands inside the panel (see mark_span, waves=...).  Ni I is folded into the
-# Fe I forest as an Fe-peak neutral, per the figure design.  These are the
-# members in the ~5400-7200 A window; add more if you widen the panels.
-FEI_FOREST_AIR = [
-    5405.80, 5455.61, 5476.90, 5572.84, 5587.50, 5615.64, 5658.82, 5710.00,
+# lands inside the panel (see mark_span, waves=...).  These are the members in
+# the ~5400-7200 A window; add more if you widen the panels.
+#
+# Verified against a VALD3 Extract Stellar run (solar: Teff=5777, logg=4.44,
+# vmic=1 km/s); every member matches a line of solar central depth >= 0.4.
+# NOT all iron: 5476.90 and 6643.63 are Ni I, 5782.00 is Cu I, 6914.56 is
+# Ni I -- hence "Fe-peak forest", not "Fe I forest", in the legend.
+FE_PEAK_FOREST_AIR = [
+    5405.80, 5455.61, 5476.90, 5572.84,
+    5586.76,   # was 5587.50, which is a weak sibling (d=0.28 vs 0.78)
+    5615.64, 5658.82,
+    5709.38,   # was 5710.00, which sits on a d=0.10 line (strong one is d=0.67)
     5782.00, 6137.69, 6191.56, 6400.00, 6411.65, 6421.35, 6430.85, 6592.91,
-    6609.11, 6633.75, 6643.63, 6841.34, 6855.16, 6914.00, 6945.20, 6978.85,
-    7016.99, 7112.17, 7130.92,
+    6609.11, 6633.75, 6643.63, 6841.34, 6855.16,
+    6914.56,   # was 6914.00; nearest real line is Ni I 6914.56 (d=0.45)
+    6945.20, 6978.85, 7016.99, 7130.92,
+    # dropped: 7112.17 (nothing deeper than d=0.24 within 3 A)
 ]
+FEI_FOREST_AIR = FE_PEAK_FOREST_AIR   # back-compat alias for existing notebooks
 CAI_SERIES_AIR = [
     6102.72, 6122.22, 6162.17, 6169.04, 6439.08, 6449.81, 6462.57, 6471.66,
 ]
