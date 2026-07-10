@@ -16,7 +16,6 @@ import sys
 import numpy as np
 from pathlib import Path
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from plot_style import apply_paper_style, make_subplots, MARGIN_LABEL, MARGIN_PAD
@@ -50,7 +49,6 @@ CACHE_PATH = BPASS_ROOT / "cache" / "bpass_C_Zstar_t100Myr.npz"
 MMAX_VARIANTS = {"100": "chab100", "300": "chab300"}
 
 COLOR_BINARY = "#7b3294"
-COLOR_SINGLE = "#008837"
 
 SFR        = 1.0
 T_CONST    = 100e6
@@ -173,10 +171,15 @@ if __name__ == "__main__":
     )
     ax = axes[0]
 
+    # Shaded band = full model-systematics envelope. Floor is single+Mmax=100
+    # (always the minimum C), ceiling is binary+Mmax=300 (always the maximum);
+    # ordering is fixed across all metallicities (no crossover).
+    ax.fill_between(log_Z_Zsol, logC_sin_100, logC_bin_300,
+                    facecolor=COLOR_BINARY, alpha=0.15, edgecolor="none",
+                    zorder=0)
+
+    # Fiducial model used in this work: binary, Mmax = 100 M_sun.
     ax.plot(log_Z_Zsol, logC_bin_100, color=COLOR_BINARY, ls="-", lw=3.0)
-    ax.plot(log_Z_Zsol, logC_bin_300, color=COLOR_BINARY, ls="-", lw=1.0)
-    ax.plot(log_Z_Zsol, logC_sin_100, color=COLOR_SINGLE, ls="--", lw=3.0, alpha=0.6)
-    ax.plot(log_Z_Zsol, logC_sin_300, color=COLOR_SINGLE, ls="--", lw=1.0, alpha=0.6)
 
     ax.axhline(41.30, color="k", ls=":", lw=1, alpha=0.5)
     ax.text(-2.175+0.25, 41.305, "KE12", color="k", alpha=0.5, fontsize=9,
@@ -196,17 +199,9 @@ if __name__ == "__main__":
     ax.text( -0.715 - 0.135 + 0.2 , 41.35-0.025,r"$10^{9.25} M_{\odot}$", color="k",rotation=90,fontsize = 8)
 
 
-    legend_handles = [
-        Line2D([0], [0], color=COLOR_BINARY, ls="-", lw=1.5, label="Binary"),
-        Line2D([0], [0], color=COLOR_SINGLE, ls="--", lw=1.5, alpha=0.6,
-               label="Single"),
-        Line2D([0], [0], color="k", ls="-", lw=3.0,
-               label=r"$M_\mathrm{max}=100\,M_\odot$"),
-        Line2D([0], [0], color="k", ls="-", lw=1.0,
-               label=r"$M_\mathrm{max}=300\,M_\odot$"),
-    ]
-    ax.legend(handles=legend_handles, loc="upper right", 
-    handlelength=1, handletextpad=0.5, fontsize=10, ncol=2, columnspacing=0.75)
+    # Inline label on the fiducial curve (matches the KE12 inline-text style).
+    ax.text(-1.9, 41.72, "BPASS binary,\n" r"$M_\mathrm{max}=100\,M_\odot$",
+            color=COLOR_BINARY, fontsize=9, va="bottom", ha="left")
 
     outpath = BPASS_ROOT / "figures" / "bpass_C_Zstar_calibration.pdf"
     outpath.parent.mkdir(parents=True, exist_ok=True)
