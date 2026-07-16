@@ -20,8 +20,7 @@ Explore the DESI Dwarf Galaxy catalog interactively in your browser.
 
 ### Data Access
 
-**NERSC** &mdash; The catalog and companion data products live in the DESI CFS project space at NERSC. These are permanent, group-readable paths (readable by members of the `desi` unix group); unlike `$PSCRATCH`, they are not subject to purge.
-
+**NERSC** &mdash; The catalog and companion data products live in the DESI CFS project space at NERSC. 
 | Product | Path |
 | :------ | :--- |
 | Main Catalog (FITS) | `/global/cfs/cdirs/desi/users/virajvm/desi_dwarf_cats/iron/desi_dr1_dwarf_catalog.fits` |
