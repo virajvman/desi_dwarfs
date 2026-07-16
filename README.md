@@ -20,13 +20,13 @@ Explore the DESI Dwarf Galaxy catalog interactively in your browser.
 
 ### Data Access
 
-**NERSC** &mdash; The catalog and companion data products are available at the following paths on the NERSC Perlmutter filesystem:
+**NERSC** &mdash; The catalog and companion data products live in the DESI CFS project space at NERSC. These are permanent, group-readable paths (readable by members of the `desi` unix group); unlike `$PSCRATCH`, they are not subject to purge.
 
 | Product | Path |
 | :------ | :--- |
-| Main Catalog (FITS) | `/pscratch/sd/v/virajvm/desi_dwarf_catalogs/dr1/v1.0/desi_dr1_dwarf_catalog.fits` |
-| Spectra (HDF5) | `/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/iron_spectra/spectra_files/data/desi_dr1_dwarf_catalog_spectra.h5` |
-| Image Cutouts (HDF5) | `/pscratch/sd/v/virajvm/catalog_dr1_dwarfs/ssl_shred_data/desi_dr1_dwarf_catalog_images.h5` |
+| Main Catalog (FITS) | `/global/cfs/cdirs/desi/users/virajvm/desi_dwarf_cats/iron/desi_dr1_dwarf_catalog.fits` |
+| Spectra (HDF5) | `/global/cfs/cdirs/desi/users/virajvm/desi_dwarf_cats/iron/spectra/desi_dr1_dwarf_catalog_spectra.h5` |
+| Image Cutouts (HDF5) | `/global/cfs/cdirs/desi/users/virajvm/desi_dwarf_cats/iron/images/desi_dr1_dwarf_catalog_images.h5` |
 
 <!-- TODO: add Zenodo / public download links here -->
 
@@ -463,7 +463,7 @@ Spectroscopically **derived** value-added properties computed by [`code/add_nebu
 
 <br>
 
-We provide 152 x 152 pixel *grz* image cutouts for all galaxies in the catalog with *z*-band magnitude < 20. The cutouts are stored in an HDF5 (`.h5`) file with the following datasets:
+We provide 152 x 152 pixel *grz* image cutouts for catalog galaxies with *z*-band magnitude < 20. Cutouts are available for **254,338** objects; a further **10,690** catalog galaxies with `MAG_Z` < 20 do not yet have a cutout. Every row is TARGETID-matched to the catalog, and the file is de-duplicated (one row per TARGETID). The cutouts are stored in an HDF5 (`.h5`) file with the following datasets:
 
 | Dataset | Shape | Type | Description |
 | :------ | :---- | :--- | :---------- |
@@ -472,7 +472,7 @@ We provide 152 x 152 pixel *grz* image cutouts for all galaxies in the catalog w
 
 For sources identified as shredded, the image cutouts have been recentered on the reconstructed parent galaxy center. Example code demonstrating how to read the HDF5 file and visualize the image cutouts is provided in the tutorials.
 
-**NERSC path:** `$PSCRATCH/catalog_dr1_dwarfs/ssl_shred_data/desi_dr1_dwarf_catalog_images.h5`
+**NERSC path:** `/global/cfs/cdirs/desi/users/virajvm/desi_dwarf_cats/iron/images/desi_dr1_dwarf_catalog_images.h5`
 
 </details>
 
@@ -492,10 +492,11 @@ We provide camera-coadded (*b+r+z*) DESI spectra for all objects in the catalog.
 | `WAVE` | (N_wave,) | float32 | Shared wavelength grid in Angstroms |
 | `FLUX` | (N, N_wave) | float32 | Flux density in units of 10<sup>&minus;17</sup> erg s<sup>&minus;1</sup> cm<sup>&minus;2</sup> &Aring;<sup>&minus;1</sup> |
 | `FLUX_IVAR` | (N, N_wave) | float32 | Inverse variance of `FLUX` |
+| `EBV` | (N,) | float32 | Milky Way *E(B&minus;V)* reddening at the object position |
 
 Example code demonstrating how to read the HDF5 file and visualize the spectra is provided in the tutorials.
 
-**NERSC path:** `$PSCRATCH/catalog_dr1_dwarfs/iron_spectra/spectra_files/data/desi_dr1_dwarf_catalog_spectra.h5`
+**NERSC path:** `/global/cfs/cdirs/desi/users/virajvm/desi_dwarf_cats/iron/spectra/desi_dr1_dwarf_catalog_spectra.h5`
 
 </details>
 
