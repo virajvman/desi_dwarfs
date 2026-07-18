@@ -72,6 +72,8 @@ def synth_rmag(wave, flux_1e17):
 FSPS_DIR = "/global/u1/v/virajvm/DESI2_LOWZ/quenched_fracs_nbs/fsps_model_spectra"
 FSPS_SF = f"{FSPS_DIR}/spectra_emi_mlogz_0.2_mlogu_1.5_tau_2_age_2.00.txt"
 FSPS_QU = f"{FSPS_DIR}/spectra_cont_mlogz_0.5_mlogu_1.0_tau_1_age_10.00.txt"
+# median-EW dwarf (EW(Halpha) ~ 21 A, near the real BGS-dwarf median)
+FSPS_MED = f"{FSPS_DIR}/spectra_emi_mlogz_1.2_mlogu_3.5_tau_2_age_8.00.txt"
 
 
 def pick_templates():
@@ -82,7 +84,7 @@ def pick_templates():
     mag -- so the two spectra are returned on a common wavelength grid.
     """
     spec = {}
-    for name, path in (("SF", FSPS_SF), ("QU", FSPS_QU)):
+    for name, path in (("SF", FSPS_SF), ("QU", FSPS_QU), ("MED", FSPS_MED)):
         w, f = np.loadtxt(path, unpack=True)
         spec[name] = (w, f)
         print(f"{name}: {os.path.basename(path)} "
@@ -138,6 +140,10 @@ def simulate():
     print("SCORES donor:", sc_tmpl)
 
     for k, (name, frest) in enumerate(tmpl.items()):
+        if (os.path.exists(f"{DEMO_DIR}/fwd_demo_{name}.fits")
+                and os.path.exists(f"{DEMO_DIR}/fwd_demo_{name}_truth.fits")):
+            print(f"{name}: exists, skipping")
+            continue
         # redshift, resample, and normalize once at mag=20, then scale
         fobs = np.interp(wave_obs, wave_rest * (1 + Z_DEMO), frest / (1 + Z_DEMO))
         m0 = synth_rmag(wave_obs, fobs)[0]
@@ -303,11 +309,55 @@ def plot_figures():
         print(f"wrote {OUT_DIR}/fwdmodel_recovery.{ext}")
 
 
+def plot_recovery_single():
+    """Single-panel recovery figure: one curve per type, catalog-style cut
+    (ZWARN=0 & correct & Dchi2>40) only. EW(Halpha) of each template in the
+    legend."""
+    import matplotlib.pyplot as plt
+    from plot_style import apply_paper_style, make_subplots, MARGIN_LABEL, MARGIN_PAD
+    from dchi2_ew_scan import true_halpha_ew
+    apply_paper_style()
+
+    ews = {}
+    for name, path in (("SF", FSPS_SF), ("QU", FSPS_QU), ("MED", FSPS_MED)):
+        w, f = np.loadtxt(path, unpack=True)
+        ews[name] = true_halpha_ew(w, f)
+
+    fig, flat = make_subplots(ncol=1, nrow=1, plot_size=2.5,
+                              col_spacing=[MARGIN_LABEL, MARGIN_PAD],
+                              row_spacing=[MARGIN_LABEL, MARGIN_PAD],
+                              return_fig=True)
+    ax = flat[0]
+    for name, color, label in [
+            ("SF", C_SF, r"H$\alpha$ EW $\sim$ 100"),
+            ("MED", "#3d9970", r"H$\alpha$ EW $\sim$ 20"),
+            ("QU", C_QU, "quenched")]:
+        truth, spec, rr = load_results(name)
+        zrr = np.asarray(rr["Z"]); zw = np.asarray(rr["ZWARN"])
+        dchi2 = np.asarray(rr["DELTACHI2"], dtype=float)
+        ok = ((np.abs(zrr - Z_DEMO) / (1 + Z_DEMO) < CATASTROPHIC)
+              & (zw == 0) & (dchi2 > 40))
+        mags = np.asarray(truth["RFIB"])
+        succ = [ok[mags == m].mean() for m in MAGS]
+        ax.plot(MAGS, succ, "-o", color=color, ms=4, lw=1.8, label=label)
+
+    ax.set_xlabel(r"$r$ fiber magnitude")
+    ax.set_ylabel("redshift recovery fraction")
+    ax.set_xlim(19.5, 23.25)
+    ax.set_ylim(0, 1)
+    for ext in ("png", "pdf"):
+        fig.savefig(f"{OUT_DIR}/fwdmodel_recovery_single.{ext}", dpi=250,
+                    bbox_inches="tight")
+        print(f"wrote {OUT_DIR}/fwdmodel_recovery_single.{ext}")
+
+
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "sim"
     if mode == "sim":
         simulate()
     elif mode == "plot":
         plot_figures()
+    elif mode == "plot-single":
+        plot_recovery_single()
     else:
-        raise SystemExit("usage: forward_model_demo.py [sim|plot]")
+        raise SystemExit("usage: forward_model_demo.py [sim|plot|plot-single]")

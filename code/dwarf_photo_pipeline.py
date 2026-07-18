@@ -253,6 +253,61 @@ def select_unique_objs(catalog):
     catalog_uni = catalog[uni_idx]
     print(f"Original Count = {len(catalog)}, After Unique Count = {len(catalog_uni)}")
     return catalog_uni
+
+
+#priority order used to assign each object to exactly one sample when the
+#catalog carries the (non-exclusive) IS_<SAMPLE> membership flags
+SAMPLE_PRIORITY = ["BGS_BRIGHT", "BGS_FAINT", "LOWZ", "ELG"]
+
+
+def has_sample_flags(catalog):
+    '''
+    True if the catalog uses the new non-exclusive IS_<SAMPLE> membership flags
+    (e.g. IS_BGS_BRIGHT) instead of the legacy exclusive SAMPLE column.
+    '''
+    return any(f"IS_{s}" in catalog.colnames for s in SAMPLE_PRIORITY)
+
+
+def exclusive_sample_mask(catalog, sample_str):
+    '''
+    Mask selecting objects that belong to sample_str *exclusively*, i.e. the
+    object is a member of sample_str and of no higher-priority sample in
+    SAMPLE_PRIORITY (BGS_BRIGHT > BGS_FAINT > LOWZ > ELG). This ensures an
+    object shared between samples is only processed once, in its
+    highest-priority sample's run.
+
+    Falls back to the legacy `SAMPLE == sample_str` selection if the catalog
+    does not carry IS_<SAMPLE> flags (old catalogs are already exclusive).
+    '''
+    if not has_sample_flags(catalog):
+        return catalog["SAMPLE"] == sample_str
+
+    if f"IS_{sample_str}" not in catalog.colnames:
+        raise KeyError(f"Catalog has IS_* sample flags but no IS_{sample_str} column")
+
+    mask = np.asarray(catalog[f"IS_{sample_str}"], dtype=bool).copy()
+    if sample_str in SAMPLE_PRIORITY:
+        for higher in SAMPLE_PRIORITY[:SAMPLE_PRIORITY.index(sample_str)]:
+            col = f"IS_{higher}"
+            if col in catalog.colnames:
+                mask &= ~np.asarray(catalog[col], dtype=bool)
+    return mask
+
+
+def assign_exclusive_sample(catalog):
+    '''
+    Return a per-row array with each object's exclusive sample assignment
+    (highest-priority membership in SAMPLE_PRIORITY). Rows that belong to no
+    sample in SAMPLE_PRIORITY get an empty string. Used to (re)build the
+    SAMPLE column that downstream pipeline steps rely on.
+    '''
+    assigned = np.array([""] * len(catalog), dtype="U16")
+    #iterate lowest -> highest priority so higher priorities overwrite
+    for s in SAMPLE_PRIORITY[::-1]:
+        col = f"IS_{s}"
+        if col in catalog.colnames:
+            assigned[np.asarray(catalog[col], dtype=bool)] = s
+    return assigned
     
     
 
@@ -788,18 +843,30 @@ if __name__ == '__main__':
     print(f"Total number of objects in catalog = {len(shreds_all)}")
     print(f"Total number of UNIQUE objects in catalog = {len(np.unique(shreds_all['TARGETID'].data)) }")
     
-    ## filtering for the sample now 
+    ## filtering for the sample now
+    ## NOTE: newer catalogs carry non-exclusive IS_<SAMPLE> membership flags instead of
+    ## the exclusive SAMPLE column. exclusive_sample_mask() assigns each object to its
+    ## highest-priority sample (BGS_BRIGHT > BGS_FAINT > LOWZ > ELG) so that objects
+    ## shared between samples are not reprocessed by lower-priority sample runs.
     if sample_list:
         #we have provided a list of samples
-        data_samples = shreds_all['SAMPLE'].data.astype(str)
         all_samples = np.array(all_samples).astype(str)
         print("Samples being read today:", all_samples)
-        sample_mask = np.isin(data_samples, all_samples) 
+        #union of per-sample exclusive selections: an object shared between samples is
+        #only included if its highest-priority sample is in the requested list
+        sample_mask = np.zeros(len(shreds_all), dtype=bool)
+        for samp_i in all_samples:
+            sample_mask |= np.asarray(exclusive_sample_mask(shreds_all, str(samp_i)), dtype=bool)
     else:
         #only a single sample is given!
-        sample_mask = (shreds_all["SAMPLE"] ==  sample_str)
+        sample_mask = exclusive_sample_mask(shreds_all, sample_str)
 
     shreds_focus = shreds_all[sample_mask]
+
+    #downstream steps read the per-object SAMPLE column; rebuild it from the
+    #exclusive assignment when the catalog uses the IS_* flags
+    if has_sample_flags(shreds_focus):
+        shreds_focus["SAMPLE"] = assign_exclusive_sample(shreds_focus)
     
     #we also apply a mask on the PCNN probabilities if relevant
     if no_cnn_cut:

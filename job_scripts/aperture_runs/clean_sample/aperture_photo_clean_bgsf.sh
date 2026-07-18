@@ -30,10 +30,10 @@ export HDF5_USE_FILE_LOCKING=FALSE
 # Configurable flags
 # ------------------------------
 SAMPLE="BGS_FAINT"
-MAKE_CATS=false      # set true/false
+MAKE_CATS=true      # set true/false
 RUN_APER=true
 RUN_COG=true
-RUN_SHIFTER=false
+RUN_SHIFTER=true
 
 # Match dwarf_photo_pipeline consolidated catalog for tractor incremental mode
 END_NAME=""

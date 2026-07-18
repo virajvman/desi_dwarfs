@@ -4,7 +4,7 @@
 # Reads the ~30 GB base file once; single process (no multiprocessing needed).
 #
 #SBATCH --account=desi
-#SBATCH --qos=regular
+#SBATCH --qos=debug
 #SBATCH --constraint=cpu
 #SBATCH --mail-user=virajvm@stanford.edu
 #SBATCH --mail-type=ALL

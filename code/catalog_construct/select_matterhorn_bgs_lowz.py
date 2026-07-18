@@ -41,6 +41,7 @@ PHOTSYS, EBV, and the raw FLUX_*/FLUX_IVAR_* alongside TARGETID/RA/DEC.
 Cuts applied (all tunable via CLI)
 ----------------------------------
   targeting   : (BGS_BRIGHT | BGS_FAINT | LOW_Z_TIER*) over main + SV1/2/3
+                (--bgs-bright-only restricts this to BGS_BRIGHT alone)
   redshift    : GOOD_SPEC & (ZWARN_BEST == 0) & (DELTACHI2_BEST > --deltachi2-min)
                 (this equals the official GOOD_Z_BGS for BGS objects, and applies
                  the same galaxy-quality definition to LOW_Z secondaries)
@@ -153,6 +154,10 @@ def parse_args():
                    help="Require SPECTYPE_BEST == 'GALAXY'.")
     p.add_argument("--primary-only", action=argparse.BooleanOptionalAction, default=True,
                    help="Keep only ZCAT_PRIMARY == True (one row per TARGETID).")
+    p.add_argument("--bgs-bright-only", action="store_true", default=False,
+                   help="Restrict the target sample to BGS_BRIGHT only (drop BGS_FAINT and "
+                        "LOW_Z). Handy for a volume-limited massive-galaxy tracer sample; "
+                        "e.g. combine with a larger --zmax for an LSS backdrop.")
     return p.parse_args()
 
 
@@ -297,9 +302,13 @@ def main():
 
     log.info("Building target-selection masks (main + SV1/2/3)...")
     is_bb, is_bf, is_lowz = build_target_masks(base)
-    is_target = is_bb | is_bf | is_lowz
+    if args.bgs_bright_only:
+        is_target = is_bb.copy()
+        log.info("  --bgs-bright-only: restricting the sample to BGS_BRIGHT (dropping BGS_FAINT + LOW_Z)")
+    else:
+        is_target = is_bb | is_bf | is_lowz
     log.info(f"  BGS_BRIGHT={is_bb.sum():,}  BGS_FAINT={is_bf.sum():,}  "
-             f"LOW_Z={is_lowz.sum():,}  (union={is_target.sum():,})")
+             f"LOW_Z={is_lowz.sum():,}  (selected={is_target.sum():,})")
 
     # ---- 2. Quality + science cuts ----------------------------------------- #
     good_spec = compute_good_spec(base)
@@ -403,6 +412,7 @@ def main():
     out.meta["DCHI2MIN"] = args.deltachi2_min
     out.meta["REQGAL"] = args.require_galaxy
     out.meta["PRIMONLY"] = args.primary_only
+    out.meta["BBONLY"] = args.bgs_bright_only
     out.meta["COMMENT"] = (
         "BGS_BRIGHT/BGS_FAINT/LOW_Z selection from matterhorn zall (main+SV1/2/3). "
         "MAG_* are RAW (not dereddened); FRACFLUX cut NOT applied -- both require a "
